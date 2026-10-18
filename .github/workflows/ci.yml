@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      cell_repository:
+        description: 'Cell repository (owner/repository); defaults to CELL_REPOSITORY variable'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CELL_REVISION: ea19836fa758588ce0947aac46d1d80935e35614
+  CARGO_TERM_COLOR: always
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require dependency configuration
+        env:
+          CELL_REPOSITORY: ${{ inputs.cell_repository || vars.CELL_REPOSITORY }}
+        run: |
+          if [ -z "$CELL_REPOSITORY" ]; then
+            echo '::error::Set the CELL_REPOSITORY Actions variable to the actual Cell owner/repository, or supply it in a manual run. See BUILDING_WITH_CELL.md.'
+            exit 1
+          else
+            echo 'Cell repository configured; build jobs will use the pinned revision.'
+          fi
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test Markdown link checker
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
+      - name: Check local Markdown links
+        run: python3 .github/scripts/check_markdown_links.py
+
+  test:
+    needs: setup
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: scope
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: scope
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.cell_repository || vars.CELL_REPOSITORY }}
+          ref: ${{ env.CELL_REVISION }}
+          path: cell
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Test feature configurations
+        run: |
+          cargo test --workspace --locked
+          cargo test --workspace --locked --all-features
+          cargo test -p scope-ide --locked --features tools
+          cargo test -p scope-ide --locked --features tui
+      - name: Test standalone consumers
+        run: |
+          cargo test --locked --manifest-path examples/downstream/Cargo.toml
+          cargo test --locked --manifest-path examples/harness/Cargo.toml
+          cargo run --locked --manifest-path examples/harness/Cargo.toml
+      - name: Build API documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --all-features --no-deps --locked
+      - name: Check Clippy across feature configurations
+        run: |
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+          cargo clippy -p scope-ide --all-targets --features tools --locked -- -D warnings
+          cargo clippy -p scope-ide --all-targets --features tui --locked -- -D warnings

@@ -1,0 +1,10 @@
+[package]
+name = "scope-types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Language-neutral typed transformation graphs and pipeline discovery"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

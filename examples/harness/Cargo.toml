@@ -1,0 +1,10 @@
+[package]
+name = "scope-scripted-harness"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+scope-ide = { path = "../../crates/scope-ide", default-features = false, features = ["tools"] }

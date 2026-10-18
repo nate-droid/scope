@@ -1,0 +1,21 @@
+[package]
+name = "scope-downstream-example"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+# Scope dependencies use repository-local development paths.
+# This standalone workspace uses the same Cell Git tag as Scope's workspace.
+[dependencies]
+scope-language = { path = "../../crates/scope-language" }
+scope-ide = { path = "../../crates/scope-ide" }
+
+[dev-dependencies]
+scope-types = { path = "../../crates/scope-types" }
+scope-execution = { path = "../../crates/scope-execution" }
+cell = { git = "https://github.com/nate-droid/cell", tag = "v0.0.1" }
+wat = "1"
+
+# Exercise consumption without inheriting Scope's workspace configuration.
+[workspace]

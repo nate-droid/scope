@@ -1,0 +1,15 @@
+[package]
+name = "scope-execution"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Synchronous typed pipeline execution through Cell"
+
+[dependencies]
+cell.workspace = true
+cell-capability-log = { workspace = true, optional = true }
+scope-types = { path = "../scope-types" }
+wasmtime = { version = "47.0.3", features = ["component-model"] }
+
+[dev-dependencies]
+wat = "1"

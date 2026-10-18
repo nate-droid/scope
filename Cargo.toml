@@ -1,0 +1,16 @@
+[workspace]
+resolver = "3"
+members = ["crates/scope-ide", "crates/scope-language", "crates/scope-types", "crates/scope-meta", "crates/scope-execution", "crates/xtask"]
+
+
+[workspace.dependencies]
+cell-capability-fs = { git = "https://github.com/nate-droid/cell", tag = "v0.0.1" }
+cell = { git = "https://github.com/nate-droid/cell", tag = "v0.0.1" }
+cell-capability-log = { git = "https://github.com/nate-droid/cell", tag = "v0.0.1" }
+cell-capability-openai = { git = "https://github.com/nate-droid/cell", tag = "v0.0.1" }
+cell-guest = { git = "https://github.com/nate-droid/cell", tag = "v0.0.1" }
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
