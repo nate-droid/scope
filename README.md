@@ -41,6 +41,8 @@ Scope is experimental, but its foundations are usable:
 
 Some important limits: downstream language services currently run as trusted native Rust code, not automatically as sandboxed WASM; accepting multiple proposed text changes is sequential rather than atomic; and the TUI is mainly a browsing interface, not a full editor.
 
+For a small downstream terminal scripting experiment, see [Scope Script](crates/scope-script/README.md): a REPL, local script execution, and explicitly authorized read-only workspace examples. Scope does not depend on its interpreter.
+
 ## Built with Scope
 
 These experiments live **outside** Scope. They exercise the common infrastructure without making their domain logic part of the framework.

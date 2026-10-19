@@ -1,0 +1,5 @@
+let discovered = scope.invoke("downstream_workspace", "discover_markdown", {})
+let batch = scope.invoke("downstream_workspace", "inspect_discovered", {})
+let report = {purpose: "Pending work review", document_count: batch.document_count, pending_count: batch.todo_count, needs_follow_up: batch.todo_count != 0, documents: batch.documents}
+print(report)
+report

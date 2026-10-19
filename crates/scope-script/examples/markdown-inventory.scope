@@ -1,0 +1,4 @@
+let documents = scope.invoke("downstream_workspace", "discover_markdown", {})
+let report = {purpose: "Markdown inventory with revision tokens", documents: documents}
+print(report)
+report

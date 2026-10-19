@@ -1,0 +1,6 @@
+let operations = scope.operations()
+let discovered = scope.invoke(operations[0].provider, operations[0].action, {})
+let batch = scope.invoke(operations[1].provider, operations[1].action, {})
+let report = {purpose: "Markdown agent handoff", discovered: discovered, documents: batch.documents, document_count: batch.document_count, todo_count: batch.todo_count, needs_follow_up: batch.todo_count != 0}
+print(report)
+report
