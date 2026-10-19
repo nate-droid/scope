@@ -4,6 +4,7 @@
 pub mod host;
 mod parser;
 pub mod repl;
+pub mod semantic;
 
 pub use scope_ide::tool::ToolValue as Value;
 use scope_ide::tool::operations::OperationError;

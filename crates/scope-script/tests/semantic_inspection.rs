@@ -6,76 +6,10 @@ use scope_ide::{
     scratch::ScratchBuffers,
     source_edit::{PermittedEditScope, SourceEditController, SourceTarget},
     text::{Position, TextRange},
-    tool::{AgentSession, ToolCall, ToolEffect, semantic::SemanticToolProvider},
+    tool::{AgentSession, ToolEffect, semantic::SemanticToolProvider},
 };
-use scope_script::{ErrorKind, Host, Interpreter, Value};
+use scope_script::{Interpreter, Value};
 use std::sync::atomic::Ordering;
-
-// Test-only projection of the installed session, not a second operation registry.
-struct InspectionHost<'a> {
-    session: AgentSession<'a>,
-    expected_source: String,
-    expected_version: String,
-    policy_calls: usize,
-}
-
-impl Host for InspectionHost<'_> {
-    fn operations(&mut self) -> Result<Value, ErrorKind> {
-        Ok(Value::Array(
-            self.session
-                .catalog()
-                .tools
-                .into_iter()
-                .map(|entry| {
-                    Value::object([
-                        ("provider", Value::from("semantic")),
-                        ("action", Value::from(entry.definition.name)),
-                        ("description", Value::from(entry.definition.description)),
-                        ("metadata", entry.metadata.unwrap_or(Value::Null)),
-                    ])
-                })
-                .collect(),
-        ))
-    }
-
-    fn invoke(
-        &mut self,
-        provider: &str,
-        action: &str,
-        arguments: Value,
-    ) -> Result<Value, ErrorKind> {
-        if provider != "semantic"
-            || !self
-                .session
-                .catalog()
-                .tools
-                .iter()
-                .any(|entry| entry.definition.name == action)
-        {
-            return Err(ErrorKind::Runtime("unknown session operation".into()));
-        }
-        let call = ToolCall::new(action)
-            .with_argument("expected_source", self.expected_source.clone().into())
-            .with_argument("expected_version", self.expected_version.clone().into())
-            .with_argument("arguments", arguments);
-        self.session
-            .invoke_with_call_policy(call, |definition, call| {
-                self.policy_calls += 1;
-                assert_eq!(call.name, action);
-                assert_eq!(
-                    call.arguments["expected_source"].as_str(),
-                    Some(self.expected_source.as_str())
-                );
-                assert_eq!(
-                    call.arguments["expected_version"].as_str(),
-                    Some(self.expected_version.as_str())
-                );
-                definition.effect == ToolEffect::Read
-            })
-            .map(|result| result.value)
-            .map_err(ErrorKind::Tool)
-    }
-}
 
 fn field<'a>(value: &'a Value, key: &str) -> &'a Value {
     let Value::Object(fields) = value else {
@@ -119,12 +53,13 @@ fn script_discovers_and_invokes_existing_selection_description() {
         assert_eq!(catalog.tools.len(), 1);
         assert_eq!(catalog.tools[0].definition.effect, ToolEffect::Read);
         let expected_metadata = catalog.tools[0].metadata.clone().unwrap();
-        let mut host = InspectionHost {
+        let mut host = scope_script::semantic::SemanticHost::new(
             session,
-            expected_source: target.text().to_owned(),
-            expected_version: target.version().to_string(),
-            policy_calls: 0,
-        };
+            catalog.tools[0].definition.name.clone(),
+            target.text(),
+            target.version(),
+            Some(true),
+        );
         let mut interpreter = Interpreter::new();
         let result = interpreter
             .eval(
@@ -174,7 +109,6 @@ fn script_discovers_and_invokes_existing_selection_description() {
             Some("fixture has no type analysis")
         );
         assert_eq!(field(field(value, "span"), "line"), &Value::Integer(0));
-        assert_eq!(host.policy_calls, 1);
     }
     assert_eq!(source_policy_calls, 1);
     assert_eq!(service.calls.load(Ordering::SeqCst), 1);
@@ -188,4 +122,96 @@ fn script_discovers_and_invokes_existing_selection_description() {
         before
     );
     assert_eq!(controller.list().count(), 0);
+}
+
+#[test]
+fn semantic_boundaries() {
+    use scope_script::{Host, semantic::SemanticHost};
+    for case in [
+        "unavailable",
+        "arguments",
+        "stale",
+        "missing",
+        "denied",
+        "source_denied",
+    ] {
+        let service = DeclarationLanguage::default();
+        let mut buffers = ScratchBuffers::default();
+        buffers.create("example.declarations", SOURCE);
+        let target = buffers.selected().unwrap();
+        let before = (
+            target.source_id(),
+            target.version(),
+            target.text().to_owned(),
+            target.is_dirty(),
+        );
+        let mut controller = SourceEditController::default();
+        {
+            let provider = SemanticToolProvider::new(
+                &service,
+                target,
+                &mut controller,
+                PermittedEditScope::Document(target.source_id()),
+                Some(TextRange::new(Position::new(0, 0), Position::new(0, 15))),
+                |_| case != "source_denied",
+            )
+            .unwrap();
+            let session = AgentSession::builder().provider(provider).build().unwrap();
+            let action = if case == "unavailable" {
+                "language.missing.inspect"
+            } else {
+                "language.example.declarations.describe_selection"
+            };
+            let mut host = SemanticHost::new(
+                session,
+                action,
+                target.text(),
+                target.version() + u64::from(case == "stale"),
+                match case {
+                    "missing" => None,
+                    "denied" => Some(false),
+                    _ => Some(true),
+                },
+            );
+            let discovered = host.operations().unwrap();
+            if case == "unavailable" {
+                assert_eq!(discovered, Value::Array(vec![]));
+            } else {
+                assert!(matches!(discovered, Value::Array(ref entries) if entries.len() == 1));
+            }
+            let arguments = if case == "arguments" {
+                Value::object([("unexpected", true.into())])
+            } else {
+                Value::object([] as [(&str, Value); 0])
+            };
+            let result = host.invoke("semantic", action, arguments);
+            match case {
+                "unavailable" | "missing" | "denied" => assert!(result.is_err(), "{case}"),
+                _ => assert_eq!(
+                    field(&result.unwrap(), "status").as_str(),
+                    Some(match case {
+                        "arguments" => "invalid_arguments",
+                        "stale" => "revision_conflict",
+                        "source_denied" => "unauthorized",
+                        _ => unreachable!(),
+                    })
+                ),
+            }
+            assert!(
+                host.invoke("semantic", "language.other.inspect", Value::Null)
+                    .is_err()
+            );
+        }
+        assert_eq!(service.calls.load(Ordering::SeqCst), 0, "{case}");
+        assert_eq!(
+            (
+                target.source_id(),
+                target.version(),
+                target.text().to_owned(),
+                target.is_dirty()
+            ),
+            before
+        );
+        assert_eq!(controller.list().count(), 0);
+    }
 }

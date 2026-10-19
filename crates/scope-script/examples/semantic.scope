@@ -1,0 +1,8 @@
+let operation = scope.operations()[0];
+let result = scope.invoke(operation.provider, operation.action, {});
+print("Selected declaration");
+print(result.value.name);
+print(result.value.kind);
+print("Type analysis");
+print(result.value.inferred_type.status);
+print(result.rationale);

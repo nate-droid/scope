@@ -1,4 +1,30 @@
-# Scope Script (S4–S7 experiment)
+# Scope Script (S4–S8 experiment)
+
+## Read-only language semantics (S8)
+
+```sh
+cargo run -p scope-script --locked --offline --example semantic
+```
+
+The embedding runs [`examples/semantic.scope`](examples/semantic.scope) against
+Scope IDE's existing example declaration language. It explicitly scopes a scratch
+document and selection, installs `SemanticToolProvider` in `AgentSession`, and
+exposes one read operation through `semantic::SemanticHost`. The script discovers
+that operation and reports the binding name, kind, unknown type status and rationale.
+This is a real example language operation, not a production language integration.
+
+Hosts select the exact action and capture source/version tokens from the provider's
+target. `SemanticHost::new` requires explicit `Some(true)` call authorization;
+`None`/`Some(false)` deny invocation. The semantic provider independently enforces
+its source policy, scope and revision checks. Discovery grants no capability.
+Script arguments cannot change paths, selections or revision tokens. Structured
+outcomes pass through unchanged; callers must inspect `status`, not assume success.
+The adapter permits at most 64 calls. No semantic capabilities are installed in the
+standalone CLI by passing it this script: use the embedding command above.
+
+See [S8 results](../../docs/design/SEMANTIC_SCRIPTING_RESULTS.md) for API findings,
+validation and limitations, including provider-owned payload shapes and the current
+Scope semantic dispatch API's empty language path.
 
 A small downstream Rust interpreter consuming Scope's existing operation APIs. Scope does **not** depend on this crate. No new registry, type system, invocation machinery, Cell changes, or editing lifecycle is added to Scope.
 
@@ -32,7 +58,7 @@ For an actual capability-backed document inspection:
 cargo run -p scope-script --example registry --offline
 ```
 
-The embedding example creates a temporary document **in host setup**, opens a read-only Scope workspace, and installs a downstream demonstration provider in `OperationRegistry`. Its script is [`examples/registry.scope`](examples/registry.scope). The provider inspects the real `DocumentSnapshot`, returning source text and UTF-8 byte count. This is a new example provider, not a claimed pre-existing production registry operation: Scope currently has none. The integration test `tests/semantic_inspection.rs` separately reuses Scope's **existing selection-description example operation**, discovers and invokes it through `AgentSession` / `SemanticToolProvider`, and preserves partial-result diagnostics and source preconditions. Its adapter is explicitly test-local; there is no automatic semantic-to-registry bridge.
+The embedding example creates a temporary document **in host setup**, opens a read-only Scope workspace, and installs a downstream demonstration provider in `OperationRegistry`. Its script is [`examples/registry.scope`](examples/registry.scope). The provider inspects the real `DocumentSnapshot`, returning source text and UTF-8 byte count. This is a new example provider, not a claimed pre-existing production registry operation: Scope currently has none. The integration test `tests/semantic_inspection.rs` separately reuses Scope's **existing selection-description example operation**, discovers and invokes it through `AgentSession` / `SemanticToolProvider`, and preserves partial-result diagnostics and source preconditions. S8 promotes that wiring into the public, narrow `semantic::SemanticHost` adapter; there is still no automatic semantic-to-registry bridge.
 
 ## Practical workspace automation (S6)
 
