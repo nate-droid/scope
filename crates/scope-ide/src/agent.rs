@@ -13,6 +13,8 @@ use cell_capability_openai::{ChatRequest, Message, OpenAiChat};
 
 #[path = "agent_loop.rs"]
 mod decision;
+#[path = "agent_trace.rs"]
+mod trace;
 pub use decision::edit::{
     EditBudgets, EditCapabilities, EditDispatch, EditEvent, EditOutcome, EditPhase, EditRun,
     EditState, EditSummary, InvalidTransition, ModelCompletion, SemanticDiscoveryOptions,
@@ -21,7 +23,9 @@ pub use decision::edit::{
 };
 pub use decision::{
     AgentLimits, AgentRun, AgentStop, DecisionModel, read_only_policy, run_session,
+    run_session_traced,
 };
+pub use trace::ProtocolTrace;
 
 const DEFAULT_TEMPERATURE: f32 = 0.2;
 const DEFAULT_MAX_TOKENS: u32 = 700;
@@ -68,6 +72,7 @@ impl AgentConfig {
 #[derive(Clone)]
 pub struct CellAgent {
     chat: OpenAiChat,
+    model: String,
     cell: std::sync::Arc<cell::Cell>,
 }
 
@@ -82,6 +87,7 @@ impl std::fmt::Debug for CellAgent {
 
 impl CellAgent {
     pub fn new(config: AgentConfig) -> Result<Self, AgentError> {
+        let model = config.model.clone();
         let chat = match (config.base_url, config.api_key) {
             (None, Some(api_key)) => OpenAiChat::new(config.model, api_key),
             (None, None) => Err(anyhow::anyhow!(
@@ -100,6 +106,7 @@ impl CellAgent {
             .map_err(AgentError::ConfigureChat)?;
         Ok(Self {
             chat,
+            model,
             cell: std::sync::Arc::new(cell),
         })
     }
@@ -214,6 +221,10 @@ impl CellAgent {
 }
 
 impl DecisionModel for CellAgent {
+    fn trace_settings(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({"model":self.model, "temperature":DEFAULT_TEMPERATURE}))
+    }
+
     fn decide(&mut self, messages: &[Message], max_tokens: u32) -> Result<String, String> {
         self.chat
             .complete(ChatRequest {

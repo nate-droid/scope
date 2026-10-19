@@ -21,6 +21,11 @@ Only listed tools exist. Discovery is not authorization; the host may deny any c
 /// Injectable text model; implementations may be deterministic and need no network.
 /// Messages include assistant decisions and host feedback in conversation order.
 pub trait DecisionModel {
+    /// Non-secret generation settings exposed by the adapter, not HTTP metadata.
+    fn trace_settings(&self) -> Option<Value> {
+        None
+    }
+
     fn decide(&mut self, messages: &[Message], max_tokens: u32) -> Result<String, String>;
 }
 
@@ -256,8 +261,51 @@ pub fn run_session(
     session: &mut AgentSession<'_>,
     request: &str,
     limits: AgentLimits,
-    mut policy: impl FnMut(&ToolDefinition, &ToolCall) -> bool,
+    policy: impl FnMut(&ToolDefinition, &ToolCall) -> bool,
 ) -> Result<AgentRun, AgentError> {
+    run_session_inner(model, session, request, limits, policy, None)
+}
+
+/// Opt-in raw capture. Sink errors do not alter agent execution. The host owns
+/// the writer and must protect the sensitive transcript and inspect `failed()`.
+pub fn run_session_traced<W: std::io::Write>(
+    model: &mut (impl DecisionModel + ?Sized),
+    session: &mut AgentSession<'_>,
+    request: &str,
+    limits: AgentLimits,
+    policy: impl FnMut(&ToolDefinition, &ToolCall) -> bool,
+    trace: &mut super::ProtocolTrace<W>,
+) -> Result<AgentRun, AgentError> {
+    let result = run_session_inner(
+        model,
+        session,
+        request,
+        limits,
+        policy,
+        Some(&mut |event| trace.record(&event)),
+    );
+    trace.record(&match &result {
+        Ok(run) => json!({"event":"outcome", "stop":format!("{:?}", run.stop), "content":run.content, "decisions":run.decisions, "tool_calls":run.tool_calls, "malformed":run.malformed}),
+        Err(error) => json!({"event":"outcome", "error":error.to_string()}),
+    });
+    result
+}
+
+fn run_session_inner(
+    model: &mut (impl DecisionModel + ?Sized),
+    session: &mut AgentSession<'_>,
+    request: &str,
+    limits: AgentLimits,
+    mut policy: impl FnMut(&ToolDefinition, &ToolCall) -> bool,
+    mut observer: Option<&mut dyn FnMut(Value)>,
+) -> Result<AgentRun, AgentError> {
+    macro_rules! emit {
+        ($event:expr $(,)?) => {
+            if let Some(observer) = observer.as_mut() {
+                observer($event);
+            }
+        };
+    }
     let mut run = AgentRun {
         content: String::new(),
         stop: AgentStop::DecisionBudget,
@@ -278,14 +326,29 @@ pub fn run_session(
     }
     while run.decisions < limits.max_decisions {
         run.decisions += 1;
-        let text = model
-            .decide(&messages, limits.max_tokens_per_decision)
-            .map_err(AgentError::Chat)?;
+        emit!(json!({"event":"request", "ordinal":run.decisions,
+            "messages":messages.iter().map(|m| json!({"role":m.role,"content":m.content})).collect::<Vec<_>>(),
+            "max_tokens":limits.max_tokens_per_decision, "settings":model.trace_settings()}));
+        let response = model.decide(&messages, limits.max_tokens_per_decision);
+        match &response {
+            Ok(text) => emit!(json!({"event":"response", "ordinal":run.decisions,"raw":text})),
+            Err(error) => emit!(json!({"event":"response", "ordinal":run.decisions,"error":error})),
+        }
+        let text = response.map_err(AgentError::Chat)?;
         if let Err(stop) = push_message(&mut messages, "assistant", text.clone(), limits) {
             run.stop = stop;
             return Ok(run);
         }
-        let feedback = match parse_decision(&text) {
+        let parsed = parse_decision(&text);
+        emit!(match &parsed {
+            Ok(decision) => {
+                json!({"event":"decision", "ordinal":run.decisions, "accepted":true, "kind":match decision { Decision::Tool { .. } => "tool", Decision::Complete { .. } => "complete" }})
+            }
+            Err(error) => {
+                json!({"event":"decision", "ordinal":run.decisions, "accepted":false, "category":error.category(), "error":error.to_string()})
+            }
+        });
+        let feedback = match parsed {
             Ok(Decision::Complete { content }) => {
                 run.content = content;
                 run.stop = AgentStop::Completed;
@@ -319,7 +382,11 @@ pub fn run_session(
                 json!({"kind":"protocol_error", "category":error.category(), "error":error.to_string(), "instruction":"Return one valid decision object matching the system protocol. No tool was dispatched; retained tool results remain authoritative."})
             }
         };
-        if let Err(stop) = push_message(&mut messages, "user", feedback.to_string(), limits) {
+        let retained = push_message(&mut messages, "user", feedback.to_string(), limits);
+        emit!(
+            json!({"event":"feedback", "ordinal":run.decisions, "envelope":feedback, "retained":retained.is_ok()}),
+        );
+        if let Err(stop) = retained {
             run.stop = stop;
             return Ok(run);
         }

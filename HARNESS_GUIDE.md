@@ -131,7 +131,13 @@ Over-limit responses stop rather than truncate data into misleading JSON. A tool
 may have executed before an oversized feedback result stops the run; nothing is
 rolled back. These budgets do not cancel synchronous model/provider calls, impose
 wall-clock deadlines, or independently verify endpoint token/billing limits.
-No transcript is persisted by this adapter. Context and feedback are transmitted
+No transcript is persisted by default. For an explicitly opted-in investigation,
+`agent::run_session_traced` records ordered raw protocol events to a host-owned
+`ProtocolTrace<W: std::io::Write>` without changing validation or dispatch. See
+[Agent protocol trace](docs/design/AGENT_PROTOCOL_TRACE.md) for sensitive-data
+handling, downstream integration, transport limitations, and the deterministic
+read-only fixture. Do not send raw traces to normal logs.
+Context and feedback are transmitted
 to the configured endpoint, so choose providers and retention policies accordingly.
 
 Scope supplies no unrestricted agent shell or automatic build/run/test adapters.

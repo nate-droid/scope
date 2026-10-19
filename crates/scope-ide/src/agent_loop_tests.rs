@@ -82,6 +82,64 @@ fn protocol_failures_are_not_language_diagnostics() {
 }
 
 #[test]
+fn decision_framing_failures_never_dispatch() {
+    let invalid = [
+        "{\"type\":\"complete\",\"content\":\"first\nsecond\"}",
+        r#"{"type":"tool","name":"echo","arguments":{}} {"type":"complete","content":"done"}"#,
+        "```json\n{\"type\":\"complete\",\"content\":\"done\"}\n```",
+        r#"Here is the decision: {"type":"complete","content":"done"}"#,
+        r#"{"type":"complete","content":"done","extra":true}"#,
+        r#"{"type":"tool","name":"echo","arguments":[]}"#,
+    ];
+    for text in invalid {
+        assert_eq!(
+            parse_decision(text).unwrap_err().category(),
+            "malformed_response"
+        );
+        let (mut session, calls) = session();
+        let mut model = FakeModel::new(&[text, COMPLETE]);
+        let run = run_session(
+            &mut model,
+            &mut session,
+            "inspect",
+            AgentLimits::default(),
+            read_only_policy,
+        )
+        .unwrap();
+        assert_eq!(run.stop, AgentStop::Completed);
+        assert_eq!((run.decisions, run.tool_calls, run.malformed), (2, 0, 1));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        let feedback: Value =
+            serde_json::from_str(&model.conversations[1].last().unwrap().1).unwrap();
+        assert_eq!(feedback["kind"], "protocol_error");
+        assert_eq!(feedback["category"], "malformed_response");
+    }
+    match parse_decision(r#"{"type":"complete","content":"first\nsecond"}"#).unwrap() {
+        Decision::Complete { content } => assert_eq!(content, "first\nsecond"),
+        _ => panic!("expected completion"),
+    }
+}
+
+#[test]
+fn default_malformed_budget_stops_on_third_failure_without_completion() {
+    let (mut session, calls) = session();
+    let mut model = FakeModel::new(&["bad", "bad", "bad"]);
+    let run = run_session(
+        &mut model,
+        &mut session,
+        "inspect",
+        AgentLimits::default(),
+        read_only_policy,
+    )
+    .unwrap();
+    assert_eq!(run.stop, AgentStop::MalformedBudget);
+    assert_eq!((run.decisions, run.tool_calls, run.malformed), (3, 0, 3));
+    assert!(run.content.is_empty());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(model.conversations.len(), 3);
+}
+
+#[test]
 fn recovery_after_successful_write_never_replays_the_write() {
     let (mut session, calls) = session();
     let mut model = FakeModel::new(&[
@@ -456,6 +514,156 @@ fn oversized_tool_feedback_stops_without_rollback_or_another_model_call() {
     assert_eq!(run.stop, AgentStop::MessageBudget);
     assert_eq!(run.tool_calls, 1);
     assert_eq!(model.conversations.len(), 1);
+}
+
+#[test]
+fn trace_associates_responses_feedback_and_preserves_execution() {
+    let replies = [ECHO, ECHO, ECHO, "bad", COMPLETE];
+    let (mut plain_session, plain_calls) = session();
+    let mut plain_model = FakeModel::new(&replies);
+    let plain = run_session(
+        &mut plain_model,
+        &mut plain_session,
+        "inspect sequentially",
+        AgentLimits::default(),
+        read_only_policy,
+    )
+    .unwrap();
+    let (mut traced_session, traced_calls) = session();
+    let mut traced_model = FakeModel::new(&replies);
+    let mut bytes = Vec::new();
+    {
+        let mut trace = super::super::ProtocolTrace::new(&mut bytes);
+        let traced = run_session_traced(
+            &mut traced_model,
+            &mut traced_session,
+            "inspect sequentially",
+            AgentLimits::default(),
+            read_only_policy,
+            &mut trace,
+        )
+        .unwrap();
+        assert_eq!(plain, traced);
+        trace.record_presentation(&traced.content);
+        assert!(!trace.failed());
+    }
+    assert_eq!(plain_model.conversations, traced_model.conversations);
+    assert_eq!(plain_calls.load(Ordering::SeqCst), 3);
+    assert_eq!(traced_calls.load(Ordering::SeqCst), 3);
+    let events: Vec<Value> = std::str::from_utf8(&bytes)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    for (index, expected) in replies.iter().enumerate() {
+        let ordinal = index + 1;
+        let matching: Vec<_> = events.iter().filter(|e| e["ordinal"] == ordinal).collect();
+        assert_eq!(matching[0]["event"], "request");
+        let recorded: Vec<(String, String)> = matching[0]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| {
+                (
+                    m["role"].as_str().unwrap().into(),
+                    m["content"].as_str().unwrap().into(),
+                )
+            })
+            .collect();
+        assert_eq!(recorded, traced_model.conversations[index]);
+        assert_eq!(matching[1]["event"], "response");
+        assert_eq!(matching[1]["raw"], *expected);
+        assert_eq!(matching[2]["event"], "decision");
+        assert_eq!(matching[2]["accepted"], index != 3);
+    }
+    let correction = events
+        .iter()
+        .find(|e| e["event"] == "feedback" && e["ordinal"] == 4)
+        .unwrap();
+    assert_eq!(correction["envelope"]["kind"], "protocol_error");
+    assert_eq!(correction["retained"], true);
+    assert_eq!(events[events.len() - 2]["event"], "outcome");
+    assert_eq!(events.last().unwrap()["event"], "presentation");
+}
+
+#[test]
+fn tracing_is_disabled_by_default_and_writer_failures_are_nonfatal() {
+    struct NoMetadata(FakeModel);
+    impl DecisionModel for NoMetadata {
+        fn trace_settings(&self) -> Option<Value> {
+            panic!("disabled trace requested metadata")
+        }
+        fn decide(&mut self, messages: &[Message], max_tokens: u32) -> Result<String, String> {
+            self.0.decide(messages, max_tokens)
+        }
+    }
+    let (mut session, _) = session();
+    let plain = run_session(
+        &mut NoMetadata(FakeModel::new(&[COMPLETE])),
+        &mut session,
+        "task",
+        AgentLimits::default(),
+        read_only_policy,
+    )
+    .unwrap();
+    struct Broken;
+    impl std::io::Write for Broken {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("full"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut trace = super::super::ProtocolTrace::new(Broken);
+    let traced = run_session_traced(
+        &mut FakeModel::new(&[COMPLETE]),
+        &mut session,
+        "task",
+        AgentLimits::default(),
+        read_only_policy,
+        &mut trace,
+    )
+    .unwrap();
+    assert!(trace.failed());
+    assert_eq!(plain, traced);
+}
+
+#[test]
+fn trace_captures_transport_and_budget_stops() {
+    let (mut session, calls) = session();
+    for oversized in [false, true] {
+        let mut model = FakeModel::new(&[]);
+        model.replies.push_back(if oversized {
+            Ok("x".repeat(AgentLimits::default().max_message_bytes + 1))
+        } else {
+            Err("transport failed".into())
+        });
+        let mut bytes = Vec::new();
+        let mut trace = super::super::ProtocolTrace::new(&mut bytes);
+        let result = run_session_traced(
+            &mut model,
+            &mut session,
+            "task",
+            AgentLimits::default(),
+            read_only_policy,
+            &mut trace,
+        );
+        if oversized {
+            assert_eq!(result.unwrap().stop, AgentStop::MessageBudget);
+        } else {
+            assert!(result.is_err());
+        }
+        let events: Vec<Value> = std::str::from_utf8(&bytes)
+            .unwrap()
+            .lines()
+            .map(|s| serde_json::from_str(s).unwrap())
+            .collect();
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[1]["event"], "response");
+        assert_eq!(events[2]["event"], "outcome");
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
 #[test]
