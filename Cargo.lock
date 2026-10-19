@@ -1851,6 +1851,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "scope-script"
+version = "0.1.0"
+dependencies = [
+ "scope-ide",
+ "scope-language",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "scope-types"
 version = "0.1.0"
 dependencies = [

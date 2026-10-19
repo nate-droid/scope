@@ -1,0 +1,5 @@
+let operations = scope.operations()
+print(operations[0])
+let inspection = scope.invoke(operations[0].provider, operations[0].action, {options: {include_text: true}})
+print(inspection.text)
+print(inspection["bytes"])

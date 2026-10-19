@@ -1,0 +1,5 @@
+let x = 5
+let y = x * 2
+print(y)
+let operations = scope.operations()
+print(operations)
