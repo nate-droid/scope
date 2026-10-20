@@ -31,6 +31,12 @@ use std::borrow::Cow;
 mod interactive;
 mod line_index;
 mod semantic;
+mod source;
+pub use source::{
+    EvaluationRequest, RevisionId, SourceId, SourceLocation, SourceResolver, SourceSnapshot,
+    SourceUnavailable,
+};
+
 pub use interactive::{
     CancellationError, CancellationHandle, Completeness, CompletionItem, EvaluationResult,
     EvaluationStatus, InspectionError, InteractiveLanguageSession, InteractiveSessionProvider,
@@ -275,6 +281,9 @@ pub struct LanguageAction {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
+    /// Explicit original-source locations, primary first. Empty means legacy
+    /// text-relative coordinates; never infer historical provenance from `source`.
+    pub locations: Vec<SourceLocation>,
     pub range: TextRange,
     pub severity: DiagnosticSeverity,
     pub message: String,
@@ -285,6 +294,7 @@ pub struct Diagnostic {
 impl Diagnostic {
     pub fn error(range: TextRange, message: impl Into<String>) -> Self {
         Self {
+            locations: Vec::new(),
             range,
             severity: DiagnosticSeverity::Error,
             message: message.into(),
@@ -295,6 +305,7 @@ impl Diagnostic {
 
     pub fn warning(range: TextRange, message: impl Into<String>) -> Self {
         Self {
+            locations: Vec::new(),
             range,
             severity: DiagnosticSeverity::Warning,
             message: message.into(),
@@ -305,6 +316,7 @@ impl Diagnostic {
 
     pub fn information(range: TextRange, message: impl Into<String>) -> Self {
         Self {
+            locations: Vec::new(),
             range,
             severity: DiagnosticSeverity::Information,
             message: message.into(),
@@ -315,6 +327,7 @@ impl Diagnostic {
 
     pub fn hint(range: TextRange, message: impl Into<String>) -> Self {
         Self {
+            locations: Vec::new(),
             range,
             severity: DiagnosticSeverity::Hint,
             message: message.into(),

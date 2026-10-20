@@ -6,6 +6,7 @@ license.workspace = true
 description = "Experimental downstream interpreter for Scope operations"
 
 [dependencies]
+scope-terminal = { path = "../scope-terminal" }
 scope-ide = { path = "../scope-ide", features = ["tools"] }
 
 [dev-dependencies]

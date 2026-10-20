@@ -1,0 +1,23 @@
+let operation = scope.operations()[0];
+let result = scope.invoke(operation.provider, operation.action, {});
+let declaration = result.value;
+let span = declaration.span;
+let report = {
+    title: "Structured semantic report",
+    provenance: {operation: operation.action, status: result.status},
+    declaration: {
+        name: declaration.name,
+        binding: {kind: declaration.kind, literal: declaration.literal},
+        location: {zero_based: span, display_line: span.line + 1}
+    },
+    analysis: {
+        partial: declaration.partial,
+        inferred_type: declaration.inferred_type,
+        references: declaration.references,
+        rationale: result.rationale
+    },
+    sections: ["declaration", "analysis"]
+};
+print(report.title);
+print(report);
+report

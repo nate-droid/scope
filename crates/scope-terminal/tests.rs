@@ -1,6 +1,118 @@
 use super::*;
 use std::io::Cursor;
 
+#[test]
+fn paste_policy_insertion_matrix() {
+    assert_eq!(PastePolicy::default(), PastePolicy::SingleLine);
+    for payload in [
+        "",
+        " \tα\n\nβ\t ",
+        "a\r\nb\rc",
+        "🦀\x1b[31m中\x1b[0m\0\x03\x04",
+        "a\x1b]title\x07b",
+        "a\x1b[unfinished",
+    ] {
+        for cursor in [0, 2, 6] {
+            for policy in [PastePolicy::SingleLine, PastePolicy::NormalizedLayout] {
+                let mut buffer = LineBuffer::from_parts("é🦀".into(), cursor);
+                let inserted = match policy {
+                    PastePolicy::SingleLine => sanitize(payload),
+                    PastePolicy::NormalizedLayout => sanitize_paste(payload),
+                };
+                buffer.insert_paste(payload, policy);
+                assert_eq!(
+                    buffer.text(),
+                    format!("{}{}{}", &"é🦀"[..cursor], inserted, &"é🦀"[cursor..])
+                );
+                assert_eq!(buffer.cursor(), cursor + inserted.len());
+                if policy == PastePolicy::SingleLine {
+                    let mut legacy = LineBuffer::from_parts("é🦀".into(), cursor);
+                    legacy.insert(payload);
+                    assert_eq!(buffer, legacy);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn layout_paste_history_completion_and_lifecycle() {
+    let mut reader = Reader::new();
+    let mut history = History::new();
+    let text = " \tα\n\nβ\t ";
+    assert_eq!(
+        reader.handle_paste(" \tα\r\n\nβ\t \x03\x04", PastePolicy::NormalizedLayout),
+        Outcome::Continue
+    );
+    assert_eq!(reader.buffer.text(), text);
+    assert!(history.entries().is_empty());
+    let cursor = reader.buffer.cursor();
+    let mut calls = 0;
+    assert_eq!(
+        reader.complete(&mut |input: &str, offset: usize| {
+            calls += 1;
+            assert_eq!((input, offset), (text, cursor));
+            vec![CompletionCandidate {
+                replacement: offset..offset,
+                insertion: "\n\t".into(),
+                label: None,
+            }]
+        }),
+        CompletionAction::None
+    );
+    assert_eq!(calls, 1);
+    assert_eq!(reader.buffer.cursor(), cursor);
+    assert_eq!(
+        reader.handle_key(key(KeyCode::Tab), &mut history),
+        Outcome::Continue
+    );
+    assert_eq!(reader.buffer.text(), text);
+    // Home/End remain buffer-relative, and nonempty Ctrl-D still deletes.
+    reader.handle_key(key(KeyCode::Home), &mut history);
+    assert_eq!(reader.buffer.cursor(), 0);
+    reader.handle_key(key(KeyCode::End), &mut history);
+    assert_eq!(reader.buffer.cursor(), text.len());
+    assert_eq!(
+        reader.handle_key(ctrl('d'), &mut history),
+        Outcome::Continue
+    );
+    assert_eq!(
+        reader.handle_key(key(KeyCode::Enter), &mut history),
+        Outcome::Submitted(text.into())
+    );
+    assert_eq!(history.entries(), &[text]);
+    assert_eq!(reader.buffer, LineBuffer::default());
+
+    reader.buffer = LineBuffer::from_parts("é\n\tdraft".into(), 2);
+    let draft = reader.buffer.clone();
+    reader.handle_key(key(KeyCode::Up), &mut history);
+    assert_eq!(reader.buffer.text(), text);
+    assert_eq!(reader.buffer.cursor(), text.len());
+    reader.handle_paste("edit", PastePolicy::NormalizedLayout);
+    reader.handle_key(key(KeyCode::Down), &mut history);
+    assert_eq!(reader.buffer, draft);
+    for cancel in [ctrl('c'), key(KeyCode::Esc)] {
+        reader.handle_key(key(KeyCode::Up), &mut history);
+        reader.handle_paste("\n\t", PastePolicy::NormalizedLayout);
+        assert_eq!(reader.handle_key(cancel, &mut history), Outcome::Cancelled);
+        reader.handle_key(key(KeyCode::Down), &mut history);
+        assert_eq!(reader.buffer, LineBuffer::default());
+        assert_eq!(reader.handle_key(ctrl('d'), &mut history), Outcome::Eof);
+        assert_eq!(history.entries(), &[text]);
+    }
+    reader.handle_paste("α\nβ", PastePolicy::NormalizedLayout);
+    reader.handle_key(key(KeyCode::Home), &mut history);
+    assert_eq!(
+        reader.handle_key(ctrl('d'), &mut history),
+        Outcome::Continue
+    );
+    assert_eq!(reader.buffer.text(), "\nβ");
+    assert_eq!(
+        reader.handle_key(key(KeyCode::Enter), &mut history),
+        Outcome::Submitted("\nβ".into())
+    );
+}
+
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
@@ -336,4 +448,180 @@ fn viewport_is_ascii_bounded_and_cursor_visible() {
             assert!(column == 0 || column < width.saturating_sub(1));
         }
     }
+}
+
+#[test]
+fn descriptive_labels_are_display_only() {
+    let mut reader = Reader::new();
+    reader.buffer = LineBuffer::from_parts("he tail".into(), 2);
+    let mut provider = |_: &str, cursor: usize| {
+        ["help", "hello"]
+            .into_iter()
+            .map(|word| CompletionCandidate {
+                replacement: 0..cursor,
+                insertion: word.into(),
+                label: (word == "help").then(|| "help -- declared ( -- n )".into()),
+            })
+            .collect()
+    };
+    assert_eq!(reader.complete(&mut provider), CompletionAction::Applied);
+    assert_eq!(
+        (reader.buffer.text(), reader.buffer.cursor()),
+        ("hel tail", 3)
+    );
+    let before = reader.buffer.clone();
+    assert_eq!(
+        reader.complete(&mut provider),
+        CompletionAction::Display(vec!["help -- declared ( -- n )".into(), "hello".into()])
+    );
+    assert_eq!(reader.buffer, before);
+    let mut unique = |_: &str, _: usize| {
+        vec![CompletionCandidate {
+            replacement: 0..3,
+            insertion: "help".into(),
+            label: Some("not inserted\n\x1b[2J".into()),
+        }]
+    };
+    assert_eq!(reader.complete(&mut unique), CompletionAction::Applied);
+    assert_eq!(
+        (reader.buffer.text(), reader.buffer.cursor()),
+        ("help tail", 4)
+    );
+}
+
+#[test]
+fn descriptive_display_is_escaped_ascii_and_bounded() {
+    let label = "word -- \x1b[2J\n\r\t\0\u{9b}中e\u{301}🦀";
+    for width in 0..120 {
+        let line = completion_line(label, width);
+        assert!(line.bytes().all(|b| (32..127).contains(&b)));
+        assert!(line.len() <= usize::from(width.saturating_sub(1)));
+        assert_eq!(
+            line,
+            escaped(label)
+                .chars()
+                .take(usize::from(width.saturating_sub(1)))
+                .collect::<String>()
+        );
+    }
+    assert_eq!(completion_line("word -- description", 12), "word -- des");
+    assert_eq!(completion_line(&"x".repeat(1_000_000), 5), "xxxx");
+    assert_eq!(completion_line("", 80), "");
+}
+
+fn candidates(input: &str, cursor: usize) -> Vec<CompletionCandidate> {
+    ["help", "hello", "halt"]
+        .into_iter()
+        .filter(|word| word.starts_with(&input[..cursor]))
+        .map(|word| CompletionCandidate {
+            replacement: 0..cursor,
+            insertion: word.into(),
+            label: None,
+        })
+        .collect()
+}
+
+#[test]
+fn completion_unique_prefix_ambiguous_and_no_match() {
+    let mut r = Reader::new();
+    r.buffer.insert("he");
+    assert_eq!(r.complete(&mut candidates), CompletionAction::Applied);
+    assert_eq!((r.buffer.text(), r.buffer.cursor()), ("hel", 3));
+    assert_eq!(
+        r.complete(&mut candidates),
+        CompletionAction::Display(vec!["help".into(), "hello".into()])
+    );
+    r.buffer.insert("p");
+    assert_eq!(r.complete(&mut candidates), CompletionAction::Applied);
+    assert_eq!(r.buffer.text(), "help");
+    r.buffer.insert("x");
+    assert_eq!(r.complete(&mut candidates), CompletionAction::None);
+    assert_eq!(r.buffer.text(), "helpx");
+}
+
+#[test]
+fn completion_replacement_utf8_and_safety() {
+    let mut r = Reader::new();
+    r.buffer = LineBuffer::from_parts("éx tail".into(), 3);
+    let mut provider = |_: &str, _: usize| {
+        vec![CompletionCandidate {
+            replacement: 2..3,
+            insertion: "中".into(),
+            label: None,
+        }]
+    };
+    assert_eq!(r.complete(&mut provider), CompletionAction::Applied);
+    assert_eq!((r.buffer.text(), r.buffer.cursor()), ("é中 tail", 5));
+    let before = r.buffer.clone();
+    for range in [1..2, 0..99, 5..2] {
+        assert!(!r.buffer.replace(range, "bad"));
+        assert_eq!(r.buffer, before);
+    }
+    assert!(!r.buffer.replace(0..2, "\x1b[31mbad"));
+    let mut unicode = |_: &str, _: usize| {
+        ["é中", "é串"]
+            .into_iter()
+            .map(|s| CompletionCandidate {
+                replacement: 0..0,
+                insertion: s.into(),
+                label: None,
+            })
+            .collect()
+    };
+    r.buffer.clear();
+    assert_eq!(r.complete(&mut unicode), CompletionAction::Applied);
+    assert_eq!((r.buffer.text(), r.buffer.cursor()), ("é", 2));
+}
+
+#[test]
+fn completion_recomputes_after_edit_history_cancel_and_eof() {
+    let mut r = Reader::new();
+    let mut h = History::new();
+    h.push("ha");
+    r.buffer.insert("hel");
+    assert!(matches!(
+        r.complete(&mut candidates),
+        CompletionAction::Display(_)
+    ));
+    r.handle_key(key(KeyCode::Backspace), &mut h);
+    r.handle_key(key(KeyCode::Char('x')), &mut h);
+    assert_eq!(r.complete(&mut candidates), CompletionAction::None);
+    r.handle_key(key(KeyCode::Up), &mut h);
+    assert_eq!(r.complete(&mut candidates), CompletionAction::Applied);
+    assert_eq!(r.buffer.text(), "halt");
+    r.handle_key(key(KeyCode::Down), &mut h);
+    assert_eq!(r.buffer.text(), "hex");
+    assert_eq!(r.handle_key(ctrl('c'), &mut h), Outcome::Cancelled);
+    assert_eq!(r.handle_key(ctrl('d'), &mut h), Outcome::Eof);
+    assert_eq!(h.entries(), &["ha"]);
+}
+
+#[test]
+fn incompatible_ranges_display_and_invalid_candidates_are_ignored() {
+    let mut r = Reader::new();
+    r.buffer.insert("ab");
+    let mut provider = |_: &str, _: usize| {
+        vec![
+            CompletionCandidate {
+                replacement: 0..2,
+                insertion: "abc".into(),
+                label: Some("first".into()),
+            },
+            CompletionCandidate {
+                replacement: 1..2,
+                insertion: "bcd".into(),
+                label: None,
+            },
+            CompletionCandidate {
+                replacement: 0..99,
+                insertion: "bad".into(),
+                label: None,
+            },
+        ]
+    };
+    assert_eq!(
+        r.complete(&mut provider),
+        CompletionAction::Display(vec!["first".into(), "bcd".into()])
+    );
+    assert_eq!(r.buffer.text(), "ab");
 }

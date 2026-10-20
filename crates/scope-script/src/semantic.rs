@@ -34,6 +34,19 @@ impl<'a> SemanticHost<'a> {
     }
 }
 impl Host for SemanticHost<'_> {
+    fn operation_names(&self) -> Vec<(String, String)> {
+        self.session
+            .catalog()
+            .tools
+            .into_iter()
+            .filter(|entry| {
+                entry.definition.name == self.action
+                    && entry.definition.effect == ToolEffect::Read
+                    && entry.definition.name.starts_with("language.")
+            })
+            .map(|entry| ("semantic".into(), entry.definition.name))
+            .collect()
+    }
     fn operations(&mut self) -> Result<Value, ErrorKind> {
         Ok(Value::Array(
             self.session

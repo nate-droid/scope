@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{IsTerminal, Read, Write};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
@@ -14,6 +14,11 @@ fn main() -> ExitCode {
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args_os().skip(1);
     let Some(path) = args.next() else {
+        if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+            return Ok(scope_script::repl::run_terminal(
+                &mut scope_script::host::NoHost,
+            )?);
+        }
         return Ok(scope_script::repl::run(
             std::io::stdin().lock(),
             std::io::stdout().lock(),

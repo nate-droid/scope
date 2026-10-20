@@ -5,6 +5,8 @@
 //! replacing its observed contents. Replacement is atomic, but revision checking
 //! is best-effort rather than an atomic compare-and-swap.
 
+use scope_language::{EvaluationRequest, RevisionId, SourceId};
+
 use crate::{
     language::{InteractiveSession, SessionError},
     path::ScopePath,
@@ -88,6 +90,7 @@ struct Destination {
 #[derive(Debug)]
 pub struct ScratchBuffer {
     id: u64,
+    source_id: SourceId,
     language: String,
     buffer: TextBuffer,
     dirty: bool,
@@ -98,6 +101,10 @@ pub struct ScratchBuffer {
 impl ScratchBuffer {
     pub fn id(&self) -> u64 {
         self.id
+    }
+    /// Stable evaluation identity, independent of the buffer's destination and version.
+    pub fn evaluation_source_id(&self) -> &SourceId {
+        &self.source_id
     }
     pub fn language_id(&self) -> &str {
         &self.language
@@ -173,7 +180,13 @@ impl ScratchBuffer {
                 actual: session.language_id().map(str::to_owned),
             });
         }
-        session.evaluate(self.text()).map_err(ScratchError::Session)
+        session
+            .evaluate_request(EvaluationRequest {
+                text: self.text(),
+                source_id: self.evaluation_source_id().clone(),
+                revision_id: RevisionId::from_version(self.version()),
+            })
+            .map_err(ScratchError::Session)
     }
 
     /// Observes an existing confined file without writing or changing dirty state.
@@ -364,6 +377,7 @@ impl ScratchBuffers {
         self.next_id = id.checked_add(1).expect("scratch IDs exhausted");
         self.buffers.push(ScratchBuffer {
             id,
+            source_id: SourceId::fresh(),
             language: language.into(),
             buffer: TextBuffer::new(source),
             dirty: true,
@@ -702,6 +716,7 @@ mod tests {
     #[derive(Default)]
     struct State {
         sources: Vec<String>,
+        requests: Vec<(SourceId, RevisionId)>,
         resets: usize,
         fail_reset: bool,
     }
@@ -718,6 +733,17 @@ mod tests {
     impl InteractiveLanguageSession for Mock {
         fn language_id(&self) -> &str {
             "mock"
+        }
+        fn evaluate_request(
+            &mut self,
+            request: EvaluationRequest<'_>,
+        ) -> Result<EvaluationResult, SessionError> {
+            self.0
+                .lock()
+                .unwrap()
+                .requests
+                .push((request.source_id, request.revision_id));
+            self.evaluate(request.text)
         }
         fn evaluate(&mut self, source: &str) -> Result<EvaluationResult, SessionError> {
             self.0.lock().unwrap().sources.push(source.to_owned());
@@ -753,6 +779,95 @@ mod tests {
         let mut session = InteractiveSession::new();
         session.select(&registry, "mock").unwrap();
         (session, state)
+    }
+
+    #[test]
+    fn evaluation_uses_buffer_identity_literal_text_and_actual_version() {
+        let (mut session, state) = session();
+        let mut buffers = buffers(":scope help\n猫");
+        let buffer = buffers.selected_mut().unwrap();
+        let identity = buffer.evaluation_source_id().clone();
+        buffer.evaluate(&mut session).unwrap();
+        buffer.evaluate(&mut session).unwrap();
+        buffer
+            .apply_edit(TextEdit::insert(Position::new(1, 3), "!"))
+            .unwrap();
+        buffer.evaluate(&mut session).unwrap();
+        session.reset().unwrap();
+        buffer.evaluate(&mut session).unwrap();
+        assert_eq!(buffer.evaluation_source_id(), &identity);
+        let state = state.lock().unwrap();
+        assert_eq!(
+            state.sources,
+            [
+                ":scope help\n猫",
+                ":scope help\n猫",
+                ":scope help\n猫!",
+                ":scope help\n猫!"
+            ]
+        );
+        assert_eq!(
+            state.requests,
+            vec![
+                (identity.clone(), RevisionId::from_version(0)),
+                (identity.clone(), RevisionId::from_version(0)),
+                (identity.clone(), RevisionId::from_version(1)),
+                (identity, RevisionId::from_version(buffer.version())),
+            ]
+        );
+    }
+
+    #[test]
+    fn source_identity_survives_selection_and_is_distinct_across_buffer_owners() {
+        let mut buffers = ScratchBuffers::default();
+        let first_id = buffers.create("mock", "same");
+        let first = buffers.selected().unwrap().evaluation_source_id().clone();
+        buffers.create("mock", "same");
+        assert_ne!(buffers.selected().unwrap().evaluation_source_id(), &first);
+        buffers.select(first_id).unwrap();
+        assert_eq!(buffers.selected().unwrap().evaluation_source_id(), &first);
+        let mut other_buffers = ScratchBuffers::default();
+        assert_eq!(other_buffers.create("mock", "same"), first_id);
+        assert_ne!(
+            other_buffers.selected().unwrap().evaluation_source_id(),
+            &first
+        );
+        buffers.discard_selected().unwrap();
+        buffers.create("mock", "same");
+        assert_ne!(buffers.selected().unwrap().evaluation_source_id(), &first);
+    }
+
+    #[test]
+    fn source_identity_survives_save_and_reload_but_not_reopening() {
+        let fixture = TempWorkspace::new("scratch-source-identity-reload");
+        fixture.write_file("a", "old");
+        let workspace = fixture.workspace();
+        let mut buffers = buffers("new");
+        let buffer = buffers.selected_mut().unwrap();
+        let identity = buffer.evaluation_source_id().clone();
+        buffer.promote(&workspace, "a").unwrap();
+        buffer
+            .apply_edit(TextEdit::insert(Position::new(0, 3), "!"))
+            .unwrap();
+        buffer.save(&workspace).unwrap();
+        assert_eq!(buffer.evaluation_source_id(), &identity);
+        buffer.reload(&workspace, false).unwrap();
+        assert_eq!(buffer.evaluation_source_id(), &identity);
+        assert_eq!(buffer.version(), 2);
+        let (mut session, state) = session();
+        buffer.evaluate(&mut session).unwrap();
+        assert_eq!(
+            state.lock().unwrap().requests,
+            vec![(identity.clone(), RevisionId::from_version(2))]
+        );
+        buffers.close_selected(false).unwrap();
+        buffers
+            .open(&workspace, &LanguageRegistry::builtins(), "a")
+            .unwrap();
+        assert_ne!(
+            buffers.selected().unwrap().evaluation_source_id(),
+            &identity
+        );
     }
 
     #[test]

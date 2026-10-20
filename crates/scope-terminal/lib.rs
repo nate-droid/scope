@@ -1,4 +1,5 @@
-//! Single-line Unicode-scalar editing with byte cursors and ASCII-only rendering.
+//! Unicode-scalar editing with byte cursors and single-line ASCII-only rendering.
+//! Paste defaults to single-line text; normalized layout preservation is opt-in.
 //! Interactive submissions are added to history; buffered input is returned verbatim
 //! except for a terminating LF and its optional preceding CR.
 
@@ -13,6 +14,44 @@ use crossterm::{
     terminal::{self, Clear, ClearType},
 };
 use std::io::{self, BufRead, IsTerminal, Write};
+use std::ops::Range;
+
+/// A caller-discovered completion. All offsets are half-open UTF-8 byte offsets
+/// into the supplied input. Ranges must be ordered and on scalar boundaries.
+/// Insertion text must be single-line, without controls or terminal sequences.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletionCandidate {
+    pub replacement: Range<usize>,
+    pub insertion: String,
+    /// Display-only text, optionally including a description supplied by the caller.
+    /// Falls back to insertion when absent; never used for matching or replacement.
+    /// Renderers must escape and bound this untrusted text before printing it.
+    pub label: Option<String>,
+}
+
+/// Synchronous discovery only; language parsing, filtering, ordering, quoting,
+/// and any catalog access belong to the caller. Called afresh on every Tab.
+pub trait CompletionProvider {
+    fn complete(&mut self, input: &str, cursor: usize) -> Vec<CompletionCandidate>;
+}
+
+impl<F> CompletionProvider for F
+where
+    F: FnMut(&str, usize) -> Vec<CompletionCandidate>,
+{
+    fn complete(&mut self, input: &str, cursor: usize) -> Vec<CompletionCandidate> {
+        self(input, cursor)
+    }
+}
+
+/// Result of one completion request. Display labels are raw data; renderers must
+/// escape them. No candidates or selection are cached between requests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompletionAction {
+    None,
+    Applied,
+    Display(Vec<String>),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
@@ -20,6 +59,18 @@ pub enum Outcome {
     Submitted(String),
     Cancelled,
     Eof,
+}
+
+/// Insertion policy for decoded paste payloads, independent of keyboard bindings.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum PastePolicy {
+    /// Legacy behavior: normalize/filter text, flatten newlines and remove tabs.
+    #[default]
+    SingleLine,
+    /// Insert exactly the output of [`sanitize_paste`], preserving LF and tabs.
+    /// This normalizes CR/CRLF and filters controls, not raw-byte preservation.
+    /// It does not enable logical-line editing or change Enter/Tab bindings.
+    NormalizedLayout,
 }
 
 /// Edits Unicode scalars, not grapheme clusters. Cursor offsets are UTF-8 bytes.
@@ -54,6 +105,33 @@ impl LineBuffer {
         let text = sanitize(text);
         self.text.insert_str(self.cursor, &text);
         self.cursor += text.len();
+    }
+    /// Inserts a decoded paste payload according to an explicit policy.
+    /// Newlines and tabs are data, never key events. The cursor advances by the
+    /// inserted UTF-8 byte length; existing text is left unchanged.
+    pub fn insert_paste(&mut self, text: &str, policy: PastePolicy) {
+        match policy {
+            PastePolicy::SingleLine => self.insert(text),
+            PastePolicy::NormalizedLayout => {
+                let text = sanitize_paste(text);
+                self.text.insert_str(self.cursor, &text);
+                self.cursor += text.len();
+            }
+        }
+    }
+    /// Atomically replaces a valid UTF-8 byte range and places the cursor after
+    /// the insertion. Invalid ranges or unsafe single-line text leave it intact.
+    pub fn replace(&mut self, range: Range<usize>, text: &str) -> bool {
+        if range.start > range.end
+            || !self.text.is_char_boundary(range.start)
+            || !self.text.is_char_boundary(range.end)
+            || sanitize(text) != text
+        {
+            return false;
+        }
+        self.text.replace_range(range.clone(), text);
+        self.cursor = range.start + text.len();
+        true
     }
     pub fn left(&mut self) {
         if let Some((i, _)) = self.text[..self.cursor].char_indices().next_back() {
@@ -296,6 +374,72 @@ impl Reader {
     pub fn new() -> Self {
         Self::default()
     }
+    /// Applies a unique candidate, or extends a common prefix when all valid
+    /// candidates replace the same range ending at the cursor and extend the
+    /// existing text. Otherwise returns labels in provider order for display.
+    /// Invalid candidates are ignored. No implicit spaces are appended.
+    pub fn complete(
+        &mut self,
+        provider: &mut (impl CompletionProvider + ?Sized),
+    ) -> CompletionAction {
+        let candidates: Vec<_> = provider
+            .complete(self.buffer.text(), self.buffer.cursor())
+            .into_iter()
+            .filter(|c| {
+                c.replacement.start <= c.replacement.end
+                    && self.buffer.text.is_char_boundary(c.replacement.start)
+                    && self.buffer.text.is_char_boundary(c.replacement.end)
+                    && sanitize(&c.insertion) == c.insertion
+            })
+            .collect();
+        let Some(first) = candidates.first() else {
+            return CompletionAction::None;
+        };
+        if candidates.len() == 1 {
+            self.buffer
+                .replace(first.replacement.clone(), &first.insertion);
+            return CompletionAction::Applied;
+        }
+        if candidates
+            .iter()
+            .all(|c| c.replacement == first.replacement)
+            && first.replacement.end == self.buffer.cursor()
+        {
+            let current = &self.buffer.text()[first.replacement.clone()];
+            if candidates.iter().all(|c| c.insertion.starts_with(current)) {
+                let mut length = first.insertion.len();
+                for candidate in &candidates[1..] {
+                    length = first
+                        .insertion
+                        .chars()
+                        .zip(candidate.insertion.chars())
+                        .take_while(|(a, b)| a == b)
+                        .map(|(c, _)| c.len_utf8())
+                        .sum::<usize>()
+                        .min(length);
+                }
+                if length > current.len() {
+                    self.buffer
+                        .replace(first.replacement.clone(), &first.insertion[..length]);
+                    return CompletionAction::Applied;
+                }
+            }
+        }
+        CompletionAction::Display(
+            candidates
+                .into_iter()
+                .map(|c| c.label.unwrap_or(c.insertion))
+                .collect(),
+        )
+    }
+
+    /// Inserts paste without submitting, completing, recording history, or
+    /// changing navigation state. Submission/cancellation still use handle_key.
+    pub fn handle_paste(&mut self, text: &str, policy: PastePolicy) -> Outcome {
+        self.buffer.insert_paste(text, policy);
+        Outcome::Continue
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent, history: &mut History) -> Outcome {
         if key.kind != KeyEventKind::Release && key.modifiers.is_empty() {
             match key.code {
@@ -382,6 +526,15 @@ fn escaped(text: &str) -> String {
     text.chars().flat_map(char::escape_default).collect()
 }
 
+// Bound output during escaping, including for very large downstream descriptions.
+fn completion_line(label: &str, width: u16) -> String {
+    label
+        .chars()
+        .flat_map(char::escape_default)
+        .take(usize::from(width.saturating_sub(1)))
+        .collect()
+}
+
 // Reserve the last column to avoid terminal autowrap. Escapes may be clipped:
 // every rendered character is ASCII, so byte offsets equal terminal columns.
 fn viewport(prompt: &str, buffer: &LineBuffer, width: u16) -> (String, u16) {
@@ -406,6 +559,45 @@ fn viewport(prompt: &str, buffer: &LineBuffer, width: u16) -> (String, u16) {
 /// Otherwise delegates directly to read_from without printing a prompt.
 /// Errors propagate after RAII cleanup; cancellation and EOF are distinct.
 pub fn read_line(prompt: &str, history: &mut History) -> io::Result<Outcome> {
+    read_line_with_completion(prompt, history, &mut |_: &str, _: usize| Vec::new())
+}
+
+/// Like read_line, with synchronous, caller-owned Tab discovery. Redirected
+/// input never calls the provider. Ambiguous labels print on separate lines,
+/// escaped and clipped to terminal width; at most 100 are displayed per Tab.
+pub fn read_line_with_completion(
+    prompt: &str,
+    history: &mut History,
+    provider: &mut (impl CompletionProvider + ?Sized),
+) -> io::Result<Outcome> {
+    read_line_with_completion_and_paste_policy(prompt, history, provider, PastePolicy::default())
+}
+
+/// Like [`read_line`], with an explicit paste policy and Tab remaining a no-op.
+/// Redirected input is unaffected by the policy and remains line-framed.
+pub fn read_line_with_paste_policy(
+    prompt: &str,
+    history: &mut History,
+    policy: PastePolicy,
+) -> io::Result<Outcome> {
+    read_line_with_completion_and_paste_policy(
+        prompt,
+        history,
+        &mut |_: &str, _: usize| Vec::new(),
+        policy,
+    )
+}
+
+/// Like [`read_line_with_completion`], with an explicit policy for decoded paste
+/// events only. Enter, keyboard Tab, history, cancellation, EOF and completion
+/// validation are unchanged. Layout is displayed escaped in the same single-line
+/// viewport, not a multiline editor. Redirected input ignores this policy.
+pub fn read_line_with_completion_and_paste_policy(
+    prompt: &str,
+    history: &mut History,
+    provider: &mut (impl CompletionProvider + ?Sized),
+    policy: PastePolicy,
+) -> io::Result<Outcome> {
     if !(io::stdin().is_terminal() && io::stdout().is_terminal()) {
         return read_from(&mut io::stdin().lock());
     }
@@ -423,11 +615,22 @@ pub fn read_line(prompt: &str, history: &mut History) -> io::Result<Outcome> {
         )?;
         out.flush()?;
         let outcome = match event::read()? {
-            Event::Key(key) => reader.handle_key(key, history),
-            Event::Paste(text) => {
-                reader.buffer.insert(&text);
+            Event::Key(key)
+                if key.code == KeyCode::Tab
+                    && key.modifiers.is_empty()
+                    && key.kind != KeyEventKind::Release =>
+            {
+                if let CompletionAction::Display(labels) = reader.complete(provider) {
+                    let width = terminal::size()?.0;
+                    queue!(out, MoveToColumn(0), Clear(ClearType::CurrentLine))?;
+                    for label in labels.iter().take(100) {
+                        queue!(out, Print(completion_line(label, width)), Print("\r\n"))?;
+                    }
+                }
                 Outcome::Continue
             }
+            Event::Key(key) => reader.handle_key(key, history),
+            Event::Paste(text) => reader.handle_paste(&text, policy),
             _ => Outcome::Continue,
         };
         if outcome != Outcome::Continue {

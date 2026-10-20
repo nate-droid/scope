@@ -1,0 +1,17 @@
+let operation = scope.operations()[0];
+let result = scope.invoke(operation.provider, operation.action, {});
+let declaration = result.value;
+let report = {
+    title: "Semantic explorer: selected declaration",
+    operation: operation.action,
+    status: result.status,
+    name: declaration.name,
+    kind: declaration.kind,
+    literal: declaration.literal,
+    partial: declaration.partial,
+    inferred_type: declaration.inferred_type.status,
+    references: declaration.references.status,
+    rationale: result.rationale
+};
+print(report);
+report

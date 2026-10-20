@@ -1,0 +1,14 @@
+let operation = scope.operations()[0];
+let result = scope.invoke(operation.provider, operation.action, {});
+let report = {
+    title: "Workspace declaration report",
+    status: result.status,
+    name: result.value.name,
+    kind: result.value.kind,
+    line: result.value.span.line,
+    partial: result.value.partial,
+    inferred_type: result.value.inferred_type.status,
+    references: result.value.references.status
+};
+print(report);
+result

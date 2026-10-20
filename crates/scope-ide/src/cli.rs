@@ -301,8 +301,58 @@ fn run_shell_inner(
     )
 }
 
+/// Runs the generic shell with a host-created application and session owner.
+///
+/// Takes ownership of both. REPL and explicit buffer evaluation use this exact
+/// controller. Input is read exclusively from `input`, including at EOF; terminal
+/// history and ambient terminal readers are disabled. Commands are identical to
+/// the normal shell. Owned sessions close on quit, EOF, or I/O failure (best effort
+/// on error/Drop). Hosts may retain typed runtime handles through their adapters.
+/// No providers, filesystem capabilities, or agent tools are registered implicitly.
+pub fn run_with_session(
+    app: App,
+    session: InteractiveSession,
+    input: impl BufRead,
+    output: impl Write,
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_shell_owned(
+        app,
+        session,
+        #[cfg(feature = "agent")]
+        AgentConfig::local(DEFAULT_AGENT_MODEL, DEFAULT_AGENT_BASE_URL),
+        #[cfg(not(feature = "agent"))]
+        AgentConfig,
+        input,
+        output,
+        false,
+        #[cfg(feature = "agent")]
+        None,
+    )
+}
+
 fn run_shell_configured(
+    app: App,
+    agent_config: AgentConfig,
+    input: impl BufRead,
+    output: impl Write,
+    interactive: bool,
+    #[cfg(feature = "agent")] editing: Option<InteractiveEditConfig>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_shell_owned(
+        app,
+        InteractiveSession::new(),
+        agent_config,
+        input,
+        output,
+        interactive,
+        #[cfg(feature = "agent")]
+        editing,
+    )
+}
+
+fn run_shell_owned(
     mut app: App,
+    mut session: InteractiveSession,
     #[cfg_attr(not(feature = "agent"), allow(unused_variables))] agent_config: AgentConfig,
     mut input: impl BufRead,
     mut output: impl Write,
@@ -333,7 +383,6 @@ fn run_shell_configured(
     writeln!(output, "Scope — {}", app.workspace().root())?;
     writeln!(output, "Type `help` for commands.")?;
     let mut proposal: Option<crate::workspace::Proposal> = None;
-    let mut session = InteractiveSession::new();
     let mut scratches = ScratchBuffers::default();
     #[cfg(feature = "agent")]
     let mut source_proposals = source_proposals::Proposals::configured(editing)?;
@@ -721,6 +770,17 @@ fn print_evaluation(
         }
     }
     for diagnostic in result.diagnostics {
+        if let Some(location) = diagnostic.locations.first() {
+            writeln!(
+                output,
+                "{} [attributed source revision] {}:{}: {}",
+                diagnostic_label(&diagnostic),
+                location.range.start.line + 1,
+                location.range.start.column + 1,
+                diagnostic.message
+            )?;
+            continue;
+        }
         writeln!(
             output,
             "{} {}:{}: {}",

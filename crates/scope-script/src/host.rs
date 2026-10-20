@@ -15,6 +15,13 @@ pub struct RegistryHost<'a> {
     pub results: Vec<OperationResult>,
 }
 impl Host for RegistryHost<'_> {
+    fn operation_names(&self) -> Vec<(String, String)> {
+        self.registry
+            .descriptors()
+            .map(|(id, _)| (id.provider_id, id.action_id))
+            .collect()
+    }
+
     fn operations(&mut self) -> Result<Value, ErrorKind> {
         Ok(Value::Array(
             self.registry
@@ -105,6 +112,99 @@ fn schema(s: &OperationSchema) -> Value {
             }
             .into(),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Interpreter, completion::ScriptCompletionProvider};
+    use scope_ide::{
+        document::{DocumentId, session::DocumentSnapshot},
+        tool::ToolArguments,
+        workspace::Workspace,
+    };
+    use scope_terminal::CompletionProvider;
+
+    struct MetadataProvider(Vec<OperationDescriptor>);
+    impl OperationProvider for MetadataProvider {
+        fn provider_id(&self) -> &str {
+            "registered_provider"
+        }
+        fn descriptors(&self) -> &[OperationDescriptor] {
+            &self.0
+        }
+        fn invoke(
+            &self,
+            _: &str,
+            _: &DocumentSnapshot,
+            _: &ToolArguments,
+        ) -> Result<Value, OperationFailure> {
+            panic!("metadata discovery must not dispatch")
+        }
+    }
+
+    #[test]
+    fn completion_projects_authoritative_registry_descriptors_without_authority() {
+        let mut registry = OperationRegistry::new(OperationLimits::default());
+        registry
+            .register(Box::new(MetadataProvider(
+                ["custom_read", "custom_write"]
+                    .into_iter()
+                    .map(|action| OperationDescriptor {
+                        action_id: action.into(),
+                        description: "metadata only".into(),
+                        input: OperationSchema::Object {
+                            fields: Default::default(),
+                            required: Default::default(),
+                        },
+                        output: OperationSchema::Null,
+                        effect: ToolEffect::Read,
+                        execution: OperationExecution::Immediate,
+                        authorization: Default::default(),
+                    })
+                    .collect(),
+            )))
+            .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("source.txt"), "unchanged").unwrap();
+        let mut session = DocumentSession::open(
+            Workspace::read_only(directory.path().to_string_lossy()).unwrap(),
+            DocumentId::new(1),
+            "source.txt",
+        )
+        .unwrap();
+        let revision = session.snapshot().unwrap().revision;
+        let host = RegistryHost {
+            registry: &registry,
+            session: &mut session,
+            expected: revision.clone(),
+            policy: Some(&|_| panic!("completion must not request authorization")),
+            results: Vec::new(),
+        };
+        let expected: Vec<_> = registry
+            .descriptors()
+            .map(|(id, _)| (id.provider_id, id.action_id))
+            .collect();
+        assert_eq!(host.operation_names(), expected);
+        assert_eq!(expected.len(), 2);
+        let interpreter = Interpreter::new();
+        let mut completion = ScriptCompletionProvider::new(&interpreter, &host);
+        let source = "scope.invoke(\"";
+        let providers = completion.complete(source, source.len());
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].insertion, "\"registered_provider\"");
+        let source = "scope.invoke(\"registered_provider\", \"";
+        let actions = completion.complete(source, source.len());
+        assert_eq!(
+            actions
+                .iter()
+                .map(|c| c.insertion.as_str())
+                .collect::<Vec<_>>(),
+            ["\"custom_read\"", "\"custom_write\""]
+        );
+        assert!(host.results.is_empty());
+        assert_eq!(host.session.snapshot().unwrap().revision, revision);
     }
 }
 

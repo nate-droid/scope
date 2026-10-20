@@ -32,6 +32,37 @@ fn retained_history_is_bounded_and_can_be_drained_by_host() {
     assert_eq!(calls.get(), 65);
 }
 
+#[test]
+fn completion_reads_registry_without_invocation_or_authorization() {
+    use scope_script::completion::ScriptCompletionProvider;
+    use scope_terminal::CompletionProvider;
+    let mut fixture = Fixture::new(Mode::Inspect);
+    let calls = fixture.calls.clone();
+    let policy_calls = Cell::new(0);
+    let deny = |_: OperationAuthorization<'_>| {
+        policy_calls.set(policy_calls.get() + 1);
+        false
+    };
+    let mut host = fixture.host(Some(&deny));
+    let mut interpreter = Interpreter::new();
+    let mut completion = ScriptCompletionProvider::new(&interpreter, &host);
+    let input = "scope.invoke(\"example_i";
+    let candidates = completion.complete(input, input.len());
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].insertion, "\"example_inspection\"");
+    let input = "scope.invoke(\"example_inspection\", \"ins";
+    assert_eq!(
+        completion.complete(input, input.len())[0].insertion,
+        "\"inspect\""
+    );
+    assert_eq!(policy_calls.get(), 0);
+    assert_eq!(calls.get(), 0);
+    assert!(host.results.is_empty());
+    assert!(interpreter.eval(INVOKE, &mut host).is_err());
+    assert_eq!(policy_calls.get(), 1);
+    assert_eq!(calls.get(), 0);
+}
+
 const TEXT: &str = "Actual snapshot: café 🦀\n";
 const INVOKE: &str =
     "scope.invoke(\"example_inspection\", \"inspect\", {options: {include_text: true}})";
@@ -291,7 +322,7 @@ fn repl_preserves_bindings_across_lines_with_real_registry_host() {
         "{output}"
     );
     assert!(
-        output.contains(&format!("scope> => Integer({})", TEXT.len())),
+        output.contains(&format!("=> Integer({})", TEXT.len())),
         "{output}"
     );
     assert!(!output.contains("error"), "{output}");

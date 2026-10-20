@@ -1857,6 +1857,7 @@ version = "0.1.0"
 dependencies = [
  "scope-ide",
  "scope-language",
+ "scope-terminal",
  "serde_json",
  "tempfile",
 ]

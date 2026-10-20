@@ -101,6 +101,39 @@ fn extra_arguments_are_rejected() {
     assert!(stderr(&output).contains("expected a single script path"));
 }
 
+fn stdin_script(input: &[u8]) -> Output {
+    let mut child = cli()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(input).unwrap();
+    child.wait_with_output().unwrap()
+}
+
+#[test]
+fn redirected_input_preserves_partial_final_line_and_error_recovery() {
+    let output = stdin_script(b"let x = 4\r\n1 / 0\nprint(x)\nx + 1");
+    assert!(output.status.success());
+    let text = stdout(&output);
+    assert!(text.starts_with("=> Integer(4)\n"));
+    assert!(text.contains("runtime error:"));
+    assert!(text.ends_with("Integer(4)\n=> Integer(5)\n"));
+    assert!(!text.contains("scope>"));
+    assert!(!text.contains('\u{1b}'));
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn redirected_input_retains_validation_and_line_bound() {
+    let output = stdin_script(b"\xff\n2\n");
+    assert_eq!(stdout(&output), "input is not UTF-8\n=> Integer(2)\n");
+    let output = stdin_script(&vec![b' '; 65_537]);
+    assert_eq!(stdout(&output), "input line too large; session ended\n");
+    assert!(output.status.success());
+}
+
 #[test]
 fn no_arguments_preserves_repl() {
     let mut child = cli()
@@ -117,6 +150,6 @@ fn no_arguments_preserves_repl() {
         .unwrap();
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success());
-    assert_eq!(stdout(&output), "scope> => Integer(3)\nscope> ");
+    assert_eq!(stdout(&output), "=> Integer(3)\n");
     assert!(output.stderr.is_empty());
 }

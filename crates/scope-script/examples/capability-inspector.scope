@@ -1,0 +1,24 @@
+let operation = scope.operations()[0];
+let metadata = operation.metadata;
+let report = {
+    title: "Capability metadata (not an authorization grant)",
+    available: {
+        provider: operation.provider,
+        identifier: operation.action,
+        description: operation.description,
+        arguments: metadata.arguments,
+        constraints_json: metadata.constraints_json,
+        target: metadata.target,
+        effect: metadata.effect,
+        purpose: metadata.purpose,
+        produces_evaluation: metadata.produces_evaluation,
+        invocation_schema: metadata.invocation_schema
+    },
+    unavailable: {
+        executable_authorization_grant: "not exposed; discovery grants no authority",
+        source_policy: "host-owned; not exposed in operation metadata",
+        selected_document_and_range: "host-owned; not exposed in operation metadata"
+    }
+};
+print(report);
+report

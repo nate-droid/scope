@@ -2,7 +2,7 @@ pub mod session;
 pub use session::editing::{EditAuthorization, EditDecision, EditError, EditProposal, EditReview};
 pub use session::{DocumentError, DocumentSession, DocumentSnapshot, Revision};
 
-use scope_language::{LanguageDocument, LanguagePath};
+use scope_language::{LanguageDocument, LanguagePath, SourceId};
 
 use crate::path::{ScopePath, ToScopePath};
 use crate::text::{TextBuffer, TextBufferError, TextEdit};
@@ -38,6 +38,7 @@ impl std::fmt::Display for DocumentId {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Document {
     id: DocumentId,
+    source_id: SourceId,
     path: ScopePath,
     buffer: TextBuffer,
     saved_text: String,
@@ -52,6 +53,7 @@ impl Document {
 
         Self {
             id,
+            source_id: SourceId::fresh(),
             path: path
                 .to_scope_path()
                 .expect("document paths must be valid Scope capability paths"),
@@ -84,6 +86,11 @@ impl Document {
 
     pub fn id(&self) -> DocumentId {
         self.id
+    }
+
+    /// Evaluation identity belongs to the logical document, not its path or revision.
+    pub fn evaluation_source_id(&self) -> &SourceId {
+        &self.source_id
     }
 
     pub fn path(&self) -> &ScopePath {
@@ -152,6 +159,22 @@ impl Document {
 mod tests {
     use super::*;
     use crate::text::{Position, TextRange};
+
+    #[test]
+    fn source_identity_survives_edits_save_revert_and_clone() {
+        let mut document = Document::new(DocumentId::new(1), "test.scope", "hello");
+        let source_id = document.evaluation_source_id().clone();
+        assert_eq!(document.clone().evaluation_source_id(), &source_id);
+        document
+            .apply_edit(TextEdit::insert(Position::new(0, 5), "!"))
+            .unwrap();
+        document.mark_saved();
+        document.revert();
+        assert_eq!(document.evaluation_source_id(), &source_id);
+        assert_eq!(document.version(), 2);
+        let reopened = Document::new(document.id(), "test.scope", document.text());
+        assert_ne!(reopened.evaluation_source_id(), &source_id);
+    }
 
     #[test]
     fn document_id_wraps_raw_identity() {

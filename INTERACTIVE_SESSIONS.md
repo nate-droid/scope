@@ -5,6 +5,112 @@ No builtin language currently registers an evaluator. Analysis-only services rem
 unchanged, and opening a document never selects a session or authorizes execution.
 The terminal shell supports multiline editing; no language runtime is added.
 
+## Source-aware evaluation
+
+Both REPL submissions and explicit buffer evaluation now dispatch through
+`InteractiveLanguageSession::evaluate_request(EvaluationRequest)`. Its default
+forwards exact text to the existing `evaluate(&str)` implementation. Buffer-owned
+`evaluation_source_id()` and in-memory versions distinguish dirty revisions from
+disk baselines; independent submissions receive fresh identities.
+
+`Diagnostic::locations` optionally attributes primary and related ranges to exact
+source/revision pairs, including historical definitions. Existing diagnostic
+constructors remain compatible; direct struct literals must add `locations`.
+Scope does not automatically retain history or resolve locations against disk.
+See [source contracts, downstream adaptation, and staged host command/navigation
+design](docs/SOURCE_EVALUATION.md) for identity, retention, and compatibility rules.
+
+## Embedding an existing runtime
+
+`scope_ide::cli::run_with_session(app, controller, input, output)` consumes a
+host-built `App` and `language::InteractiveSession` and runs the same command
+loop as the registry CLI. `input: BufRead` and `output: Write` are injectable;
+this entry point always uses line-oriented redirected input, not ambient terminal
+input/history. EOF executes a final unterminated line once, then exits. Terminal
+multiline/history configuration and contracted agent-edit configuration are not
+exposed by this minimal embedding entry point. With the agent feature, normal
+proposal-only agent commands use the CLI's default local model configuration.
+
+Install a concrete adapter with `controller.install(language_id, boxed_adapter)`.
+No registry provider is required: a nonempty exact identity match is supported.
+An adapter can own an `Rc<RefCell<Runtime>>` while the host retains another typed
+handle. Scope needs neither downcasting nor access to language-specific state.
+The controller owns the adapter, not exclusive access to the shared runtime;
+hosts must ensure the adapter's close invalidates runtime operations safely.
+Do not install two adapters owning the same runtime into independent controllers.
+
+See the runnable [typed runtime example](crates/scope-ide/examples/embedded_shell.rs):
+
+```sh
+cargo run -p scope-ide --example embedded_shell
+```
+
+### Ownership and lifecycle
+
+| Event | Contract |
+|---|---|
+| Installation | Takes the candidate by value; validates before touching the active session. Success transfers session ownership to the controller. |
+| Invalid identity / empty requested ID | Candidate closes best effort and drops; active session and reset requirement stay unchanged. The candidate is not returned. |
+| Successful replacement | Close old session, drop old adapter, install candidate and clear reset requirement. Same-language installation also replaces. |
+| Old close fails during replacement | Candidate closes best effort and drops. Old session stays selected but evaluation requires successful reset, recreation, or clear. Close may have partial effects; no rollback is promised. |
+| Registry reselection | Always creates a fresh independent session, even for the current language. A host-only ID without a provider cannot be reselected through the registry; the existing host session remains active. |
+| Unsupported selection / factory failure | Active session is untouched. |
+| Deselection (`session none`) | Detaches before close, drops even on close error. No runtime retention by Scope. |
+| Reset | Calls the actual active adapter; only success clears reset-required state. Buffers are untouched. |
+| Quit / EOF | Explicitly clears; close error is returned. Controller Drop does not close an already detached session again. |
+| I/O or other early error | Controller Drop closes best effort; original error is preserved. |
+
+A failed close on a retained session can be retried at later replacement/clear;
+this is intentional existing behavior, not a guarantee that close is called only
+once across failures. Session implementations must release resources via RAII
+when close fails. Successful close is never followed by another controller close
+on that detached adapter. Reset must actually restore usability before succeeding.
+
+### Verified architecture and scope
+
+The normal `run_with_registry` still builds its own App and empty controller.
+Registry factories remain independent; embedding does not change their contract.
+The existing REPL and explicit buffer-evaluation paths already share one controller;
+this API supplies that controller rather than introducing another evaluator.
+The App owns the legacy open document; the shell separately owns unified scratch/
+file-backed buffers and proposal state. Both are consumed for the shell lifetime,
+not returned to the host. Reset/replacement do not discard edited shell buffers.
+Opening, editing, saving, inspection, and evaluation remain separate operations.
+Language/session registration grants no filesystem or agent-tool authority.
+
+The downstream `scope-forth/GENERIC_SHELL_SESSION_DESIGN.md` and unified-buffer
+tests were inspected without modification. Their observations about private shell
+ownership, independent factories, same-language recreation, and shared REPL/buffer
+evaluation were confirmed. This embedding foundation does not migrate the Forth
+workbench or add its tracing, source retention, or host command surfaces.
+
+### Deferred extension stages (proposals, not implemented)
+
+1. **Human command namespaces:** reserve explicit host namespaces at shell
+   construction, reject duplicate/reserved namespaces, and dispatch with current
+   App, selected shell buffer, and active-session generation at invocation time.
+   Host handlers retain typed runtime handles, check active attachment/generation
+   and closed state, and fail closed after replacement/deselection. Reset advances
+   runtime generation so trace views cannot claim stale snapshots are live. This
+   needs a buffer-aware shell context rather than just `&App`, because unified
+   shell buffers currently live outside App. Human handlers may explicitly mutate
+   authorized runtime configuration; registration must not create agent tools.
+   Agent tools require separately registered read-only providers and independent
+   authorization policies; evaluation/reset/trace mutation remain unavailable by
+   default. Existing generic symbol inspection remains read-only.
+2. **Source-aware requests:** add a language-neutral borrowed
+   `EvaluationRequest { text, source_id, revision_id }` and a default session hook
+   forwarding to `evaluate(request.text)`. Both controller evaluation routes would
+   call it. Source and revision are opaque identifiers, not filesystem authority.
+   Mint identities scoped to the shell/session and buffer/submission; bind each
+   revision to the exact text snapshot before evaluation, including dirty edits.
+   Repeated revisions must denote identical snapshots and cannot be recycled after
+   reset. Retained historical traces require the runtime to retain those identities
+   and exact text. Diagnostics from retained definitions must carry their original
+   source/revision, not be relabeled with the latest request. This needs a compatible
+   diagnostic/provenance design as well as the request hook; defer both rather than
+   imply attribution is solved by passing a buffer version alone.
+
 ## Shell routing and selection
 
 ```text

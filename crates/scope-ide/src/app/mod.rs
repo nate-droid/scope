@@ -374,7 +374,16 @@ mod tests {
 
         let mut app = App::new(root.workspace()).unwrap();
         let first_id = app.open_path("README.md").unwrap().id();
+        let first_source = app.open_document().unwrap().evaluation_source_id().clone();
+        assert_eq!(
+            app.clone().open_document().unwrap().evaluation_source_id(),
+            &first_source
+        );
         let second_id = app.open_path("README.md").unwrap().id();
+        assert_ne!(
+            app.open_document().unwrap().evaluation_source_id(),
+            &first_source
+        );
 
         assert_eq!(first_id, DocumentId::new(1));
         assert_eq!(second_id, DocumentId::new(2));

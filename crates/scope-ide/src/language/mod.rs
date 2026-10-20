@@ -2,10 +2,11 @@ use crate::document::Document;
 use crate::path::ScopePath;
 pub use scope_language::{
     CancellationHandle, Completeness, CompletionItem, Diagnostic, DiagnosticSeverity,
-    EvaluationResult, EvaluationStatus, InspectionError, InteractiveLanguageSession,
-    InteractiveSessionProvider, LanguageAction, LanguageAnalysis, LanguageDocument, LanguagePath,
-    LanguageService, Position, SessionError, Symbol, SymbolDescription, SymbolKind, SymbolLocation,
-    SymbolOrigin, TextRange,
+    EvaluationRequest, EvaluationResult, EvaluationStatus, InspectionError,
+    InteractiveLanguageSession, InteractiveSessionProvider, LanguageAction, LanguageAnalysis,
+    LanguageDocument, LanguagePath, LanguageService, Position, RevisionId, SessionError, SourceId,
+    SourceLocation, SourceResolver, SourceSnapshot, SourceUnavailable, Symbol, SymbolDescription,
+    SymbolKind, SymbolLocation, SymbolOrigin, TextRange,
 };
 
 pub mod interactive;

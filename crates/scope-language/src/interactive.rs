@@ -31,6 +31,16 @@ pub trait InteractiveLanguageSession {
     /// reset must not clear that requirement.
     fn evaluate(&mut self, source: &str) -> Result<EvaluationResult, SessionError>;
 
+    /// Evaluates exact in-memory text with descriptive source context. Adapters
+    /// may retain cloned identities and text for definitions and historical errors.
+    /// The default preserves text-only implementations and does not invent provenance.
+    fn evaluate_request(
+        &mut self,
+        request: crate::EvaluationRequest<'_>,
+    ) -> Result<EvaluationResult, SessionError> {
+        self.evaluate(request.text)
+    }
+
     /// Restores a fresh evaluation state, including clearing any reset requirement.
     fn reset(&mut self) -> Result<(), SessionError>;
 

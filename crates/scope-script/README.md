@@ -1,5 +1,20 @@
 # Scope Script (S4–S8 experiment)
 
+## Exploration Pack 1 (workspace-backed semantics)
+
+Run independently from the repository root:
+
+```sh
+cargo run -p scope-script --example exploration --offline -- e1 --allow-read crates/scope-script/examples/semantic-workspace
+cargo run -p scope-script --example exploration --offline -- e2 --allow-read crates/scope-script/examples/semantic-workspace
+cargo run -p scope-script --example exploration --offline -- e3 --allow-read crates/scope-script/examples/semantic-workspace
+```
+
+E1 inspects the selected declaration, E2 reports exposed metadata (not authority),
+and E3 composes a nested report from real semantic results. All use S9's existing
+read-only, host-selected workspace target. See [execution evidence, assertions,
+and limitations](../../docs/design/SCOPE_SCRIPT_EXPLORATION_1.md).
+
 ## Read-only language semantics (S8)
 
 ```sh
@@ -51,6 +66,63 @@ scope> :quit
 ```
 
 The standalone REPL has **no installed providers or authority**. It accepts one statement line at a time (multiple statements may be separated by semicolons), retains immutable bindings, and recovers after evaluation errors. EOF or `:quit` exits. Values are displayed using their Rust structured debug representation, not JSON. Source-string evaluation supports multiline programs and collections. Run a local UTF-8 script (maximum 64 KiB) with `cargo run -p scope-script --offline -- crates/scope-script/examples/pure.scope`. Use `--help` for CLI usage. File execution uses the same interpreter, without providers or authority; it is not a workspace host.
+
+### Interactive editing
+
+When **both stdin and stdout are terminals**, the standalone REPL uses the public
+`scope-terminal` reader:
+
+| Keys | Action |
+| --- | --- |
+| Left / Right | Move one Unicode scalar |
+| Home / End, Ctrl+A / Ctrl+E | Move to start / end |
+| Backspace / Delete | Delete before / at the cursor |
+| Up / Down | Recall history / return to the saved draft and cursor |
+| Tab | Complete a name; show ambiguous candidates |
+| Enter | Submit the line |
+| Ctrl+C or Escape | Discard the line and reprompt without evaluation |
+| Ctrl+D | Exit on an empty line; otherwise delete at the cursor |
+| `:quit` then Enter | Exit |
+
+History is session-local, in memory, and includes submitted lines (including
+those that fail evaluation), not cancelled drafts. Recalled edits do not alter
+stored history. Consecutive duplicate and empty entries are omitted.
+Pasted terminal escape sequences are filtered; multiline paste becomes one line.
+
+Tab completes `let`, `true`, `false`, `null`, the built-ins `print`,
+`scope.operations`, `scope.invoke`, and bindings from previous evaluations.
+For example, enter `let answer = 42`, then type `ans` and press Tab.
+Completion works at the cursor and replaces the whole current name, preserving
+surrounding text. Ambiguous prefixes display candidates without evaluation.
+
+Hosts can expose provider/action names through the read-only
+`Host::operation_names` hook. `RegistryHost` reads the existing operation registry
+directly. Inside `scope.invoke("provider", "action", {})`, Tab completes the
+provider string or actions for a literal provider. Other strings are not completed.
+The standalone CLI has no installed operations. Custom hosts default to no operation
+candidates; completion never invokes operations or grants execution authority.
+Object fields and bindings in the unsubmitted line are not inferred.
+
+If either stream is redirected, input stays buffered with no raw mode, prompts,
+or editing escape sequences. Existing line-size and UTF-8 checks are retained;
+an unterminated final line is evaluated. Script-file mode is unchanged.
+
+**Integration note (T3):** only terminal input acquisition and prompt selection
+changed. Both input paths share the existing evaluator/output handling; providers,
+host registration and authorization are unchanged. Scope Script calls the public
+`scope-terminal` API directly, not Scope IDE's shell. The reader's RAII guard
+restores terminal state before evaluation, including on reader errors. There is
+no multiline editing or persistent history. Unicode editing uses
+scalar boundaries, not grapheme clusters; the shared renderer displays non-ASCII
+text as escaped ASCII and scrolls a single line. History is currently unbounded.
+
+`cargo test -p scope-script --offline` includes automated Unix PTY tests requiring
+`python3` (standard library only). They exercise editing, history/draft cursor
+restoration, cancellation, EOF, evaluation-error recovery, and termios restoration
+after normal exit. A file-error exit also checks unchanged termios, but does not
+exercise a raw-reader I/O failure. Reader I/O-failure fault injection and manual
+terminal-emulator testing have not been performed; automated PTY results are not
+claims about visual behavior in every emulator.
 
 For an actual capability-backed document inspection:
 

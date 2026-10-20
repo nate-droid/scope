@@ -39,12 +39,29 @@ impl InteractiveSession {
         let provider = registry
             .interactive_provider(id)
             .ok_or_else(|| SessionError::UnsupportedLanguage(id.into()))?;
-        let mut replacement = provider.create_session()?;
-        if replacement.language_id() != id {
+        self.install(id, provider.create_session()?)
+    }
+
+    /// Transfers ownership of a host-created session to this controller.
+    ///
+    /// Any nonempty language identity is supported without a registry provider.
+    /// Identity validation happens before touching the active session. Rejected
+    /// candidates are closed best effort and dropped (not returned to the caller).
+    /// A valid replacement closes the old session before dropping it and installing
+    /// the candidate, including for the same language. If old-session close fails,
+    /// the old session remains selected but requires reset; the candidate is closed
+    /// best effort and dropped. Close may have partial effects: this is not rollback.
+    /// Installation grants no filesystem or agent-tool authority.
+    pub fn install(
+        &mut self,
+        id: &str,
+        mut replacement: Box<dyn InteractiveLanguageSession>,
+    ) -> Result<(), SessionError> {
+        if id.is_empty() || replacement.language_id() != id {
             let error = SessionError::Infrastructure {
                 code: "language_id_mismatch".into(),
                 message: format!(
-                    "provider {id} created session {}",
+                    "requested language {id:?}, candidate session {}",
                     replacement.language_id()
                 ),
             };
@@ -79,11 +96,23 @@ impl InteractiveSession {
     }
 
     pub fn evaluate(&mut self, source: &str) -> Result<EvaluationResult, SessionError> {
+        self.evaluate_request(scope_language::EvaluationRequest {
+            text: source,
+            source_id: scope_language::SourceId::fresh(),
+            revision_id: scope_language::RevisionId::from_version(0),
+        })
+    }
+
+    /// Dispatches source context without changing ownership or lifecycle policy.
+    pub fn evaluate_request(
+        &mut self,
+        request: scope_language::EvaluationRequest<'_>,
+    ) -> Result<EvaluationResult, SessionError> {
         let session = self.session.as_mut().ok_or_else(no_session)?;
         if self.reset_required {
             return Err(SessionError::ResetRequired);
         }
-        let result = match session.evaluate(source) {
+        let result = match session.evaluate_request(request) {
             Ok(result) => result,
             Err(SessionError::ResetRequired) => {
                 self.reset_required = true;

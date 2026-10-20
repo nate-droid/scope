@@ -1,6 +1,7 @@
 //! A bounded, synchronous expression interpreter. Offsets are UTF-8 byte offsets.
 //! Bindings and printed values persist between evaluations. Runtime failures keep
 //! earlier successful statements and host effects; syntax failures execute nothing.
+pub mod completion;
 pub mod host;
 mod parser;
 pub mod repl;
@@ -12,6 +13,11 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 pub trait Host {
+    /// Read-only discovery for completion; does not authorize or invoke operations.
+    /// Hosts without a metadata catalog need not implement this hook.
+    fn operation_names(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
     fn operations(&mut self) -> Result<Value, ErrorKind>;
     fn invoke(
         &mut self,
