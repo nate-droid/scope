@@ -227,6 +227,74 @@ fn history_navigation_restores_draft_and_cursor() {
 }
 
 #[test]
+fn shared_history_navigation_boundaries_and_reset() {
+    // A non-Default draft also verifies navigation imposes no Default bound.
+    #[derive(Debug, PartialEq, Eq)]
+    struct Draft(&'static str);
+    let mut navigation = HistoryNavigation::default();
+    assert_eq!(navigation.previous(&[], Draft("ignored")), None);
+    assert_eq!(navigation.next(&[]), None);
+    let entries = vec!["one".into(), "二\nλ".into()];
+    assert_eq!(
+        navigation.previous(&entries, Draft("original")),
+        Some(entries[1].clone())
+    );
+    assert_eq!(
+        navigation.previous(&entries, Draft("edited")),
+        Some(entries[0].clone())
+    );
+    assert_eq!(
+        navigation.previous(&entries, Draft("edited")),
+        Some(entries[0].clone())
+    );
+    assert_eq!(
+        navigation.next(&entries),
+        Some(HistorySelection::Entry(entries[1].clone()))
+    );
+    assert_eq!(
+        navigation.next(&entries),
+        Some(HistorySelection::Draft(Draft("original")))
+    );
+    assert_eq!(navigation.next(&entries), None);
+    navigation.previous(&entries, Draft("discarded"));
+    navigation.reset();
+    assert_eq!(navigation.next(&entries), None);
+    navigation.previous(&entries, Draft("fresh"));
+    assert_eq!(
+        navigation.next(&entries),
+        Some(HistorySelection::Draft(Draft("fresh")))
+    );
+}
+
+#[test]
+fn reader_restores_unicode_multiline_draft_cursor_once() {
+    let mut history = History::new();
+    let mut reader = Reader::new();
+    reader.buffer = LineBuffer::from_parts("λ\n二🙂end".into(), "λ\n二".len());
+    reader.handle_key(key(KeyCode::Up), &mut history);
+    assert_eq!(
+        (reader.buffer.text(), reader.buffer.cursor()),
+        ("λ\n二🙂end", "λ\n二".len())
+    );
+    history.push("recalled\nλ");
+    reader.handle_key(key(KeyCode::Up), &mut history);
+    assert_eq!(reader.buffer.cursor(), "recalled\nλ".len());
+    reader.buffer.insert("edit");
+    reader.handle_key(key(KeyCode::Down), &mut history);
+    assert_eq!(
+        (reader.buffer.text(), reader.buffer.cursor()),
+        ("λ\n二🙂end", "λ\n二".len())
+    );
+    reader.buffer.insert("!");
+    reader.handle_key(key(KeyCode::Down), &mut history);
+    assert_eq!(
+        (reader.buffer.text(), reader.buffer.cursor()),
+        ("λ\n二!🙂end", "λ\n二!".len())
+    );
+    assert_eq!(history.entries(), &["recalled\nλ"]);
+}
+
+#[test]
 fn fallback_preserves_data_and_handles_eof() {
     let mut input = Cursor::new(b"a\r\n\n\x1b[31m\t x \nlast\r");
     for expected in ["a", "", "\x1b[31m\t x ", "last\r"] {

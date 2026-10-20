@@ -1,12 +1,13 @@
 //! Language-neutral command recall, with optional capability-backed persistence.
 
+use scope_terminal::{HistoryNavigation, HistorySelection};
+
 /// Oldest-to-newest command history. Only consecutive duplicates are suppressed.
 #[derive(Debug, Clone)]
 pub struct CommandHistory {
     max: usize,
     entries: Vec<String>,
-    cursor: Option<usize>,
-    draft: String,
+    navigation: HistoryNavigation<String>,
 }
 
 impl CommandHistory {
@@ -14,8 +15,7 @@ impl CommandHistory {
         Self {
             max,
             entries: Vec::new(),
-            cursor: None,
-            draft: String::new(),
+            navigation: HistoryNavigation::default(),
         }
     }
 
@@ -38,18 +38,7 @@ impl CommandHistory {
     /// Captures the current draft on first use. Edits to recalled commands do
     /// not overwrite recorded entries or the draft. At the oldest entry, stays put.
     pub fn previous(&mut self, current: &str) -> Option<String> {
-        if self.entries.is_empty() {
-            return None;
-        }
-        let index = match self.cursor {
-            None => {
-                self.draft = current.to_owned();
-                self.entries.len() - 1
-            }
-            Some(index) => index.saturating_sub(1),
-        };
-        self.cursor = Some(index);
-        Some(self.entries[index].clone())
+        self.navigation.previous(&self.entries, current.to_owned())
     }
 
     /// Moving past the newest entry restores the draft exactly once.
@@ -58,19 +47,15 @@ impl CommandHistory {
         reason = "Bidirectional history cursor navigation restores the draft, rather than consuming an Iterator sequence"
     )]
     pub fn next(&mut self) -> Option<String> {
-        let index = self.cursor? + 1;
-        if index < self.entries.len() {
-            self.cursor = Some(index);
-            Some(self.entries[index].clone())
-        } else {
-            self.cursor = None;
-            Some(std::mem::take(&mut self.draft))
-        }
+        self.navigation
+            .next(&self.entries)
+            .map(|selection| match selection {
+                HistorySelection::Entry(text) | HistorySelection::Draft(text) => text,
+            })
     }
 
     pub fn reset_navigation(&mut self) {
-        self.cursor = None;
-        self.draft.clear();
+        self.navigation.reset();
     }
 
     pub fn entries(&self) -> &[String] {
@@ -174,11 +159,11 @@ mod tests {
         history.record("one");
         history.record("two");
         assert_eq!(history.next(), None);
-        assert_eq!(history.previous("draft λ"), Some("two".into()));
+        assert_eq!(history.previous("draft λ\n二"), Some("two".into()));
         assert_eq!(history.previous("edited two"), Some("one".into()));
         assert_eq!(history.previous("edited one"), Some("one".into()));
         assert_eq!(history.next(), Some("two".into()));
-        assert_eq!(history.next(), Some("draft λ".into()));
+        assert_eq!(history.next(), Some("draft λ\n二".into()));
         assert_eq!(history.next(), None);
         assert_eq!(history.previous("new draft"), Some("two".into()));
         assert_eq!(history.next(), Some("new draft".into()));

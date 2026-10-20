@@ -224,6 +224,65 @@ impl History {
     }
 }
 
+/// A recalled entry or the original, caller-owned draft.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HistorySelection<D> {
+    Entry(String),
+    Draft(D),
+}
+
+/// Navigation over oldest-to-newest entries, independent of storage policy.
+/// Entries must remain unchanged during navigation; reset before changing them.
+#[derive(Debug, Clone)]
+pub struct HistoryNavigation<D> {
+    position: Option<usize>,
+    draft: Option<D>,
+}
+
+impl<D> Default for HistoryNavigation<D> {
+    fn default() -> Self {
+        Self {
+            position: None,
+            draft: None,
+        }
+    }
+}
+
+impl<D> HistoryNavigation<D> {
+    /// Saves the draft on first recall and stays put at the oldest entry.
+    pub fn previous(&mut self, entries: &[String], current: D) -> Option<String> {
+        if entries.is_empty() {
+            return None;
+        }
+        let index = match self.position {
+            None => {
+                self.draft = Some(current);
+                entries.len() - 1
+            }
+            Some(index) => index.saturating_sub(1),
+        };
+        self.position = Some(index);
+        Some(entries[index].clone())
+    }
+
+    /// Moving past the newest entry returns the saved draft exactly once.
+    pub fn next(&mut self, entries: &[String]) -> Option<HistorySelection<D>> {
+        let index = self.position? + 1;
+        if index < entries.len() {
+            self.position = Some(index);
+            Some(HistorySelection::Entry(entries[index].clone()))
+        } else {
+            self.position = None;
+            self.draft.take().map(HistorySelection::Draft)
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.position = None;
+        self.draft = None;
+    }
+}
+
 /// Deterministic editor with optional history navigation. Down past the newest
 /// entry restores the original draft, including its cursor. Recalled edits are
 /// temporary and never mutate history. Submission records a history entry.
@@ -231,8 +290,7 @@ impl History {
 #[derive(Debug, Default)]
 pub struct Reader {
     pub buffer: LineBuffer,
-    position: Option<usize>,
-    draft: Option<LineBuffer>,
+    navigation: HistoryNavigation<LineBuffer>,
 }
 impl Reader {
     pub fn new() -> Self {
@@ -241,29 +299,24 @@ impl Reader {
     pub fn handle_key(&mut self, key: KeyEvent, history: &mut History) -> Outcome {
         if key.kind != KeyEventKind::Release && key.modifiers.is_empty() {
             match key.code {
-                KeyCode::Up if !history.entries.is_empty() => {
-                    let i = match self.position {
-                        None => {
-                            self.draft = Some(self.buffer.clone());
-                            history.entries.len() - 1
-                        }
-                        Some(i) => i.saturating_sub(1),
-                    };
-                    self.position = Some(i);
-                    let text = history.entries[i].clone();
-                    self.buffer = LineBuffer::from_parts(text.clone(), text.len());
+                KeyCode::Up => {
+                    if let Some(text) = self
+                        .navigation
+                        .previous(&history.entries, self.buffer.clone())
+                    {
+                        let cursor = text.len();
+                        self.buffer = LineBuffer::from_parts(text, cursor);
+                    }
                     return Outcome::Continue;
                 }
                 KeyCode::Down => {
-                    if let Some(i) = self.position {
-                        if i + 1 < history.entries.len() {
-                            self.position = Some(i + 1);
-                            let text = history.entries[i + 1].clone();
-                            self.buffer = LineBuffer::from_parts(text.clone(), text.len());
-                        } else {
-                            self.position = None;
-                            self.buffer = self.draft.take().unwrap_or_default();
+                    match self.navigation.next(&history.entries) {
+                        Some(HistorySelection::Entry(text)) => {
+                            let cursor = text.len();
+                            self.buffer = LineBuffer::from_parts(text, cursor);
                         }
+                        Some(HistorySelection::Draft(draft)) => self.buffer = draft,
+                        None => {}
                     }
                     return Outcome::Continue;
                 }
@@ -276,8 +329,7 @@ impl Reader {
         }
         if outcome != Outcome::Continue {
             self.buffer.clear();
-            self.position = None;
-            self.draft = None;
+            self.navigation.reset();
         }
         outcome
     }
