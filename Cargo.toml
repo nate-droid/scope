@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/scope-ide", "crates/scope-language", "crates/scope-types", "crates/scope-meta", "crates/scope-execution", "crates/xtask", "crates/scope-script"]
+members = ["crates/scope-ide", "crates/scope-language", "crates/scope-types", "crates/scope-meta", "crates/scope-execution", "crates/xtask", "crates/scope-script", "crates/scope-terminal"]
 
 
 [workspace.dependencies]

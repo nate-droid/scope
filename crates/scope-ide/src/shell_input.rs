@@ -170,18 +170,11 @@ impl Input {
         self.status = None;
     }
 
-    fn left(&self) -> usize {
-        self.line[..self.cursor]
-            .char_indices()
-            .next_back()
-            .map_or(0, |(index, _)| index)
-    }
-
-    fn right(&self) -> usize {
-        self.line[self.cursor..]
-            .chars()
-            .next()
-            .map_or(self.cursor, |ch| self.cursor + ch.len_utf8())
+    fn edit_buffer(&mut self, edit: impl FnOnce(&mut scope_terminal::LineBuffer)) {
+        let mut buffer =
+            scope_terminal::LineBuffer::from_parts(std::mem::take(&mut self.line), self.cursor);
+        edit(&mut buffer);
+        (self.line, self.cursor) = buffer.into_parts();
     }
 
     fn insert(&mut self, text: &str) {
@@ -299,10 +292,7 @@ impl Input {
                     history.reset_navigation();
                     return Action::Eof;
                 }
-                KeyCode::Char('d') => {
-                    let end = self.right();
-                    self.line.drain(self.cursor..end);
-                }
+                KeyCode::Char('d') => self.edit_buffer(scope_terminal::LineBuffer::delete),
                 KeyCode::Char('a') => self.cursor = 0,
                 KeyCode::Char('e') => self.cursor = self.line.len(),
                 KeyCode::Char('k') => {
@@ -323,7 +313,7 @@ impl Input {
                             .unwrap()
                             .is_whitespace()
                     {
-                        self.cursor = self.left();
+                        self.edit_buffer(scope_terminal::LineBuffer::left);
                     }
                     while self.cursor > 0
                         && !self.line[..self.cursor]
@@ -332,7 +322,7 @@ impl Input {
                             .unwrap()
                             .is_whitespace()
                     {
-                        self.cursor = self.left();
+                        self.edit_buffer(scope_terminal::LineBuffer::left);
                     }
                     self.line.drain(self.cursor..end);
                 }
@@ -348,19 +338,12 @@ impl Input {
         }
         match key.code {
             KeyCode::Enter => return self.submit(history, false, inspect),
-            KeyCode::Left => self.cursor = self.left(),
-            KeyCode::Right => self.cursor = self.right(),
+            KeyCode::Left => self.edit_buffer(scope_terminal::LineBuffer::left),
+            KeyCode::Right => self.edit_buffer(scope_terminal::LineBuffer::right),
             KeyCode::Home => self.cursor = self.line_start(),
             KeyCode::End => self.cursor = self.line_end(),
-            KeyCode::Backspace => {
-                let start = self.left();
-                self.line.drain(start..self.cursor);
-                self.cursor = start;
-            }
-            KeyCode::Delete => {
-                let end = self.right();
-                self.line.drain(self.cursor..end);
-            }
+            KeyCode::Backspace => self.edit_buffer(scope_terminal::LineBuffer::backspace),
+            KeyCode::Delete => self.edit_buffer(scope_terminal::LineBuffer::delete),
             KeyCode::Up => {
                 if !self.vertical(true)
                     && let Some(line) = history.previous(&self.line)
@@ -670,7 +653,7 @@ pub(crate) fn read_line(
                 }
             }
             Event::Paste(text) => {
-                input.insert(&text);
+                input.insert(&scope_terminal::sanitize_paste(&text));
                 viewport.render(&input, &prompt, output)?;
             }
             Event::Resize(_, _) => viewport.render(&input, &prompt, output)?,

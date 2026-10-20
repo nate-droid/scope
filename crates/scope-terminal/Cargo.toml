@@ -1,0 +1,12 @@
+[package]
+name = "scope-terminal"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Minimal single-line terminal input and reusable UTF-8 editing"
+
+[dependencies]
+crossterm = "0.28"
+
+[lib]
+path = "lib.rs"

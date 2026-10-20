@@ -1829,6 +1829,7 @@ dependencies = [
  "ratatui",
  "scope-language",
  "scope-meta",
+ "scope-terminal",
  "serde",
  "serde_json",
 ]
@@ -1858,6 +1859,13 @@ dependencies = [
  "scope-language",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "scope-terminal"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
 ]
 
 [[package]]
