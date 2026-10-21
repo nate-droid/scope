@@ -24,7 +24,7 @@ The example needs no API key or network service. `agent` enables the existing de
 Regenerate the transcript with:
 
 ```sh
-cargo run -p scope-ide --features agent --example focused_agent_discovery --offline > docs/design/FOCUSED_AGENT_DISCOVERY_TRANSCRIPT.json
+cargo run -p scope-ide --features agent --example focused_agent_discovery --offline > docs/archive/FOCUSED_AGENT_DISCOVERY_TRANSCRIPT.json
 ```
 
 The transcript records each complete `DecisionModel::decide` message array, including repeated conversation history. Message `content` fields remain strings exactly as received; nested request and feedback JSON can be parsed separately. Capture is intentionally fixture-only: real sources and feedback may contain sensitive information.

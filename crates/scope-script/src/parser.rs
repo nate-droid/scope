@@ -12,6 +12,7 @@ enum Token {
     Symbol(char),
     Op(String),
     End,
+    Newline,
     Eof,
 }
 #[derive(Debug)]
@@ -32,10 +33,17 @@ pub(crate) enum Kind {
     Field(Box<Expr>, String),
     Call(String, Vec<Expr>),
 }
-pub(crate) struct Statement {
-    pub binding: Option<String>,
-    pub expr: Expr,
-    pub offset: usize,
+pub(crate) enum Statement {
+    Expression {
+        binding: Option<String>,
+        expr: Expr,
+        offset: usize,
+    },
+    If {
+        condition: Expr,
+        yes: Vec<Statement>,
+        no: Vec<Statement>,
+    },
 }
 fn syntax(offset: usize, message: impl Into<String>) -> Error {
     Error {
@@ -54,8 +62,8 @@ pub(crate) fn parse(source: &str) -> Result<Vec<Statement>, Error> {
     while let Some((offset, c)) = chars.next() {
         let token = match c {
             ' ' | '\t' | '\r' => continue,
-            '\n' if nesting != 0 => continue,
-            '\n' | ';' => Token::End,
+            '\n' => Token::Newline,
+            ';' => Token::End,
             'a'..='z' | 'A'..='Z' | '_' => {
                 let mut name = String::from(c);
                 while chars
@@ -138,33 +146,65 @@ pub(crate) fn parse(source: &str) -> Result<Vec<Statement>, Error> {
         pos: 0,
         recursion: 0,
     };
-    let mut statements = Vec::new();
-    while parser.token() != &Token::Eof {
-        if parser.eat(&Token::End) {
-            continue;
-        }
-        let offset = parser.offset();
-        let binding = if parser.eat(&Token::Name("let".into())) {
-            let name = parser.name()?;
-            if crate::reserved(&name) {
-                return Err(syntax(offset, "reserved binding name"));
-            }
-            parser.expect(Token::Op("=".into()))?;
-            Some(name)
-        } else {
-            None
-        };
-        let expr = parser.expr(0)?;
-        statements.push(Statement {
-            binding,
-            expr,
-            offset,
-        });
-        if parser.token() != &Token::Eof {
-            parser.expect(Token::End)?;
-        }
+    parser.statements(false, 0)
+}
+impl Parser {
+    fn separators(&mut self) {
+        while self.eat(&Token::End) || self.eat(&Token::Newline) {}
     }
-    Ok(statements)
+    fn statements(&mut self, block: bool, depth: usize) -> Result<Vec<Statement>, Error> {
+        if depth > MAX_DEPTH {
+            return Err(syntax(self.offset(), "statement nesting limit exceeded"));
+        }
+        let parser = self;
+        let mut statements = Vec::new();
+        parser.separators();
+        while parser.token() != &Token::Eof && !(block && parser.token() == &Token::Symbol('}')) {
+            if parser.eat(&Token::Name("if".into())) {
+                let condition = parser.expr(0)?;
+                parser.expect(Token::Symbol('{'))?;
+                let yes = parser.statements(true, depth + 1)?;
+                parser.expect(Token::Symbol('}'))?;
+                let saved = parser.pos;
+                while parser.eat(&Token::Newline) {}
+                let no = if parser.eat(&Token::Name("else".into())) {
+                    parser.expect(Token::Symbol('{'))?;
+                    let body = parser.statements(true, depth + 1)?;
+                    parser.expect(Token::Symbol('}'))?;
+                    body
+                } else {
+                    parser.pos = saved;
+                    Vec::new()
+                };
+                statements.push(Statement::If { condition, yes, no });
+            } else {
+                let offset = parser.offset();
+                let binding = if parser.eat(&Token::Name("let".into())) {
+                    let name = parser.name()?;
+                    if crate::reserved(&name) {
+                        return Err(syntax(offset, "reserved binding name"));
+                    }
+                    parser.expect(Token::Op("=".into()))?;
+                    Some(name)
+                } else {
+                    None
+                };
+                let expr = parser.expr(0)?;
+                statements.push(Statement::Expression {
+                    binding,
+                    expr,
+                    offset,
+                });
+            }
+            if parser.token() != &Token::Eof && !(block && parser.token() == &Token::Symbol('}')) {
+                if !parser.eat(&Token::Newline) {
+                    parser.expect(Token::End)?;
+                }
+            }
+            parser.separators();
+        }
+        Ok(statements)
+    }
 }
 struct Parser {
     tokens: Vec<(usize, Token)>,
@@ -224,6 +264,11 @@ impl Parser {
     fn expression(&mut self, min: u8) -> Result<Expr, Error> {
         let offset = self.offset();
         let token = self.token().clone();
+        // Expressions cannot contain statements. Preserve multiline literal/call
+        // syntax by removing only newlines within expression delimiters.
+        if matches!(token, Token::Symbol('(' | '[' | '{')) {
+            self.group_newlines();
+        }
         self.pos += 1;
         let mut left = match token {
             Token::Int(n) => self.node(
@@ -301,7 +346,9 @@ impl Parser {
             if self.eat(&Token::Symbol('.')) {
                 let name = self.name()?;
                 left = self.node(offset, left.depth + 1, Kind::Field(Box::new(left), name))?;
-            } else if self.eat(&Token::Symbol('[')) {
+            } else if self.token() == &Token::Symbol('[') {
+                self.group_newlines();
+                self.pos += 1;
                 let index = self.expr(0)?;
                 self.expect(Token::Symbol(']'))?;
                 left = self.node(
@@ -309,7 +356,9 @@ impl Parser {
                     left.depth.max(index.depth) + 1,
                     Kind::Index(Box::new(left), Box::new(index)),
                 )?;
-            } else if self.eat(&Token::Symbol('(')) {
+            } else if self.token() == &Token::Symbol('(') {
+                self.group_newlines();
+                self.pos += 1;
                 let name = match &left.kind {
                     Kind::Name(n) if n == "print" => n.clone(),
                     Kind::Field(base, n)
@@ -356,6 +405,29 @@ impl Parser {
             }
         }
         Ok(left)
+    }
+    fn group_newlines(&mut self) {
+        let mut depth = 0usize;
+        let mut end = self.pos;
+        for (_, token) in &self.tokens[self.pos..] {
+            match token {
+                Token::Symbol('(' | '[' | '{') => depth += 1,
+                Token::Symbol(')' | ']' | '}') => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            end += 1;
+        }
+        let mut index = 0;
+        self.tokens.retain(|(_, token)| {
+            let keep = index < self.pos || index >= end || *token != Token::Newline;
+            index += 1;
+            keep
+        });
     }
     fn arguments(&mut self, end: char) -> Result<Vec<Expr>, Error> {
         let mut args = Vec::new();

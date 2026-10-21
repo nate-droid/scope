@@ -74,10 +74,19 @@ pub struct SemanticToolProvider<'a, T: SourceTarget, P> {
     policy: P,
     operations: Vec<SemanticOperationDescription>,
     tools: Vec<ToolDefinition>,
+    native_result: Option<SemanticOperationResult>,
 }
 impl<'a, T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool>
     SemanticToolProvider<'a, T, P>
 {
+    /// Validated read/blocked observation from the most recent invocation, after
+    /// the post-execution freshness and result identity checks. Retains full JSON
+    /// even when the agent protocol cannot represent it. Never exposes proposals
+    /// or invalid results; cleared before every invocation, including failed calls.
+    pub fn native_result(&self) -> Option<&SemanticOperationResult> {
+        self.native_result.as_ref()
+    }
+
     pub fn new(
         service: &'a dyn LanguageService,
         target: &'a T,
@@ -146,6 +155,7 @@ impl<'a, T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool>
             policy,
             operations,
             tools,
+            native_result: None,
         })
     }
 }
@@ -195,6 +205,7 @@ impl<T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool> ToolP
         )
     }
     fn invoke(&mut self, call: ToolCall) -> Result<ToolResult, ToolError> {
+        self.native_result = None;
         let operation_id = self
             .tools
             .iter()
@@ -276,47 +287,61 @@ impl<T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool>
         }) {
             return Ok(outcome("unauthorized", "host policy denied operation"));
         }
-        if let Some(selection) = self.selection {
-            if let Err(error) = crate::text::TextBuffer::new(source.text).span_for_range(selection)
-            {
-                return Ok(outcome("invalid_arguments", &error.to_string()));
-            }
+        if let Some(selection) = self.selection
+            && let Err(error) = crate::text::TextBuffer::new(source.text).span_for_range(selection)
+        {
+            return Ok(outcome("invalid_arguments", &error.to_string()));
         }
         let result = execute_semantic_operation(
             self.service,
             SemanticOperationRequest {
                 operation_id: &operation.id,
-                document: LanguageDocument::new(LanguagePath::new(""), source.text, source.version),
+                document: LanguageDocument::new(
+                    self.target
+                        .language_path()
+                        .unwrap_or_else(|| LanguagePath::new("")),
+                    source.text,
+                    source.version,
+                ),
                 selection: self.selection,
                 arguments: arguments.clone(),
             },
         );
         let live = self.target.snapshot();
-        if live.id != source.id || live.version != version || live.text != original {
+        if live.id != source.id
+            || live.version != version
+            || live.text != original
+            || live.language != source.language
+        {
             return Ok(outcome(
                 "revision_conflict",
                 "target changed during operation",
             ));
         }
+        let native_result = result.as_ref().ok().cloned();
         Ok(match result {
             Err(error) => language_error(error),
-            Ok(SemanticOperationResult::ReadOnly { value, rationale }) => match from_json(value) {
-                Some(value) => ToolResult::new(ToolValue::object([
-                    ("status", "read_only".into()),
-                    ("operation_id", operation.id.clone().into()),
-                    ("value", value),
-                    ("rationale", rationale.into()),
-                ])),
-                None => outcome(
-                    "internal_failure",
-                    "result not representable by agent tool protocol",
-                ),
-            },
+            Ok(SemanticOperationResult::ReadOnly { value, rationale }) => {
+                self.native_result = native_result;
+                match from_json(value) {
+                    Some(value) => ToolResult::new(ToolValue::object([
+                        ("status", "read_only".into()),
+                        ("operation_id", operation.id.clone().into()),
+                        ("value", value),
+                        ("rationale", rationale.into()),
+                    ])),
+                    None => outcome(
+                        "internal_failure",
+                        "result not representable by agent tool protocol",
+                    ),
+                }
+            }
             Ok(SemanticOperationResult::ReadOnlyEvaluation {
                 value,
                 rationale,
                 evaluation,
             }) => {
+                self.native_result = native_result;
                 let checks: Vec<_> = evaluation
                     .checks
                     .into_iter()
@@ -359,6 +384,7 @@ impl<T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool>
                         "evaluation contract identity mismatch",
                     ));
                 }
+                self.native_result = native_result;
                 match from_json(json!({
                     "status": "read_only",
                     "operation_id": operation.id,
@@ -380,6 +406,7 @@ impl<T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool>
                         "blocker operation identity mismatch",
                     ));
                 }
+                self.native_result = native_result;
                 let category = match blocker.category {
                     scope_language::BlockerCategory::MissingDependency => {
                         "MissingDependency".into()
@@ -1554,6 +1581,96 @@ mod tests {
                 usize::from(denied_call == 3)
             );
         }
+    }
+
+    #[test]
+    fn native_observation_is_lossless_and_cleared_before_failed_calls() {
+        let service = LegacyService(SemanticOperationResult::ReadOnly {
+            value: json!({"float": 1.25, "large": u64::MAX}),
+            rationale: "native".into(),
+        });
+        let target = Target;
+        assert!(target.language_path().is_none());
+        let mut controller = SourceEditController::default();
+        let mut allowed = true;
+        let mut provider = SemanticToolProvider::new(
+            &service,
+            &target,
+            &mut controller,
+            PermittedEditScope::Document(target.source_id()),
+            None,
+            |_| {
+                let grant = allowed;
+                allowed = false;
+                grant
+            },
+        )
+        .unwrap();
+        let call = || {
+            ToolCall::new("language.fixture.rename")
+                .with_argument("expected_version", "7".into())
+                .with_argument("expected_source", ORIGINAL.into())
+                .with_argument("arguments", ToolValue::Object(Default::default()))
+        };
+        assert!(provider.native_result().is_none());
+        provider.invoke(call()).unwrap();
+        assert_eq!(provider.native_result(), Some(&service.0));
+        let denied = provider.invoke(call()).unwrap();
+        assert_eq!(to_json(denied.value)["status"], "unauthorized");
+        assert!(provider.native_result().is_none());
+        assert!(provider.invoke(ToolCall::new("unknown")).is_err());
+        assert!(provider.native_result().is_none());
+    }
+
+    #[test]
+    fn native_observation_requires_post_execution_freshness() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        struct ChangingTarget(AtomicU64);
+        impl SourceTarget for ChangingTarget {
+            fn source_id(&self) -> SourceId {
+                Target.source_id()
+            }
+            fn text(&self) -> &str {
+                ORIGINAL
+            }
+            fn version(&self) -> u64 {
+                self.0.load(Ordering::SeqCst)
+            }
+            fn language_id(&self) -> &str {
+                "fixture"
+            }
+            fn apply_source_edit(&mut self, _: TextEdit) -> Result<(), ProposalError> {
+                panic!("no mutation")
+            }
+        }
+        let service = LegacyService(SemanticOperationResult::ReadOnly {
+            value: json!({"float": 1.25}),
+            rationale: "stale".into(),
+        });
+        let target = ChangingTarget(AtomicU64::new(7));
+        let mut controller = SourceEditController::default();
+        let mut provider = SemanticToolProvider::new(
+            &service,
+            &target,
+            &mut controller,
+            PermittedEditScope::Document(target.source_id()),
+            None,
+            |_| {
+                target.0.store(8, Ordering::SeqCst);
+                true
+            },
+        )
+        .unwrap();
+        let result = provider
+            .invoke(
+                ToolCall::new("language.fixture.rename")
+                    .with_argument("expected_version", "7".into())
+                    .with_argument("expected_source", ORIGINAL.into())
+                    .with_argument("arguments", ToolValue::Object(Default::default())),
+            )
+            .unwrap();
+        assert_eq!(to_json(result.value)["status"], "revision_conflict");
+        assert!(provider.native_result().is_none());
     }
 
     #[test]

@@ -32,6 +32,11 @@ impl InteractiveSession {
         self.session.as_ref().map(|session| session.language_id())
     }
 
+    /// Whether evaluation is blocked until the session is reset or replaced.
+    pub fn reset_required(&self) -> bool {
+        self.reset_required
+    }
+
     /// Creates and validates a replacement before touching the active session.
     /// If closing the old session fails, it remains selected but may be partially
     /// closed: evaluation requires a successful reset, recreation, or clear.

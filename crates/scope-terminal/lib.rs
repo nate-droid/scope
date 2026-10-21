@@ -16,6 +16,9 @@ use crossterm::{
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::ops::Range;
 
+mod document;
+pub use document::{DocumentEditor, document_editing_available, edit_document};
+
 /// A caller-discovered completion. All offsets are half-open UTF-8 byte offsets
 /// into the supplied input. Ranges must be ordered and on scalar boundaries.
 /// Insertion text must be single-line, without controls or terminal sequences.

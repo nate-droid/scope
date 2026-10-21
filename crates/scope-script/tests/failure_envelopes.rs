@@ -15,6 +15,15 @@ const ACTION: &str = "language.example.declarations.describe_selection";
 
 #[test]
 fn e5_scripts_preserve_complete_outcomes_and_failure_boundaries() {
+    check_envelopes(false);
+}
+
+#[test]
+fn presentation_preserves_real_nested_semantic_envelopes_and_failure_distinctions() {
+    check_envelopes(true);
+}
+
+fn check_envelopes(check_presentation: bool) {
     for case in [
         "success",
         "stale",
@@ -109,6 +118,53 @@ fn e5_scripts_preserve_complete_outcomes_and_failure_boundaries() {
                     assert_eq!(output.len(), 2);
                     assert_eq!(output[1], report);
                     let outcome = interpreter.eval("outcome", &mut host).unwrap();
+                    if check_presentation {
+                        use scope_script::presentation::{
+                            FormatOptions, format_value, format_value_with, value_json,
+                        };
+
+                        let before = report.clone();
+                        let json = value_json(&report);
+                        let full = FormatOptions {
+                            max_depth: usize::MAX,
+                            max_collection_items: usize::MAX,
+                            max_string_chars: usize::MAX,
+                            max_nodes: usize::MAX,
+                        };
+                        assert_eq!(
+                            serde_json::from_str::<serde_json::Value>(&format_value_with(
+                                &report, &full,
+                            ))
+                            .unwrap(),
+                            json,
+                            "{case}"
+                        );
+                        assert_eq!(json["outcome"], value_json(&outcome), "{case}");
+                        let bounded = format_value_with(
+                            &report,
+                            &FormatOptions {
+                                max_depth: 1,
+                                ..full
+                            },
+                        );
+                        assert!(bounded.contains("<depth truncated>"), "{case}: {bounded}");
+                        let _ = format_value(&report);
+                        assert_eq!(report, before, "{case}");
+                        assert_eq!(value_json(&report), json, "{case}");
+                        assert_eq!(interpreter.eval("outcome", &mut host).unwrap(), outcome);
+                        assert_eq!(interpreter.take_output(), Vec::<Value>::new());
+
+                        if case != "success" {
+                            assert_eq!(json["outcome"].get("value"), None, "{case}");
+                            assert_eq!(value_json(&Value::Null), serde_json::Value::Null);
+                            assert_eq!(format_value(&Value::Null), "null");
+                            assert_eq!(interpreter.eval("null", &mut host).unwrap(), Value::Null);
+                            let error = interpreter.eval("outcome.value", &mut host).unwrap_err();
+                            assert!(matches!(error.kind, ErrorKind::Runtime(ref message)
+                                if message == "missing object field"));
+                            assert_eq!(value_json(&report), json, "{case}");
+                        }
+                    }
                     assert_eq!(
                         report,
                         Value::object([

@@ -162,6 +162,118 @@ fn recovery_after_successful_write_never_replays_the_write() {
     assert!(feedback.contains("incomplete_response"));
 }
 
+// Q1 experiment only: the production system prompt and parser stay unchanged.
+const Q1_CLARIFICATION: &str = "Return exactly one JSON decision per response. Do not return multiple JSON objects, arrays of decisions, or a sequence of actions. If you need to inspect a resource before another action, return only the tool decision for that inspection now. You will receive its tool_result before deciding what to do next. Use the existing tool or complete schema.";
+
+struct Q1Model {
+    inner: FakeModel,
+    clarified: bool,
+}
+impl DecisionModel for Q1Model {
+    fn decide(&mut self, messages: &[Message], max_tokens: u32) -> Result<String, String> {
+        let mut delivered = messages.to_vec();
+        if self.clarified {
+            assert_eq!(delivered[0].role, "system");
+            delivered[0].content.push('\n');
+            delivered[0].content.push_str(Q1_CLARIFICATION);
+        }
+        self.inner.decide(&delivered, max_tokens)
+    }
+}
+
+#[test]
+fn q1_single_decision_control_and_instruction_only_variant() {
+    for clarified in [false, true] {
+        let (mut session, calls) = session();
+        let mut model = Q1Model {
+            inner: FakeModel::new(&[ECHO, COMPLETE]),
+            clarified,
+        };
+        let run = run_session(
+            &mut model,
+            &mut session,
+            "inspect",
+            AgentLimits::default(),
+            read_only_policy,
+        )
+        .unwrap();
+        assert_eq!(
+            (run.stop, run.tool_calls, run.malformed),
+            (AgentStop::Completed, 1, 0)
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let expected = if clarified {
+            format!("{PROTOCOL}\n{Q1_CLARIFICATION}")
+        } else {
+            PROTOCOL.to_owned()
+        };
+        assert_eq!(model.inner.conversations[0][0].1, expected);
+        let feedback: Value =
+            serde_json::from_str(&model.inner.conversations[1].last().unwrap().1).unwrap();
+        assert_eq!(feedback["kind"], "tool_result");
+        assert_eq!(feedback["ok"], true);
+    }
+}
+
+#[test]
+fn q1_multi_decisions_never_reach_authorization_or_mutation() {
+    let write = r#"{"type":"tool","name":"write","arguments":{}}"#;
+    let responses = [
+        format!("{write}{ECHO}"),
+        format!("[{write},{ECHO}]"),
+        format!("```json\n{write}\n```\n```json\n{ECHO}\n```"),
+        format!(r#"{{"type":"tool","name":"write","arguments":{{}},"actions":[{ECHO}]}}"#),
+    ];
+    for clarified in [false, true] {
+        for response in &responses {
+            assert_eq!(
+                parse_decision(response).unwrap_err().category(),
+                "malformed_response"
+            );
+            for recover in [false, true] {
+                let (mut session, calls) = session();
+                let replies = if recover {
+                    vec![response.as_str(), COMPLETE]
+                } else {
+                    vec![response.as_str(); 3]
+                };
+                let mut model = Q1Model {
+                    inner: FakeModel::new(&replies),
+                    clarified,
+                };
+                let mut policy_calls = 0;
+                let run = run_session(
+                    &mut model,
+                    &mut session,
+                    "inspect",
+                    AgentLimits::default(),
+                    |_, _| {
+                        policy_calls += 1;
+                        true // Even authorized writes must never dispatch from malformed output.
+                    },
+                )
+                .unwrap();
+                assert_eq!(
+                    run.stop,
+                    if recover {
+                        AgentStop::Completed
+                    } else {
+                        AgentStop::MalformedBudget
+                    }
+                );
+                assert_eq!(run.malformed, if recover { 1 } else { 3 });
+                assert_eq!(run.tool_calls, 0);
+                assert_eq!(policy_calls, 0);
+                // This provider's sole invocation entry point includes all write effects.
+                assert_eq!(calls.load(Ordering::SeqCst), 0);
+                let feedback: Value =
+                    serde_json::from_str(&model.inner.conversations[1].last().unwrap().1).unwrap();
+                assert_eq!(feedback["category"], "malformed_response");
+            }
+        }
+    }
+}
+
 const COMPLETE: &str = r#"{"type":"complete","content":"done"}"#;
 const ECHO: &str = r#"{"type":"tool","name":"echo","arguments":{"path":"approved","nested":[null,true,-2,{"text":"héllo"}]}}"#;
 

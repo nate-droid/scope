@@ -46,12 +46,17 @@ class MarkdownLinksTests(unittest.TestCase):
                 ])
 
     def test_git_uses_nul_delimiters_and_excludes_target_directories(self):
-        with patch.object(checker.subprocess, 'run', return_value=subprocess.CompletedProcess(
-                [], 0, stdout=b'README.md\0docs/a b.md\0')) as run:
-            self.assertEqual(checker.tracked_markdown(Path('.')), [
-                Path('README.md'), Path('docs/a b.md')])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'docs').mkdir()
+            (root / 'README.md').touch()
+            (root / 'docs/a b.md').touch()
+            with patch.object(checker.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                    [], 0, stdout=b'README.md\0docs/a b.md\0deleted.md\0README.md\0')) as run:
+                self.assertEqual(checker.tracked_markdown(root), [
+                    Path('README.md'), Path('docs/a b.md')])
         self.assertEqual(run.call_args.args[0], [
-            'git', 'ls-files', '-z', '--', '*.md', '*.markdown',
+            'git', 'ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', '*.md', '*.markdown',
             ':!:target/**', ':!:**/target/**'])
         self.assertTrue(run.call_args.kwargs['check'])
 

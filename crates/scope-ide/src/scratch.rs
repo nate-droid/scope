@@ -278,10 +278,35 @@ fn checked_save(
 pub struct ScratchBuffers {
     buffers: Vec<ScratchBuffer>,
     selected: Option<u64>,
+    semantic_target: Option<u64>,
     next_id: u64,
 }
 
 impl ScratchBuffers {
+    /// Explicitly binds a live scratch for semantic inspection, independently of
+    /// editor selection. This grants no operation or mutation authority.
+    /// Closing the scratch retains the binding so resolution fails rather than
+    /// silently choosing another source. `None` explicitly clears the binding.
+    pub fn bind_semantic_target(&mut self, id: Option<u64>) -> Result<(), ScratchError> {
+        if let Some(id) = id {
+            self.get(id)?;
+        }
+        self.semantic_target = id;
+        Ok(())
+    }
+
+    /// Selected target identity, including an identity whose scratch has closed.
+    pub fn semantic_target_id(&self) -> Option<u64> {
+        self.semantic_target
+    }
+
+    /// Resolves current unsaved state without disk access or editor selection.
+    /// The immutable borrow pins the existing revision until invocation returns.
+    /// No binding is `Ok(None)`; a closed binding is `UnknownBuffer`, never absence.
+    pub fn semantic_target(&self) -> Result<Option<&ScratchBuffer>, ScratchError> {
+        self.semantic_target.map(|id| self.get(id)).transpose()
+    }
+
     /// Opens a clean workspace document, or selects its existing buffer without rereading.
     pub fn open(
         &mut self,
@@ -530,6 +555,37 @@ mod tests {
         let mut buffers = ScratchBuffers::default();
         buffers.create("mock", source);
         buffers
+    }
+
+    #[test]
+    fn independent_target_binding_is_explicit_and_closed_is_not_absent() {
+        let mut buffers = ScratchBuffers::default();
+        assert!(buffers.semantic_target().unwrap().is_none());
+        assert!(matches!(
+            buffers.bind_semantic_target(Some(99)),
+            Err(ScratchError::UnknownBuffer(99))
+        ));
+        assert_eq!(buffers.semantic_target_id(), None);
+        let target = buffers.create("mock", "unsaved");
+        buffers.bind_semantic_target(Some(target)).unwrap();
+        let script = buffers.create("scope-script", "1");
+        assert_eq!(buffers.selected().unwrap().id(), script);
+        assert_eq!(
+            buffers.semantic_target().unwrap().unwrap().text(),
+            "unsaved"
+        );
+        assert!(buffers.bind_semantic_target(Some(99)).is_err());
+        assert_eq!(buffers.semantic_target_id(), Some(target));
+        buffers.select(target).unwrap();
+        buffers.close_selected(true).unwrap();
+        assert_eq!(buffers.semantic_target_id(), Some(target));
+        assert!(
+            matches!(buffers.semantic_target(), Err(ScratchError::UnknownBuffer(id)) if id == target)
+        );
+        assert!(buffers.create("mock", "replacement") > script);
+        assert!(buffers.semantic_target().is_err());
+        buffers.bind_semantic_target(None).unwrap();
+        assert!(buffers.semantic_target().unwrap().is_none());
     }
 
     #[test]

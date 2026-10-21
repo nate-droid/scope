@@ -2,7 +2,18 @@ use std::io::{BufRead, IsTerminal, Write};
 
 #[cfg(all(test, feature = "agent"))]
 mod agent_inspection_tests;
+#[cfg(feature = "agent")]
+mod agent_semantics;
+#[cfg(feature = "agent")]
+pub use agent_semantics::{
+    TerminalSemanticConfig, run_terminal_agent_model,
+    run_terminal_agent_model_with_projected_arguments,
+};
 mod buffer_editor;
+mod context;
+use context::{print_app_target, print_buffer_target, print_source_context};
+#[cfg(feature = "tools")]
+mod inspection;
 mod source_proposals;
 
 use crate::history::{CommandHistory, HistoryStore};
@@ -37,6 +48,41 @@ pub fn run_from_args(
     args: impl IntoIterator<Item = String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     run_with_languages(args, [])
+}
+
+/// Runs standard CLI argument/workspace startup with an explicitly installed host callback.
+/// Shell scratch editing/completion and `:scope script run` share this callback.
+/// Non-shell commands retain their normal behavior and do not invoke it.
+pub fn run_from_args_with_command(
+    args: impl IntoIterator<Item = String>,
+    command: &mut dyn ReadOnlyCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_with_registry_and_command(args, LanguageRegistry::builtins(), command)
+}
+
+/// Runs standard CLI startup with an explicit language registry and host callback.
+/// Reuses argument parsing, workspace authority and terminal selection. Registration
+/// grants no additional filesystem, semantic, editing or source-application authority;
+/// callbacks must authorize concrete operations using their existing host policy.
+/// Non-shell commands retain their normal behavior and do not invoke the callback.
+pub fn run_with_registry_and_command(
+    args: impl IntoIterator<Item = String>,
+    registry: LanguageRegistry,
+    command: &mut dyn ReadOnlyCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match Args::parse(args)? {
+        ParseResult::Help => {
+            print_usage();
+            Ok(())
+        }
+        ParseResult::Run(args) => run_configured(
+            args,
+            registry,
+            #[cfg(feature = "agent")]
+            None,
+            Some(command),
+        ),
+    }
 }
 
 pub fn run_with_languages(
@@ -82,7 +128,7 @@ pub fn run_with_registry_and_editing(
             if !matches!(args.command, Command::Shell) {
                 return Err("interactive editing configuration requires the shell command".into());
             }
-            run_configured(args, registry, Some(editing))
+            run_configured(args, registry, Some(editing), None)
         }
     }
 }
@@ -93,6 +139,7 @@ fn run(args: Args, languages: LanguageRegistry) -> Result<(), Box<dyn std::error
         languages,
         #[cfg(feature = "agent")]
         None,
+        None,
     )
 }
 
@@ -100,8 +147,17 @@ fn run_configured(
     args: Args,
     languages: LanguageRegistry,
     #[cfg(feature = "agent")] editing: Option<InteractiveEditConfig>,
+    host_command: Option<&mut dyn ReadOnlyCommand>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let workspace = if matches!(&args.command, Command::Meta { .. }) {
+    let root = std::path::Path::new(&args.workspace_root);
+    if !root.is_dir() {
+        return Err(format!(
+            "workspace must be an existing directory: {}",
+            root.display()
+        )
+        .into());
+    }
+    let workspace = if !args.writable || matches!(&args.command, Command::Meta { .. }) {
         Workspace::read_only(args.workspace_root)?
     } else {
         Workspace::new(args.workspace_root)?
@@ -129,6 +185,14 @@ fn run_configured(
             print!("{}", file.contents);
         }
         Command::Shell => {
+            println!(
+                "Workspace access: {}",
+                if args.writable {
+                    "writable (explicit --writable)"
+                } else {
+                    "read-only (restart with --writable to enable saves)"
+                }
+            );
             let app = App::builder(workspace)
                 .language_registry(languages.clone())
                 .build()?;
@@ -143,6 +207,7 @@ fn run_configured(
                 interactive,
                 #[cfg(feature = "agent")]
                 editing,
+                host_command,
             )?;
         }
         #[cfg(feature = "agent")]
@@ -189,7 +254,25 @@ fn run_cli_agent_model(
     interactive: Option<&InteractiveSession>,
     request: &str,
 ) -> Result<crate::agent::AgentResponse, crate::agent::AgentError> {
-    use crate::agent::{AgentError, AgentLimits, AgentResponse, AgentStop};
+    run_terminal_agent_model(
+        app,
+        interactive,
+        model,
+        request,
+        crate::agent::AgentLimits::default(),
+        None,
+    )
+}
+
+#[cfg(feature = "agent")]
+fn run_default_terminal_agent_model(
+    model: &mut impl crate::agent::DecisionModel,
+    app: &mut App,
+    interactive: Option<&InteractiveSession>,
+    request: &str,
+    limits: crate::agent::AgentLimits,
+) -> Result<crate::agent::AgentResponse, crate::agent::AgentError> {
+    use crate::agent::{AgentError, AgentResponse, AgentStop};
     let request = format!(
         "User request:\n{request}\n\nActive Scope context:\n{}",
         crate::agent::AgentContext::from_app(app).render()
@@ -207,7 +290,7 @@ fn run_cli_agent_model(
         model,
         &mut tools,
         &request,
-        AgentLimits::default(),
+        limits,
         crate::agent::read_only_policy,
     )?;
     if run.stop != AgentStop::Completed {
@@ -298,6 +381,7 @@ fn run_shell_inner(
         interactive,
         #[cfg(feature = "agent")]
         None,
+        None,
     )
 }
 
@@ -306,6 +390,45 @@ fn run_shell_inner(
 /// concrete operation authorization and for the purity of their native code.
 /// Errors are displayed by the shell; they do not alter runtime lifecycle.
 pub trait ReadOnlyCommand {
+    /// Runs selected scratch source without an App document or active session.
+    /// The source borrow is invocation-local. Hosts must explicitly authorize
+    /// execution and remain responsible for all native effects.
+    fn invoke_script(
+        &mut self,
+        _source: &crate::scratch::ScratchBuffer,
+        _output: &mut dyn Write,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        Err("script execution is unsupported by this read-only host command".into())
+    }
+    /// Executes selected Script source with an independently host-bound scratch.
+    /// Both immutable borrows pin their revisions for this invocation. The target
+    /// is resolved from live memory, never disk; `None` means no binding. Failed
+    /// explicit resolution is reported before dispatch. No mutable source, App,
+    /// workspace, save, or apply interface is supplied. Native callbacks remain
+    /// trusted and must enforce concrete semantic operation authorization.
+    /// Existing callbacks retain their Script-only behavior by default.
+    fn invoke_script_with_target(
+        &mut self,
+        source: &crate::scratch::ScratchBuffer,
+        _target: Option<&crate::scratch::ScratchBuffer>,
+        output: &mut dyn Write,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.invoke_script(source, output)
+    }
+
+    /// Inspects the selected scratch's current editor draft without evaluation.
+    /// `cursor` and completion replacement ranges are UTF-8 byte offsets in `draft`,
+    /// not in the committed scratch text. Borrows are invocation-local; hosts are
+    /// responsible for keeping native inspection read-only. Defaults to no suggestions.
+    fn complete_source(
+        &self,
+        _source: &crate::scratch::ScratchBuffer,
+        _draft: &str,
+        _cursor: usize,
+    ) -> Vec<crate::language::CompletionItem> {
+        Vec::new()
+    }
+
     fn invoke(
         &mut self,
         document: &crate::document::Document,
@@ -313,10 +436,29 @@ pub trait ReadOnlyCommand {
         operation: &str,
         output: &mut dyn Write,
     ) -> Result<(), Box<dyn std::error::Error>>;
+
+    /// Runs an operation on selected scratch source with a separate App target.
+    /// The selection is a zero-based, half-open UTF-8 byte range in `document`,
+    /// not in the independently selected `source`. Both borrows are invocation-local and read-only.
+    /// Existing hosts deny source operations unless they explicitly opt in.
+    fn invoke_source(
+        &mut self,
+        _source: &crate::scratch::ScratchBuffer,
+        _document: &crate::document::Document,
+        _selection: TextRange,
+        _operation: &str,
+        _output: &mut dyn Write,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        Err("source operations are unsupported by this read-only host command".into())
+    }
 }
 
 /// Runs the owned shell with one explicitly installed read-only host callback.
 /// Invoke with `:scope host NAME --selection LINE:BYTE..LINE:BYTE` (zero-based).
+/// `:scope run NAME --selection LINE:BYTE..LINE:BYTE` instead supplies the selected
+/// scratch as source and the open App document as a separate target.
+/// `:scope script run` supplies the selected scratch and optional independently
+/// bound scratch (`:scope semantic-target ID`, `none` to clear), without a session.
 /// All source borrows end before the next shell submission. A host may construct
 /// a command-local `DocumentSource` using its registered language service.
 pub fn run_with_session_and_command(
@@ -336,6 +478,37 @@ pub fn run_with_session_and_command(
         input,
         output,
         false,
+        #[cfg(feature = "agent")]
+        None,
+        Some(command),
+    )
+}
+
+/// Runs the terminal shell with the supplied session and read-only host command.
+/// Unlike `run_with_session_and_command`, this explicitly uses ambient terminal
+/// stdin/stdout, raw-mode shell input, and persistent history configuration.
+/// The selected scratch editor remains transactional and cooked-mode; its
+/// `:complete [INDEX]` command uses the host's source completion hook, not the
+/// active session's runtime. No session or provider is installed implicitly.
+pub fn run_terminal_with_session_and_command(
+    app: App,
+    session: InteractiveSession,
+    command: &mut dyn ReadOnlyCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::{self, IsTerminal};
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return Err("terminal shell requires terminal stdin and stdout".into());
+    }
+    run_shell_owned(
+        app,
+        session,
+        #[cfg(feature = "agent")]
+        AgentConfig::local(DEFAULT_AGENT_MODEL, DEFAULT_AGENT_BASE_URL),
+        #[cfg(not(feature = "agent"))]
+        AgentConfig,
+        io::stdin().lock(),
+        io::stdout(),
+        true,
         #[cfg(feature = "agent")]
         None,
         Some(command),
@@ -379,6 +552,7 @@ fn run_shell_configured(
     output: impl Write,
     interactive: bool,
     #[cfg(feature = "agent")] editing: Option<InteractiveEditConfig>,
+    host_command: Option<&mut dyn ReadOnlyCommand>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     run_shell_owned(
         app,
@@ -389,10 +563,14 @@ fn run_shell_configured(
         interactive,
         #[cfg(feature = "agent")]
         editing,
-        None,
+        host_command,
     )
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Shell orchestration accepts independent host state, I/O, and optional feature configuration"
+)]
 fn run_shell_owned(
     mut app: App,
     mut session: InteractiveSession,
@@ -425,9 +603,26 @@ fn run_shell_owned(
         store.load(&mut history);
     }
     writeln!(output, "Scope — {}", app.workspace().root())?;
-    writeln!(output, "Type `help` for commands.")?;
+    writeln!(
+        output,
+        "Type `help` for commands, `quit` to exit. Workspace files change only on explicit commands."
+    )?;
+    writeln!(
+        output,
+        "Discover: :scope languages | :scope session | :scope context | :scope inspect"
+    )?;
+    writeln!(
+        output,
+        "Scratch edits: :scope scratch new <language-id>, then :scope edit (in memory; not evaluation)."
+    )?;
+    writeln!(
+        output,
+        "Script: :scope script run evaluates the selected scratch (default workbench); standalone: cargo run -p scope-script -- --help"
+    )?;
     let mut proposal: Option<crate::workspace::Proposal> = None;
     let mut scratches = ScratchBuffers::default();
+    #[cfg(feature = "tools")]
+    let mut inspections = inspection::Inspections::default();
     #[cfg(feature = "agent")]
     let mut source_proposals = source_proposals::Proposals::configured(editing)?;
     #[cfg(not(feature = "agent"))]
@@ -442,6 +637,8 @@ fn run_shell_owned(
     let mut last_submission: Option<(String, String)> = None;
 
     loop {
+        #[cfg(feature = "tools")]
+        inspections.observe(&app);
         write!(output, "{}> ", session.language_id().unwrap_or("scope"))?;
         output.flush()?;
 
@@ -493,13 +690,40 @@ fn run_shell_owned(
         if line == ":scope" || line.starts_with(":scope ") {
             let mut parts = command.split_whitespace();
             match parts.next() {
-                Some("edit") if parts.next().is_none() => {
+                Some("line") => {
+                    if let Err(error) = replace_scratch_line(
+                        command.trim_start().strip_prefix("line").unwrap(),
+                        &mut scratches,
+                    ) {
+                        writeln!(output, "error: {error}")?;
+                    } else {
+                        writeln!(output, "scratch line replaced (no save or evaluation)")?;
+                    }
+                    continue;
+                }
+                Some("edit") if matches!(command.trim(), "edit" | "edit --commands") => {
+                    if command.trim() == "edit" && scope_terminal::document_editing_available() {
+                        if let Err(error) = buffer_editor::run_keyboard(&mut scratches, &mut output)
+                        {
+                            writeln!(output, "error: {error}")?;
+                        }
+                        writeln!(output, "Returned to REPL (no save or evaluation).")?;
+                        continue;
+                    }
                     writeln!(
                         output,
                         "Editing draft; :help for commands, :done to keep, :cancel to cancel. Nothing is executed or saved."
                     )?;
-                    if let Err(error) = buffer_editor::run(&mut scratches, &mut input, &mut output)
-                    {
+                    if let Err(error) = buffer_editor::run_with_completion(
+                        &mut scratches,
+                        &mut input,
+                        &mut output,
+                        &|source, draft, cursor| {
+                            host_command.as_deref().map_or_else(Vec::new, |host| {
+                                host.complete_source(source, draft, cursor)
+                            })
+                        },
+                    ) {
                         writeln!(output, "error: {error}")?;
                     }
                     writeln!(output, "Returned to REPL (no save or evaluation).")?;
@@ -525,7 +749,7 @@ fn run_shell_owned(
                         if !arguments.trim().is_empty() {
                             writeln!(
                                 output,
-                                "error: show requires no arguments; use :scope edit then :show START to page"
+                                "error: show requires no arguments; use :scope edit --commands then :show START to page"
                             )?;
                         } else if let Err(error) = print_buffer(&scratches, &mut output) {
                             writeln!(output, "error: {error}")?;
@@ -549,6 +773,35 @@ fn run_shell_owned(
                         app.languages(),
                         &mut output,
                     ) {
+                        writeln!(output, "error: {error}")?;
+                    }
+                    continue;
+                }
+                Some("semantic-target") => {
+                    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+                        let argument = parts.next();
+                        if parts.next().is_some() {
+                            return Err("usage: :scope semantic-target [ID|none]".into());
+                        }
+                        if let Some(argument) = argument {
+                            let id = if argument == "none" {
+                                None
+                            } else {
+                                Some(
+                                    argument
+                                        .parse::<u64>()
+                                        .map_err(|_| "usage: :scope semantic-target [ID|none]")?,
+                                )
+                            };
+                            scratches.bind_semantic_target(id)?;
+                        }
+                        match scratches.semantic_target_id() {
+                            Some(id) => writeln!(output, "Semantic target: scratch {id}")?,
+                            None => writeln!(output, "Semantic target: none")?,
+                        }
+                        Ok(())
+                    })();
+                    if let Err(error) = result {
                         writeln!(output, "error: {error}")?;
                     }
                     continue;
@@ -623,6 +876,24 @@ fn run_shell_owned(
             }
         }
         match ShellCommand::parse(command) {
+            Ok(
+                command @ (ShellCommand::Inspect
+                | ShellCommand::InspectOperation(_)
+                | ShellCommand::InspectConfirm(_)
+                | ShellCommand::InspectCancel
+                | ShellCommand::InspectResult { .. }),
+            ) => {
+                #[cfg(feature = "tools")]
+                inspections.run(command, &mut app, &scratches, &mut output)?;
+                #[cfg(not(feature = "tools"))]
+                {
+                    let _ = command;
+                    writeln!(
+                        output,
+                        "error: semantic inspection requires feature `tools` (enabled by default)"
+                    )?;
+                }
+            }
             Ok(ShellCommand::Host {
                 operation,
                 selection,
@@ -642,11 +913,50 @@ fn run_shell_owned(
                     writeln!(output, "error: {error}")?;
                 }
             }
+            Ok(ShellCommand::ScriptRun) => {
+                let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+                    if !line.starts_with(":scope ") {
+                        return Err("script command requires explicit :scope namespace".into());
+                    }
+                    let callback = host_command
+                        .as_deref_mut()
+                        .ok_or("no read-only host command installed")?;
+                    callback.invoke_script_with_target(
+                        scratches.selected()?,
+                        scratches.semantic_target()?,
+                        &mut output,
+                    )
+                })();
+                if let Err(error) = result {
+                    writeln!(output, "error: {error}")?;
+                }
+            }
+            Ok(ShellCommand::Run {
+                operation,
+                selection,
+            }) => {
+                let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+                    if !line.starts_with(":scope ") {
+                        return Err("run command requires explicit :scope namespace".into());
+                    }
+                    let callback = host_command
+                        .as_deref_mut()
+                        .ok_or("no read-only host command installed")?;
+                    let source = scratches.selected()?;
+                    let document = app.open_document().ok_or("no open document")?;
+                    document.buffer().span_for_range(selection)?;
+                    callback.invoke_source(source, document, selection, &operation, &mut output)
+                })();
+                if let Err(error) = result {
+                    writeln!(output, "error: {error}")?;
+                }
+            }
             #[cfg(feature = "agent")]
             Ok(ShellCommand::Source(source_proposals::Command::AgentEdit(request))) => {
                 let result = (|| -> Result<(), Box<dyn std::error::Error>> {
                     // Resolve authorization before configuring or invoking a model.
                     source_proposals.validate_request(&request, &scratches)?;
+                    print_buffer_target(scratches.selected()?, &mut output)?;
                     let mut agent = CellAgent::new(agent_config.clone())?;
                     source_proposals.generate(&mut agent, &request, &scratches, &mut output)
                 })();
@@ -669,7 +979,10 @@ fn run_shell_owned(
                     match app.proposal(&paths, crate::workspace::ProposalLimits::default()) {
                         Ok(snapshot) => {
                             proposal = Some(snapshot);
-                            writeln!(output, "isolated proposal created; baseline unchanged")?;
+                            writeln!(
+                                output,
+                                "isolated workspace-path proposal created; baseline unchanged"
+                            )?;
                         }
                         Err(error) => writeln!(output, "error: {error}")?,
                     }
@@ -680,7 +993,7 @@ fn run_shell_owned(
                     Ok(changes) => {
                         writeln!(
                             output,
-                            "{} changed files (full before/after text)",
+                            "{} changed files (workspace-path proposal snapshot; full before/after text)",
                             changes.len()
                         )?;
                         for change in changes {
@@ -738,7 +1051,7 @@ fn run_shell_owned(
                     ) {
                         Ok(run) => writeln!(
                             output,
-                            "{:?}: {} (baseline unchanged; review then accept/discard)",
+                            "Workspace-path proposal agent: {:?}: {} (isolated snapshot; baseline unchanged; review then accept/discard)",
                             run.stop, run.content
                         )?,
                         Err(error) => {
@@ -749,20 +1062,33 @@ fn run_shell_owned(
                 },
                 None => writeln!(output, "error: create a proposal with approved paths first")?,
             },
+            Ok(ShellCommand::Context) => {
+                print_source_context(&app, &scratches, &session, &mut output)?
+            }
+            Ok(ShellCommand::Languages) => print_languages(app.languages(), &session, &mut output)?,
             Ok(ShellCommand::Help) => print_shell_help(&mut output)?,
             Ok(ShellCommand::Files) => print_files(&app, &mut output)?,
             Ok(ShellCommand::Capabilities) => print_capabilities(app.workspace(), &mut output)?,
             Ok(ShellCommand::Authority) => print_authority(app.workspace(), &mut output)?,
             Ok(ShellCommand::Open { path }) => match app.open_path(&path) {
-                Ok(document) => writeln!(output, "opened {}", document.path().display())?,
+                Ok(document) => {
+                    writeln!(output, "opened {}", document.path().display())?;
+                    print_app_target(&app, &mut output)?;
+                }
                 Err(error) => writeln!(output, "error: {error}")?,
             },
             Ok(ShellCommand::OpenSelected) => match app.open_selected() {
-                Ok(document) => writeln!(output, "opened {}", document.path().display())?,
+                Ok(document) => {
+                    writeln!(output, "opened {}", document.path().display())?;
+                    print_app_target(&app, &mut output)?;
+                }
                 Err(error) => writeln!(output, "error: {error}")?,
             },
             Ok(ShellCommand::Show) => match app.open_document() {
-                Some(document) => write!(output, "{}", document.text())?,
+                Some(document) => {
+                    print_app_target(&app, &mut output)?;
+                    write!(output, "{}", document.text())?;
+                }
                 None => writeln!(output, "error: no document is open")?,
             },
             Ok(ShellCommand::Lines { start, end }) => print_lines(&app, start, end, &mut output)?,
@@ -790,7 +1116,10 @@ fn run_shell_owned(
                 None => writeln!(output, "error: no document is open")?,
             },
             Ok(ShellCommand::Save) => match app.save_open_document() {
-                Ok(()) => writeln!(output, "saved")?,
+                Ok(()) => {
+                    writeln!(output, "saved")?;
+                    print_app_target(&app, &mut output)?;
+                }
                 Err(error) => writeln!(output, "error: {error}")?,
             },
             Ok(ShellCommand::Revert) => match app.revert_open_document() {
@@ -807,10 +1136,13 @@ fn run_shell_owned(
             }
             #[cfg(feature = "agent")]
             Ok(ShellCommand::Agent { request }) => match CellAgent::new(agent_config.clone()) {
-                Ok(agent) => match run_cli_agent(&agent, &mut app, Some(&session), &request) {
-                    Ok(response) => writeln!(output, "{}", response.content)?,
-                    Err(error) => writeln!(output, "error: {error}")?,
-                },
+                Ok(agent) => {
+                    print_app_target(&app, &mut output)?;
+                    match run_cli_agent(&agent, &mut app, Some(&session), &request) {
+                        Ok(response) => writeln!(output, "{}", response.content)?,
+                        Err(error) => writeln!(output, "error: {error}")?,
+                    }
+                }
                 Err(error) => writeln!(output, "error: {error}")?,
             },
             Ok(ShellCommand::Quit) => break,
@@ -871,6 +1203,400 @@ fn print_evaluation(
     Ok(())
 }
 
+#[cfg(test)]
+mod source_command_tests {
+    use super::*;
+    use crate::{document::Document, scratch::ScratchBuffer, test_support::TempWorkspace};
+
+    #[derive(Default)]
+    struct Host {
+        calls: Vec<String>,
+    }
+    impl ReadOnlyCommand for Host {
+        fn invoke(
+            &mut self,
+            document: &Document,
+            selection: TextRange,
+            operation: &str,
+            output: &mut dyn Write,
+        ) -> Result<(), Box<dyn std::error::Error>> {
+            assert_eq!(document.buffer().as_str(), "target");
+            assert_eq!(
+                selection,
+                TextRange::new(Position::new(0, 0), Position::new(0, 6))
+            );
+            self.calls.push(format!("host:{operation}"));
+            writeln!(output, "host invoked")?;
+            Ok(())
+        }
+        fn invoke_source(
+            &mut self,
+            source: &ScratchBuffer,
+            document: &Document,
+            selection: TextRange,
+            operation: &str,
+            output: &mut dyn Write,
+        ) -> Result<(), Box<dyn std::error::Error>> {
+            assert_eq!(source.text(), "éx");
+            assert_eq!(source.language_id(), "text");
+            assert_eq!(document.buffer().as_str(), "target");
+            assert_eq!(
+                selection,
+                TextRange::new(Position::new(0, 0), Position::new(0, 2))
+            );
+            self.calls.push(format!("run:{operation}"));
+            writeln!(output, "source invoked")?;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn script_routes_without_document_or_session_and_denies_by_default() {
+        struct ScriptHost(Vec<String>);
+        impl ReadOnlyCommand for ScriptHost {
+            fn invoke(
+                &mut self,
+                _: &Document,
+                _: TextRange,
+                _: &str,
+                _: &mut dyn Write,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                panic!("script must not use document invocation")
+            }
+            fn invoke_script(
+                &mut self,
+                source: &ScratchBuffer,
+                output: &mut dyn Write,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                self.0.push(source.text().to_owned());
+                writeln!(output, "script invoked")?;
+                Ok(())
+            }
+        }
+        let root = TempWorkspace::new("script-command-routing");
+        let mut host = ScriptHost(Vec::new());
+        let mut output = Vec::new();
+        run_with_session_and_command(
+            App::new(root.workspace()).unwrap(), InteractiveSession::new(), &mut host,
+            std::io::Cursor::new(":scope script run\n:scope scratch new text\n:scope scratch replace 1 1 1 1 éx\nscript run\n:scope script run\nquit\n"), &mut output,
+        ).unwrap();
+        assert_eq!(host.0, ["éx"]);
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("script command requires explicit :scope namespace"));
+        assert!(output.contains("script invoked"));
+        let mut scratches = ScratchBuffers::default();
+        scratches.create("text", "source");
+        assert!(
+            Host::default()
+                .invoke_script(scratches.selected().unwrap(), &mut Vec::new())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn semantic_target_resolution_never_falls_back_after_close() {
+        struct TargetHost(Vec<Option<u64>>);
+        impl ReadOnlyCommand for TargetHost {
+            fn invoke(
+                &mut self,
+                _: &Document,
+                _: TextRange,
+                _: &str,
+                _: &mut dyn Write,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                panic!("must not invoke App target")
+            }
+            fn invoke_script_with_target(
+                &mut self,
+                source: &ScratchBuffer,
+                target: Option<&ScratchBuffer>,
+                _: &mut dyn Write,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                assert_eq!(source.id(), 1);
+                self.0.push(target.map(ScratchBuffer::id));
+                Ok(())
+            }
+        }
+        let root = TempWorkspace::new("semantic-target-close");
+        let mut host = TargetHost(Vec::new());
+        let mut output = Vec::new();
+        run_with_session_and_command(
+            App::new(root.workspace()).unwrap(),
+            InteractiveSession::new(),
+            &mut host,
+            std::io::Cursor::new(concat!(
+                ":scope semantic-target 99\n",
+                ":scope scratch new text\n",
+                ":scope semantic-target 0\n",
+                ":scope scratch new scope-script\n",
+                ":scope semantic-target 99\n",
+                ":scope script run\n",
+                ":scope scratch select 0\n",
+                ":scope discard\n",
+                ":scope script run\n",
+                ":scope semantic-target\n",
+                ":scope semantic-target none\n",
+                ":scope script run\nquit\n",
+            )),
+            &mut output,
+        )
+        .unwrap();
+        assert_eq!(host.0, [Some(0), None]);
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Semantic target: scratch 0"), "{output}");
+        assert!(output.contains("error:"), "{output}");
+    }
+
+    #[test]
+    fn script_parser_and_discovery() {
+        assert!(matches!(
+            ShellCommand::parse("script run"),
+            Ok(ShellCommand::ScriptRun)
+        ));
+        for input in ["script", "script other", "script run extra"] {
+            assert!(ShellCommand::parse(input).is_err());
+        }
+        assert!(
+            complete_commands(":scope scri", 11, false)
+                .unwrap()
+                .iter()
+                .any(|item| item.insert_text == "script")
+        );
+        assert!(
+            !complete_commands("scri", 4, false)
+                .unwrap()
+                .iter()
+                .any(|item| item.insert_text == "script")
+        );
+        let mut output = Vec::new();
+        print_shell_help(&mut output).unwrap();
+        assert!(
+            String::from_utf8(output)
+                .unwrap()
+                .contains(":scope script run")
+        );
+    }
+
+    #[test]
+    fn source_command_routes_selected_scratch_and_preserves_target() {
+        let root = TempWorkspace::new("source-command-routing");
+        root.write_file("target.txt", "target");
+        let mut host = Host::default();
+        let mut output = Vec::new();
+        run_with_session_and_command(
+            App::new(root.workspace()).unwrap(),
+            InteractiveSession::new(),
+            &mut host,
+            std::io::Cursor::new(concat!(
+                ":scope run inspect --selection 0:0..0:2\n",
+                "open target.txt\n",
+                ":scope run inspect --selection 0:0..0:2\n",
+                ":scope scratch new text\n",
+                ":scope scratch replace 1 1 1 1 unused\n",
+                ":scope scratch new text\n",
+                ":scope scratch replace 1 1 1 1 éx\n",
+                ":scope run inspect --selection 0:0..0:2\n",
+                ":scope run inspect --selection 0:9..0:10\n",
+                ":scope run inspect --selection 0:2..0:0\n",
+                ":scope run inspect --selection 0:0..0:7\n",
+                "run inspect --selection 0:0..0:2\n",
+                ":scope host old --selection 0:0..0:6\n",
+                "show\ndirty\nquit\n"
+            )),
+            &mut output,
+        )
+        .unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert_eq!(host.calls, ["run:inspect", "host:old"]);
+        assert_eq!(output.matches("error:").count(), 6, "{output}");
+        assert!(output.contains("no scratch buffer selected"));
+        assert!(output.contains("explicit :scope namespace"));
+        assert_eq!(root.read_file("target.txt"), "target");
+    }
+
+    #[test]
+    fn source_command_defaults_to_denial_for_existing_hosts() {
+        struct Legacy;
+        impl ReadOnlyCommand for Legacy {
+            fn invoke(
+                &mut self,
+                _: &Document,
+                _: TextRange,
+                _: &str,
+                _: &mut dyn Write,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                Ok(())
+            }
+        }
+        let root = TempWorkspace::new("source-command-default");
+        root.write_file("target.txt", "target");
+        let mut output = Vec::new();
+        run_with_session_and_command(
+            App::new(root.workspace()).unwrap(), InteractiveSession::new(), &mut Legacy,
+            std::io::Cursor::new("open target.txt\n:scope scratch new text\n:scope run inspect --selection 0:0..0:0\nquit\n"), &mut output,
+        ).unwrap();
+        assert!(
+            String::from_utf8(output)
+                .unwrap()
+                .contains("source operations are unsupported")
+        );
+    }
+
+    #[test]
+    fn source_command_parser_and_completion_are_explicit() {
+        assert!(matches!(
+            ShellCommand::parse("run inspect --selection 0:0..0:2"),
+            Ok(ShellCommand::Run { .. })
+        ));
+        for command in [
+            "run",
+            "run inspect",
+            "run inspect --selection bad",
+            "run inspect --selection 0:0..0:2 extra",
+        ] {
+            assert!(ShellCommand::parse(command).is_err());
+        }
+        assert!(
+            complete_commands(":scope ru", 9, false)
+                .unwrap()
+                .iter()
+                .any(|item| item.insert_text == "run")
+        );
+        assert!(
+            !complete_commands("ru", 2, false)
+                .unwrap()
+                .iter()
+                .any(|item| item.insert_text == "run")
+        );
+    }
+}
+
+#[cfg(test)]
+mod line_tests {
+    use super::*;
+
+    #[test]
+    fn line_preserves_terminators_unicode_and_final_empty_line() {
+        for (text, command, expected) in [
+            ("é🙂\nnext\n", r#"1 "雪  \"""#, "雪  \"\nnext\n"),
+            ("first\r\nlast\r\n", "1 \"new\"", "new\r\nlast\r\n"),
+            ("first\r\nlast", "2 \"é🙂\"", "first\r\né🙂"),
+            ("first\n", "2 \"last\"", "first\nlast"),
+            ("first\r\n", "2 \"last\"", "first\r\nlast"),
+            ("first\nlast", "2 \"\"", "first\n"),
+            ("\r\n", "1 \"\"", "\r\n"),
+            ("", "1 \"new\"", "new"),
+            ("last", "1 \"\"", ""),
+            ("a\nb\r\nc\n", "2 \"x\"", "a\nx\r\nc\n"),
+        ] {
+            let mut buffers = ScratchBuffers::default();
+            buffers.create("test", text);
+            let version = buffers.selected().unwrap().version();
+            replace_scratch_line(command, &mut buffers).unwrap();
+            assert_eq!(buffers.selected().unwrap().text(), expected, "{command}");
+            assert_eq!(buffers.selected().unwrap().version(), version + 1);
+        }
+    }
+
+    #[test]
+    fn line_rejects_invalid_input_without_mutation() {
+        let mut buffers = ScratchBuffers::default();
+        assert!(replace_scratch_line("1 \"x\"", &mut buffers).is_err());
+        buffers.create("test", "é🙂\r\n");
+        let version = buffers.selected().unwrap().version();
+        let dirty = buffers.selected().unwrap().is_dirty();
+        for command in [
+            "",
+            "1",
+            "0 \"x\"",
+            "-1 \"x\"",
+            "x \"x\"",
+            "3 \"x\"",
+            "999999999999999999999999999 \"x\"",
+            "1 unquoted",
+            "1 null",
+            "1 42",
+            "1 []",
+            "1 \"unterminated",
+            "1 \"x\" extra",
+            "1 \"bad\\q\"",
+            "1 \"a\\nb\"",
+            "1 \"a\\rb\"",
+            "1 \"\\u000a\"",
+            "1 \"\\u000d\"",
+            "1 \"a\nb\"",
+            "1 \"a\rb\"",
+        ] {
+            assert!(
+                replace_scratch_line(command, &mut buffers).is_err(),
+                "{command:?}"
+            );
+            assert_eq!(buffers.selected().unwrap().text(), "é🙂\r\n");
+            assert_eq!(buffers.selected().unwrap().version(), version);
+            assert_eq!(buffers.selected().unwrap().is_dirty(), dirty);
+        }
+    }
+
+    #[test]
+    fn line_completion_is_explicit_and_help_describes_semantics() {
+        for active in [false, true] {
+            let source = ":scope li";
+            let completions = complete_commands(source, source.len(), active).unwrap();
+            assert!(completions.iter().any(|item| item.label == "line"));
+        }
+        assert!(
+            !complete_commands("li", 2, false)
+                .unwrap()
+                .iter()
+                .any(|item| item.label == "line")
+        );
+        assert!(complete_commands("li", 2, true).is_none());
+        let mut help = Vec::new();
+        print_shell_help(&mut help).unwrap();
+        let help = String::from_utf8(help).unwrap();
+        assert!(help.contains(":scope line N JSON_STRING"));
+        assert!(help.contains("final empty line"));
+    }
+}
+
+fn replace_scratch_line(
+    arguments: &str,
+    buffers: &mut ScratchBuffers,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::text::{Span, TextBuffer};
+
+    let arguments = arguments.trim_start();
+    let (number, json) = arguments
+        .split_once(char::is_whitespace)
+        .ok_or("line requires N JSON_STRING")?;
+    let number = number
+        .parse::<usize>()
+        .ok()
+        .filter(|number| *number > 0)
+        .ok_or("line number must be a positive integer")?;
+    let replacement: String = serde_json::from_str(json.trim())?;
+    if replacement.contains(['\r', '\n']) {
+        return Err("line replacement must not contain CR or LF".into());
+    }
+    let buffer = buffers.selected_mut()?;
+    let text = buffer.text();
+    // split, unlike lines, retains the editable empty line after a final LF.
+    let mut start = 0;
+    let mut lines = text.split('\n');
+    for _ in 1..number {
+        let line = lines.next().ok_or("line number is out of range")?;
+        start += line.len() + 1;
+    }
+    let line = lines.next().ok_or("line number is out of range")?;
+    let mut end = start + line.len();
+    if end < text.len() && line.ends_with('\r') {
+        end -= 1;
+    }
+    let range = TextBuffer::new(text).range_for_span(Span::new(start, end))?;
+    buffer.apply_edit(TextEdit::replace(range, replacement))?;
+    Ok(())
+}
+
 fn run_scratch_command(
     rest: &str,
     buffers: &mut ScratchBuffers,
@@ -911,6 +1637,7 @@ fn run_scratch_command(
         "open" => {
             let id = buffers.open(workspace, registry, args[0])?;
             writeln!(output, "scratch {id} opened: {}", args[0])?;
+            print_buffer_target(buffers.selected()?, output)?;
         }
         "list" => {
             let selected = buffers.selected().ok().map(|buffer| buffer.id());
@@ -940,13 +1667,21 @@ fn run_scratch_command(
             buffers.select(id)?;
             writeln!(output, "scratch {id} selected")?;
         }
-        "show" => write!(output, "{}", buffers.selected()?.text())?,
+        "show" => {
+            print_buffer_target(buffers.selected()?, output)?;
+            write!(output, "{}", buffers.selected()?.text())?;
+        }
         "capture" => {
             let (language, source) = last_submission.ok_or("no REPL submission to capture")?;
             let id = buffers.create(language.clone(), source.clone());
             writeln!(output, "scratch {id} captured ({language})")?;
         }
-        "eval" => print_evaluation(buffers.selected()?.evaluate(session)?, output)?,
+        "eval" => {
+            let buffer = buffers.selected()?;
+            let result = buffer.evaluate(session)?;
+            print_buffer_target(buffer, output)?;
+            print_evaluation(result, output)?;
+        }
         "destination" => {
             buffers
                 .selected_mut()?
@@ -960,14 +1695,17 @@ fn run_scratch_command(
         "save" => {
             buffers.selected_mut()?.save(workspace)?;
             writeln!(output, "scratch saved")?;
+            print_buffer_target(buffers.selected()?, output)?;
         }
         "promote" => {
             buffers.selected_mut()?.promote(workspace, args[0])?;
             writeln!(output, "scratch promoted: {}", args[0])?;
+            print_buffer_target(buffers.selected()?, output)?;
         }
         "save-as" => {
             buffers.save_as_selected(workspace, args[0])?;
             writeln!(output, "scratch saved as: {}", args[0])?;
+            print_buffer_target(buffers.selected()?, output)?;
         }
         "close" => {
             buffers.close_selected(false)?;
@@ -993,6 +1731,7 @@ fn print_buffer(
     output: &mut impl Write,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let buffer = buffers.selected()?;
+    print_buffer_target(buffer, output)?;
     writeln!(
         output,
         "buffer {} {} {}",
@@ -1022,7 +1761,7 @@ fn print_buffer(
     }
     writeln!(
         output,
-        "Preview limited to 40 lines / 160 characters; :scope edit then :show START for more."
+        "Preview limited to 40 lines / 160 characters; :scope edit --commands then :show START for more."
     )?;
     Ok(())
 }
@@ -1169,14 +1908,77 @@ fn diagnostic_label(diagnostic: &crate::language::Diagnostic) -> String {
     }
 }
 
-fn print_shell_help(output: &mut impl Write) -> std::io::Result<()> {
+fn print_languages(
+    registry: &LanguageRegistry,
+    session: &InteractiveSession,
+    output: &mut impl Write,
+) -> std::io::Result<()> {
+    writeln!(output, "Analysis services (not evaluators):")?;
+    if registry.services().is_empty() {
+        writeln!(output, "  none registered")?;
+    }
+    for service in registry.services() {
+        writeln!(
+            output,
+            "  {} — {}",
+            inspection_text(service.language_id()),
+            inspection_text(service.language_name())
+        )?;
+        let operations = service.semantic_operations();
+        if operations.is_empty() {
+            writeln!(output, "    semantic operations: none installed")?;
+        } else {
+            for operation in operations {
+                writeln!(
+                    output,
+                    "    semantic operation: {} (availability/eligibility: :scope inspect)",
+                    inspection_text(&operation.id)
+                )?;
+            }
+        }
+    }
     writeln!(
         output,
-        "Interactive sessions:\n  :scope session <id|none> Select a registered evaluator or close it\n  :scope session          Show the active interactive language\n  :scope session-reset    Reset the active session\n  :scope describe <symbol> Show symbol metadata\n  :scope effect <symbol>   Show the symbol signature (including effects)\n  :scope where <symbol>    Show origin, location, and definition\nInspection requires an active session and never evaluates source. These controls require :scope even without a session.\nWith a session active, use :scope <command> for every Scope command; other input is source.\nEnter submits complete input or continues incomplete source. Ctrl+J inserts a newline; Ctrl+S submits invalid (not incomplete) source; Ctrl+C abandons input. Ctrl+P/N recall history. Ctrl+K deletes from the cursor to the current line's end (preserving the newline). In-flight terminal cancellation is unsupported."
+        "Fallback analysis: scope.neutral — Language Neutral (unmatched files; no semantic operations)"
+    )?;
+    writeln!(output, "Interactive evaluators:")?;
+    if registry.interactive_providers().is_empty() {
+        writeln!(output, "  none registered")?;
+    }
+    for provider in registry.interactive_providers() {
+        writeln!(output, "  {}", inspection_text(provider.language_id()))?;
+    }
+    writeln!(
+        output,
+        "Active session: {}",
+        inspection_text(session.language_id().unwrap_or("none"))
     )?;
     writeln!(
         output,
-        "Workspace buffers (explicit namespace, including in language sessions):\n  :scope open <path> | buffers | buffer <id> | show | edit\n  :scope buffer eval      Evaluate current in-memory source in the matching active session\n  :scope save | save-as <path> | reload | close\n  :scope reload-discard | discard (explicitly lose unsaved contents)\nEditing: :at LINE COLUMN, :insert TEXT, :delete COUNT, :show [START], :done, :cancel, :help.\nCoordinates are one-based Unicode scalars. Literal lines insert at the cursor with a newline; escapes in :insert are \\n, \\t, \\\\. Editing is a draft: :done keeps changes in memory, :cancel/EOF drops only the draft. Save separately.\n\nScratch buffers (explicit :scope namespace only):\n  :scope scratch new <language-id>\n  :scope scratch open <path> Open and select an existing workspace file\n  :scope scratch list | select <id> | show\n  :scope scratch replace <start-line> <start-column> <end-line> <end-column> <text>\n                     Same coordinates and escapes as replace below\n  :scope scratch capture   Copy the last exact REPL submission and language\n  :scope scratch eval      Evaluate in the matching active session; never switches\n  :scope scratch destination <path> Read an existing file baseline without writing\n  :scope scratch save      Checked save to the bound destination\n  :scope scratch promote <path> Checked replacement of an existing file\n  :scope scratch save-as <path> Checked replacement of an existing file\n  :scope scratch close     Close selected buffer only if clean; never saves\n  :scope scratch reload    Reload the destination only if clean\n  :scope scratch reload-discard Explicitly discard edits and reload\n  :scope scratch discard   Drop selected buffer, including unsaved edits, without writing\nBuffers are local to this shell; nothing is persisted implicitly. Destinations must already exist: create the file first, then bind, promote, or save-as. Replacement is atomic; revision checks are best effort, not atomic compare-and-swap."
+        "Select: :scope session <id>; context: :scope context. Registration is not authorization."
+    )
+}
+
+fn print_shell_help(output: &mut impl Write) -> std::io::Result<()> {
+    writeln!(
+        output,
+        "Discovery: languages (or :scope languages) lists analysis services, installed semantic operations, evaluators and current session. Use :scope context for source owners; :scope inspect for eligible document reads. Scratch edits stay in memory; :scope script run executes the selected scratch in the default workbench. Standalone: cargo run -p scope-script -- --help."
+    )?;
+    writeln!(
+        output,
+        "Interactive sessions:\n  :scope session <id|none> Select a registered evaluator or close it\n  :scope session          Show the active interactive language\n  :scope session-reset    Reset the active session\n  :scope describe <symbol> Show symbol metadata\n  :scope effect <symbol>   Show the symbol signature (including effects)\n  :scope where <symbol>    Show origin, location, and definition\nSymbol inspection requires an active session and never evaluates source. These controls require :scope even without a session.\nWith a session active, use :scope <command> for every Scope command; other input is source.\nEnter submits complete input or continues incomplete source. Ctrl+J inserts a newline; Ctrl+S submits invalid (not incomplete) source; Ctrl+C abandons input. Ctrl+P/N recall history. Ctrl+K deletes from the cursor to the current line's end (preserving the newline). In-flight terminal cancellation is unsupported."
+    )?;
+    writeln!(
+        output,
+        "Read-only host commands (explicit namespace required):\n  :scope script run                              Selected scratch execution (host opt-in; no App target/session)\n  :scope semantic-target [ID|none]                Bind/report independent live scratch; none clears (no authority grant)\n  :scope host NAME --selection LINE:BYTE..LINE:BYTE  Open App document\n  :scope run NAME --selection LINE:BYTE..LINE:BYTE   Selected scratch source, separate open App target\nCoordinates are zero-based lines/UTF-8 byte columns, half-open ranges. Source operations require host opt-in.\n\nSource context:\n  :scope context    Show both source owners, identities, versions, services and command targets\n  context           Same command without an active language session\nBare open/show/save use App documents; :scope open/show/save use separate shell buffers. Context never changes selection or renews authorization."
+    )?;
+    writeln!(
+        output,
+        "Semantic inspection (App-owned document, not the selected shell buffer):\n  :scope inspect                    Discover eligible semantic reads\n  :scope inspect operation <id>     Capture a read request; does not execute (ID may be a JSON string)\n  :scope inspect confirm <token>    Authorize exactly that captured request once\n  :scope inspect cancel             Drop the pending capture\n  :scope inspect result [--full]    Last result summary or lossless native details\nWithout a language session, inspect also works without :scope. App source is opened by bare open <path> (first use :scope session none if active); :scope open selects a separate shell buffer. Only argument-free document Read operations are supported. Read is not an OS sandbox guarantee. Confirmation grants no agent permission."
+    )?;
+    writeln!(
+        output,
+        "Workspace buffers (explicit namespace, including in language sessions):\n  :scope open <path> | buffers | buffer <id> | show | edit [--commands]\n  :scope line N JSON_STRING Replace one whole line in the selected shell buffer (1-based)\n                     Preserves LF/CRLF; a trailing newline includes a final empty line.\n                     JSON string only; no CR/LF in replacement. Never saves or evaluates.\n  :scope buffer eval      Evaluate current in-memory source in the matching active session\n  :scope save | save-as <path> | reload | close\n  :scope reload-discard | discard (explicitly lose unsaved contents)\nTTY editing: arrows navigate, Home/End move within a line, Enter inserts a newline; Backspace/Delete edit, bracketed paste preserves layout. Ctrl-S keeps the draft; Ctrl-C/Escape cancels. Nothing saves or evaluates implicitly.\nUse :scope edit --commands for explicit editing (also the default with redirected input): :at LINE COLUMN, :insert TEXT, :delete COUNT, :show [START], :done, :cancel, :help.\nCoordinates are one-based Unicode scalars. Literal lines insert at the cursor with a newline; escapes in :insert are \\n, \\t, \\\\. Editing is a draft: :done keeps changes in memory, :cancel/EOF drops only the draft. Save separately.\n\nScratch buffers (explicit :scope namespace only):\n  :scope scratch new <language-id>\n  :scope scratch open <path> Open and select an existing workspace file\n  :scope scratch list | select <id> | show\n  :scope scratch replace <start-line> <start-column> <end-line> <end-column> <text>\n                     Same coordinates and escapes as replace below\n  :scope scratch capture   Copy the last exact REPL submission and language\n  :scope scratch eval      Evaluate in the matching active session; never switches\n  :scope scratch destination <path> Read an existing file baseline without writing\n  :scope scratch save      Checked save to the bound destination\n  :scope scratch promote <path> Checked replacement of an existing file\n  :scope scratch save-as <path> Checked replacement of an existing file\n  :scope scratch close     Close selected buffer only if clean; never saves\n  :scope scratch reload    Reload the destination only if clean\n  :scope scratch reload-discard Explicitly discard edits and reload\n  :scope scratch discard   Drop selected buffer, including unsaved edits, without writing\nBuffers are local to this shell; nothing is persisted implicitly. Destinations must already exist: create the file first, then bind, promote, or save-as. Replacement is atomic; revision checks are best effort, not atomic compare-and-swap."
     )?;
     writeln!(
         output,
@@ -1190,11 +1992,25 @@ fn print_shell_help(output: &mut impl Write) -> std::io::Result<()> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ShellCommand {
+    Inspect,
+    InspectOperation(String),
+    InspectConfirm(u64),
+    InspectCancel,
+    InspectResult {
+        full: bool,
+    },
+    ScriptRun,
     Host {
         operation: String,
         selection: TextRange,
     },
+    Run {
+        operation: String,
+        selection: TextRange,
+    },
     Help,
+    Languages,
+    Context,
     Source(source_proposals::Command),
     Proposal {
         paths: Vec<ScopePath>,
@@ -1278,9 +2094,43 @@ macro_rules! shell_commands {
 }
 
 shell_commands! { line, trimmed, parts, command;
-            "host" => {
+            "inspect" => {
                 let usage = || ShellError::UnexpectedArgument(
-                    "usage: :scope host NAME --selection LINE:BYTE..LINE:BYTE (zero-based)".into());
+                    "usage: inspect [operation ID | confirm TOKEN | cancel | result [--full]]".into());
+                let result = match parts.next() {
+                    None => Self::Inspect,
+                    Some("operation") => {
+                        let rest = trimmed[command.len()..].trim_start()["operation".len()..].trim();
+                        let id = if rest.starts_with('"') {
+                            serde_json::from_str::<String>(rest).map_err(|_| usage())?
+                        } else {
+                            let id = parts.next().ok_or_else(usage)?.to_owned();
+                            if parts.next().is_some() { return Err(usage()); }
+                            id
+                        };
+                        return Ok(Self::InspectOperation(id));
+                    },
+                    Some("confirm") => Self::InspectConfirm(parts.next().ok_or_else(usage)?.parse().map_err(|_| usage())?),
+                    Some("cancel") => Self::InspectCancel,
+                    Some("result") => Self::InspectResult { full: match parts.next() {
+                        None => false,
+                        Some("--full") => true,
+                        _ => return Err(usage()),
+                    } },
+                    _ => return Err(usage()),
+                };
+                if parts.next().is_some() { return Err(usage()); }
+                Ok(result)
+            },
+            "script" => {
+                if parts.next() != Some("run") || parts.next().is_some() {
+                    return Err(ShellError::UnexpectedArgument("usage: :scope script run".into()));
+                }
+                Ok(Self::ScriptRun)
+            },
+            "host" | "run" => {
+                let usage = || ShellError::UnexpectedArgument(
+                    format!("usage: :scope {command} NAME --selection LINE:BYTE..LINE:BYTE (zero-based)"));
                 let operation = parts.next().ok_or_else(usage)?.to_owned();
                 if parts.next() != Some("--selection") { return Err(usage()); }
                 let coordinates = parts.next().ok_or_else(usage)?;
@@ -1290,7 +2140,12 @@ shell_commands! { line, trimmed, parts, command;
                     let (line, column) = value.split_once(':').ok_or_else(usage)?;
                     Ok(Position::new(line.parse().map_err(|_| usage())?, column.parse().map_err(|_| usage())?))
                 };
-                Ok(Self::Host { operation, selection: TextRange::new(position(start)?, position(end)?) })
+                let selection = TextRange::new(position(start)?, position(end)?);
+                Ok(if command == "run" {
+                    Self::Run { operation, selection }
+                } else {
+                    Self::Host { operation, selection }
+                })
             },
             "source-propose" | "source-proposals" | "source-proposal" | "source-diff" | "source-accept" | "source-reject" => {
                 source_proposals::Command::parse(command, &trimmed[command.len()..])
@@ -1317,6 +2172,8 @@ shell_commands! { line, trimmed, parts, command;
                     request: request.into(),
                 })
             },
+            "languages" => reject_shell_extra(parts).map(|()| Self::Languages),
+            "context" => reject_shell_extra(parts).map(|()| Self::Context),
             "help" | "?" => reject_shell_extra(parts).map(|()| Self::Help),
             "files" | "ls" => reject_shell_extra(parts).map(|()| Self::Files),
             "capabilities" => reject_shell_extra(parts).map(|()| Self::Capabilities),
@@ -1397,6 +2254,46 @@ pub(crate) fn complete_commands(
     }
     let rest = &source[offset..];
     let start = offset + rest.len() - rest.trim_start().len();
+    let tokens: Vec<_> = source[start..].split_whitespace().collect();
+    if tokens.first() == Some(&"inspect") && source[start..].contains(char::is_whitespace) {
+        let (argument_start, names): (usize, &[&str]) = if tokens.get(1) == Some(&"result")
+            && source[start..]
+                .trim_start_matches("inspect")
+                .trim_start()
+                .starts_with("result ")
+        {
+            let after_inspect = start + "inspect".len();
+            let result_start = after_inspect + source[after_inspect..].len()
+                - source[after_inspect..].trim_start().len();
+            (result_start + "result".len(), &["--full"])
+        } else {
+            (
+                start + "inspect".len(),
+                &["operation", "confirm", "cancel", "result"],
+            )
+        };
+        let argument_start = argument_start + source[argument_start..].len()
+            - source[argument_start..].trim_start().len();
+        let end = source[argument_start..]
+            .find(char::is_whitespace)
+            .map_or(source.len(), |i| argument_start + i);
+        if cursor < argument_start || cursor > end {
+            return Some(Vec::new());
+        }
+        let prefix = &source[argument_start..cursor];
+        return Some(
+            names
+                .iter()
+                .filter(|name| name.starts_with(prefix))
+                .map(|name| CompletionItem {
+                    label: (*name).into(),
+                    replacement: argument_start..end,
+                    insert_text: (*name).into(),
+                    detail: None,
+                })
+                .collect(),
+        );
+    }
     let end = source[start..]
         .find(char::is_whitespace)
         .map_or(source.len(), |i| start + i);
@@ -1405,8 +2302,10 @@ pub(crate) fn complete_commands(
     }
     let prefix = &source[start..cursor];
     let mut names = ShellCommand::names().to_vec();
+    // Preserve the existing scratch completion priority for the shared `scr` prefix.
+    names.retain(|name| *name != "script");
     if !explicit {
-        names.retain(|name| *name != "host");
+        names.retain(|name| !matches!(*name, "host" | "run" | "script"));
     }
     if explicit {
         names.extend_from_slice(&[
@@ -1414,12 +2313,14 @@ pub(crate) fn complete_commands(
             "buffers",
             "buffer",
             "edit",
+            "line",
             "save-as",
             "reload",
             "reload-discard",
             "close",
             "discard",
         ]);
+        names.push("script");
         names.push(SESSION_COMMAND);
         names.extend_from_slice(INSPECTION_COMMANDS);
         if active {
@@ -1449,6 +2350,18 @@ pub(crate) fn complete_commands(
 fn completion_uses_parser_names_and_namespace_context() {
     let complete = |s: &str, active| complete_commands(s, s.len(), active).unwrap();
     assert_eq!(complete("hel", false)[0].insert_text, "help");
+    assert_eq!(complete("ins", false)[0].insert_text, "inspect");
+    assert_eq!(
+        complete(":scope inspect op", true)[0].insert_text,
+        "operation"
+    );
+    assert_eq!(complete("inspect con", false)[0].insert_text, "confirm");
+    assert_eq!(
+        complete(":scope inspect result --f", true)[0].insert_text,
+        "--full"
+    );
+    assert!(complete(":scope inspect operation foo", true).is_empty());
+    assert!(complete_commands("inspect con", 11, true).is_none());
     for active in [false, true] {
         let items = complete(":scope hos", active);
         assert_eq!(items[0].insert_text, "host");
@@ -1473,7 +2386,7 @@ fn completion_uses_parser_names_and_namespace_context() {
     assert_eq!(item.replacement, 2..7);
     let all = complete("", false);
     for name in ShellCommand::names() {
-        if *name == "host"
+        if matches!(*name, "host" | "run" | "script")
             || (!cfg!(feature = "agent") && matches!(*name, "agent" | "ask" | "proposal-agent"))
         {
             continue;
@@ -1691,6 +2604,7 @@ fn reject_shell_extra<'a>(mut parts: impl Iterator<Item = &'a str>) -> Result<()
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Args {
     workspace_root: String,
+    writable: bool,
     command: Command,
     agent_config: AgentConfig,
 }
@@ -1725,7 +2639,9 @@ enum ParseResult {
 impl Args {
     fn parse(args: impl IntoIterator<Item = String>) -> Result<ParseResult, CliError> {
         let mut args = args.into_iter().peekable();
+        let no_args = args.peek().is_none();
         let mut workspace_root = None;
+        let mut writable = false;
         let mut command = None;
         #[cfg(feature = "agent")]
         let mut agent_model = DEFAULT_AGENT_MODEL.to_string();
@@ -1736,6 +2652,7 @@ impl Args {
 
         while let Some(arg) = args.next() {
             match arg.as_str() {
+                "--writable" => writable = true,
                 "-h" | "--help" => return Ok(ParseResult::Help),
                 "-w" | "--workspace" => {
                     let root = args.next().ok_or(CliError::MissingWorkspacePath)?;
@@ -1905,7 +2822,12 @@ impl Args {
 
         Ok(ParseResult::Run(Args {
             workspace_root,
-            command: command.unwrap_or(Command::List),
+            writable,
+            command: command.unwrap_or(if no_args {
+                Command::Shell
+            } else {
+                Command::List
+            }),
             agent_config,
         }))
     }
@@ -1990,22 +2912,22 @@ fn reject_extra_args(mut args: impl Iterator<Item = String>) -> Result<(), CliEr
 }
 
 fn print_usage() {
+    println!(
+        "Workspace access defaults to read-only. Pass --writable before the command to opt in to workspace writes. Metadata snapshots remain read-only.\nDefault features include tools; tool availability does not grant write authority."
+    );
     let defaults = SnapshotOptions::default();
     println!(
-        "Metadata snapshot:\n  scope-ide [--workspace <path>] meta [--max-entries N] [--max-depth N]\n  scope-ide <workspace> meta [--max-entries N] [--max-depth N]\n  meta           Print a bounded, read-only workspace metadata graph\n  --max-entries  Entry budget including root (default: {}; must be positive)\n  --max-depth    Directory scan depth (default: {}; zero is valid)",
+        "Scope runtime: cargo run -- [OPTIONS] [COMMAND]\nUsage: scope-ide [--workspace <path>] [COMMAND]\n       scope-ide <workspace> [COMMAND]\n\nNo arguments: start the shell in the current directory (piped input supported).\nA workspace argument without a command retains the default file listing.\nWorkspaces must already exist; startup does not create them.\n\nCommands:\n  open, shell  Start the Scope shell (also: open <workspace>)\n  list         List workspace files\n  show <path>  Print a workspace-relative file\n  capabilities List installed interfaces (host metadata)\n  authority    Show advisory authority metadata, not authorization\n  meta         Bounded read-only metadata graph\n  agent, ask   Ask the agent (requires feature `agent`)\n\nOptions:\n  -w, --workspace <path>      Workspace root (default: current directory)\n  -h, --help                  Show this help\n  --max-entries N             Metadata entry budget (default: {}; positive)\n  --max-depth N               Metadata depth (default: {}; zero allowed)\n\nShell discovery: help, files, authority, quit.\nDownstream evaluators require host registration. The default workbench installs pure Script via :scope script run; Scope Simple analysis is separate.\nScript CLI: cargo run -p scope-script -- --help (separate no-host runtime).",
         defaults.max_entries, defaults.max_depth
+    );
+    #[cfg(feature = "agent")]
+    println!(
+        "Agent: agent [--open <path>] <request>\n  --agent-model <name>        Model (default: apple-foundationmodel)\n  --agent-base-url <url>      API URL (default: http://localhost:11434/v1)\n  --agent-openai              Use OpenAI default API URL\n  --agent-api-key-env <name>  Read API key from environment"
     );
     #[cfg(not(feature = "agent"))]
     println!("{AGENT_FEATURE_REQUIRED}");
     #[cfg(feature = "tui")]
-    println!(
-        "Usage:\n  scope-ide [--workspace <path>] [list]\n  scope-ide [--workspace <path>] capabilities\n  scope-ide [--workspace <path>] authority\n  scope-ide [--workspace <path>] show <path>\n  scope-ide [--workspace <path>] open\n  scope-ide [--workspace <path>] agent [--open <path>] <request>\n  scope-ide [--workspace <path>] tui\n  scope-ide open <workspace>\n  scope-ide tui <workspace>\n  scope-ide <workspace> [list]\n  scope-ide <workspace> capabilities\n  scope-ide <workspace> authority\n  scope-ide <workspace> show <path>\n\nCommands:\n  capabilities List installed workspace interfaces (host metadata)\n  authority    Show advisory workspace authority metadata\n  list         List files in the workspace (default)\n  show <path>  Print a workspace-relative file\n  open         Start the interactive Scope shell\n  shell        Alias for `open`\n  agent        Ask the Cell-backed agent using only Scope context (requires feature `agent`)\n  ask          Alias for `agent`\n  tui          Start the experimental ratatui interface\n\nOptions:\n  -w, --workspace <path>      Workspace root (defaults to current directory)\n  --agent-model <name>        Chat model (default: apple-foundationmodel)\n  --agent-base-url <url>      OpenAI-compatible base URL (default: http://localhost:11434/v1)\n  --agent-openai              Use OpenAI's default API URL instead of the local URL\n  --agent-api-key-env <name>  Read the chat API key from a host environment variable\n  -h, --help                  Show this help"
-    );
-
-    #[cfg(not(feature = "tui"))]
-    println!(
-        "Usage:\n  scope-ide [--workspace <path>] [list]\n  scope-ide [--workspace <path>] capabilities\n  scope-ide [--workspace <path>] authority\n  scope-ide [--workspace <path>] show <path>\n  scope-ide [--workspace <path>] open\n  scope-ide [--workspace <path>] agent [--open <path>] <request>\n  scope-ide open <workspace>\n  scope-ide <workspace> [list]\n  scope-ide <workspace> capabilities\n  scope-ide <workspace> authority\n  scope-ide <workspace> show <path>\n\nCommands:\n  capabilities List installed workspace interfaces (host metadata)\n  authority    Show advisory workspace authority metadata\n  list         List files in the workspace (default)\n  show <path>  Print a workspace-relative file\n  open         Start the interactive Scope shell\n  shell        Alias for `open`\n  agent        Ask the Cell-backed agent using only Scope context (requires feature `agent`)\n  ask          Alias for `agent`\n\nOptions:\n  -w, --workspace <path>      Workspace root (defaults to current directory)\n  --agent-model <name>        Chat model (default: apple-foundationmodel)\n  --agent-base-url <url>      OpenAI-compatible base URL (default: http://localhost:11434/v1)\n  --agent-openai              Use OpenAI's default API URL instead of the local URL\n  --agent-api-key-env <name>  Read the chat API key from a host environment variable\n  -h, --help                  Show this help"
-    );
+    println!("  tui [workspace]            Start the experimental ratatui interface");
 }
 
 #[cfg(test)]
@@ -2188,12 +3110,12 @@ mod tests {
     }
 
     #[test]
-    fn defaults_to_listing_current_directory() {
+    fn defaults_to_shell_in_current_directory() {
         let parsed = Args::parse([]).unwrap();
 
         match parsed {
             ParseResult::Run(args) => {
-                assert_eq!(args.command, Command::List);
+                assert_eq!(args.command, Command::Shell);
                 assert!(std::path::Path::new(&args.workspace_root).is_absolute());
             }
             ParseResult::Help => panic!("expected runnable args"),
@@ -2209,6 +3131,7 @@ mod tests {
             assert_eq!(
                 Args::parse(arguments.into_iter().map(String::from)).unwrap(),
                 ParseResult::Run(Args {
+                    writable: false,
                     workspace_root: "/tmp/project".to_string(),
                     command: Command::Capabilities,
                     agent_config: default_agent_config(),
@@ -2238,6 +3161,7 @@ mod tests {
             assert_eq!(
                 Args::parse(arguments.into_iter().map(String::from)).unwrap(),
                 ParseResult::Run(Args {
+                    writable: false,
                     workspace_root: "/tmp/project".to_string(),
                     command: Command::Authority,
                     agent_config: default_agent_config(),
@@ -2361,7 +3285,7 @@ mod tests {
                 .all(|interface| !interface.contains("chat"))
         );
         let expected = format!(
-            "Scope — {}\nType `help` for commands.\nscope> {}\nscope> ",
+            "Scope — {}\nType `help` for commands, `quit` to exit. Workspace files change only on explicit commands.\nDiscover: :scope languages | :scope session | :scope context | :scope inspect\nScratch edits: :scope scratch new <language-id>, then :scope edit (in memory; not evaluation).\nScript: :scope script run evaluates the selected scratch (default workbench); standalone: cargo run -p scope-script -- --help\nscope> {}\nscope> ",
             app.workspace().root(),
             interfaces.join("\n")
         );
@@ -2382,6 +3306,7 @@ mod tests {
         assert_eq!(
             parsed,
             ParseResult::Run(Args {
+                writable: false,
                 workspace_root: "/tmp/project".to_string(),
                 command: Command::Show {
                     path: ScopePath::new("README.md").unwrap()
@@ -2399,6 +3324,7 @@ mod tests {
         assert_eq!(
             parsed,
             ParseResult::Run(Args {
+                writable: false,
                 workspace_root: "/tmp/project".to_string(),
                 command: Command::Shell,
                 agent_config: default_agent_config(),
@@ -2413,6 +3339,7 @@ mod tests {
         assert_eq!(
             parsed,
             ParseResult::Run(Args {
+                writable: false,
                 workspace_root: "/tmp/project".to_string(),
                 command: Command::Shell,
                 agent_config: default_agent_config(),
@@ -2428,6 +3355,7 @@ mod tests {
         assert_eq!(
             parsed,
             ParseResult::Run(Args {
+                writable: false,
                 workspace_root: "/tmp/project".to_string(),
                 command: Command::Tui,
                 agent_config: default_agent_config(),
@@ -2442,6 +3370,7 @@ mod tests {
         assert_eq!(
             parsed,
             ParseResult::Run(Args {
+                writable: false,
                 workspace_root: "/tmp/project".to_string(),
                 command: Command::List,
                 agent_config: default_agent_config(),
@@ -2499,6 +3428,77 @@ mod tests {
                 .to_string()
                 .contains("unknown replacement escape")
         );
+    }
+
+    #[test]
+    fn shell_line_routes_only_explicitly_to_selected_buffer() {
+        let root = TempWorkspace::new("shell_line_routes_only_explicitly_to_selected_buffer");
+        root.write_file("README.md", "App original\n");
+        let input = b"open README.md\n:scope line 1 \"no selection\"\n:scope scratch new test\n:scope line 1 \"first\"\n:scope scratch new test\n:scope line 1 \"second\"\n:scope scratch show\n:scope scratch select 0\nline 1 \"bare must fail\"\n:scope scratch show\nshow\nquit\n";
+        let mut output = Vec::new();
+        run_shell(
+            App::new(root.workspace()).unwrap(),
+            default_agent_config(),
+            &input[..],
+            &mut output,
+        )
+        .unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert_eq!(
+            output
+                .matches("scratch line replaced (no save or evaluation)")
+                .count(),
+            2
+        );
+        assert_eq!(output.matches("error:").count(), 2);
+        assert!(output.contains("first"));
+        assert!(output.contains("second"));
+        assert!(output.contains("App original\n"));
+        assert_eq!(root.read_file("README.md"), "App original\n");
+    }
+
+    #[test]
+    fn shell_line_same_path_keeps_app_and_disk_unchanged() {
+        let root = TempWorkspace::new("shell_line_same_path_keeps_app_and_disk_unchanged");
+        root.write_file("README.md", "original README\n");
+        let input = b"open README.md\n:scope open README.md\n:scope show\n:scope line 1 \"edited buffer\"\n:scope show\nshow\ndirty\nquit\n";
+        let mut output = Vec::new();
+        run_shell(
+            App::new(root.workspace()).unwrap(),
+            default_agent_config(),
+            &input[..],
+            &mut output,
+        )
+        .unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(!output.contains("error:"), "{output}");
+        let (before, after) = output
+            .split_once("scratch line replaced (no save or evaluation)")
+            .unwrap();
+        assert!(
+            before.contains("Shell buffer target: Scratch(0) @0"),
+            "{output}"
+        );
+        assert!(
+            before.contains("buffer 0 README.md clean\n    1 | original README\n"),
+            "{output}"
+        );
+        assert!(
+            after.contains("Shell buffer target: Scratch(0) @1"),
+            "{output}"
+        );
+        assert!(
+            after.contains("buffer 0 README.md dirty\n    1 | edited buffer\n    2 | \n"),
+            "{output}"
+        );
+        let (_, app_view) = after.split_once("App document target:").unwrap();
+        assert!(
+            app_view.contains(" @0 path=README.md\noriginal README\n"),
+            "{output}"
+        );
+        assert!(app_view.contains("README.md clean\n"), "{output}");
+        assert!(!app_view.contains("edited buffer"), "{output}");
+        assert_eq!(root.read_file("README.md"), "original README\n");
     }
 
     #[test]
@@ -2582,6 +3582,7 @@ mod tests {
         assert_eq!(
             parsed,
             ParseResult::Run(Args {
+                writable: false,
                 workspace_root: "/tmp/project".to_string(),
                 command: Command::Agent {
                     request: "summarize this".to_string(),

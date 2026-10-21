@@ -166,7 +166,7 @@ dependencies = [
 [[package]]
 name = "cell"
 version = "0.1.0"
-source = "git+https://github.com/nate-droid/cell?tag=v0.0.1#9609d9e2cb22718187388d6a4f803ff6b97eed64"
+source = "git+https://github.com/nate-droid/cell?tag=v0.0.2#86145d1e6a2a1093e933c6754f812b1838817be0"
 dependencies = [
  "anyhow",
  "sha2",
@@ -176,12 +176,13 @@ dependencies = [
 [[package]]
 name = "cell-capability-fs"
 version = "0.1.0"
-source = "git+https://github.com/nate-droid/cell?tag=v0.0.1#9609d9e2cb22718187388d6a4f803ff6b97eed64"
+source = "git+https://github.com/nate-droid/cell?tag=v0.0.2#86145d1e6a2a1093e933c6754f812b1838817be0"
 dependencies = [
  "anyhow",
  "cap-fs-ext",
  "cap-std",
  "cell",
+ "libc",
  "sha2",
  "wasmtime",
 ]
@@ -189,7 +190,7 @@ dependencies = [
 [[package]]
 name = "cell-capability-log"
 version = "0.1.0"
-source = "git+https://github.com/nate-droid/cell?tag=v0.0.1#9609d9e2cb22718187388d6a4f803ff6b97eed64"
+source = "git+https://github.com/nate-droid/cell?tag=v0.0.2#86145d1e6a2a1093e933c6754f812b1838817be0"
 dependencies = [
  "anyhow",
  "cell",
@@ -199,7 +200,7 @@ dependencies = [
 [[package]]
 name = "cell-capability-openai"
 version = "0.1.0"
-source = "git+https://github.com/nate-droid/cell?tag=v0.0.1#9609d9e2cb22718187388d6a4f803ff6b97eed64"
+source = "git+https://github.com/nate-droid/cell?tag=v0.0.2#86145d1e6a2a1093e933c6754f812b1838817be0"
 dependencies = [
  "anyhow",
  "cell",
@@ -211,7 +212,7 @@ dependencies = [
 [[package]]
 name = "cell-guest"
 version = "0.1.0"
-source = "git+https://github.com/nate-droid/cell?tag=v0.0.1#9609d9e2cb22718187388d6a4f803ff6b97eed64"
+source = "git+https://github.com/nate-droid/cell?tag=v0.0.2#86145d1e6a2a1093e933c6754f812b1838817be0"
 dependencies = [
  "wit-bindgen",
 ]
@@ -1876,6 +1877,15 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "scope-workbench"
+version = "0.1.0"
+dependencies = [
+ "scope-ide",
+ "scope-script",
+ "tempfile",
 ]
 
 [[package]]

@@ -66,6 +66,48 @@ impl Drop for RawGuard {
     }
 }
 
+/// Validate host edits using the same UTF-8 rules as terminal completion.
+pub(crate) fn valid_completions(
+    source: &str,
+    items: Vec<crate::language::CompletionItem>,
+) -> Vec<crate::language::CompletionItem> {
+    items
+        .into_iter()
+        .filter(|item| {
+            item.replacement.start <= item.replacement.end
+                && source.is_char_boundary(item.replacement.start)
+                && source.is_char_boundary(item.replacement.end)
+        })
+        .collect()
+}
+
+/// Apply one completion with the terminal editor's size and boundary checks.
+pub(crate) fn apply_completion(
+    source: &mut String,
+    cursor: &mut usize,
+    item: crate::language::CompletionItem,
+) -> Result<(), &'static str> {
+    let mut input = Input {
+        line: source.clone(),
+        cursor: *cursor,
+        ..Input::default()
+    };
+    input.complete(vec![item]);
+    if let Some(error) = input.status {
+        return Err(error);
+    }
+    let mut buffer = crate::text::TextBuffer::new(source.as_str());
+    let range = buffer
+        .range_for_span(crate::text::Span::new(0, source.len()))
+        .map_err(|_| "invalid source range")?;
+    buffer
+        .apply_edit(crate::text::TextEdit::replace(range, input.line))
+        .map_err(|_| "invalid completion edit")?;
+    *source = buffer.into_string();
+    *cursor = input.cursor;
+    Ok(())
+}
+
 #[derive(Default)]
 struct Input {
     line: String,
@@ -105,14 +147,7 @@ impl Input {
     }
 
     fn complete(&mut self, items: Vec<crate::language::CompletionItem>) {
-        self.choices = items
-            .into_iter()
-            .filter(|item| {
-                item.replacement.start <= item.replacement.end
-                    && self.line.is_char_boundary(item.replacement.start)
-                    && self.line.is_char_boundary(item.replacement.end)
-            })
-            .collect();
+        self.choices = valid_completions(&self.line, items);
         self.selected = 0;
         if self.choices.len() == 1 {
             self.accept_completion();
@@ -148,9 +183,6 @@ impl Input {
             }
             KeyCode::Enter if key.modifiers.is_empty() => self.accept_completion(),
             KeyCode::Esc => self.choices.clear(),
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.choices.clear()
-            }
             _ => {
                 self.choices.clear();
                 return false;
@@ -760,6 +792,28 @@ mod tests {
         assert_eq!(
             key(&mut input, &mut history, KeyCode::Enter),
             Action::Submit(draft)
+        );
+    }
+
+    #[test]
+    fn ctrl_c_with_completion_cancels_draft_and_resets_history() {
+        let mut input = Input::default();
+        let mut history = CommandHistory::new(10);
+        history.record("old");
+        input.replace("draft".into());
+        ctrl(&mut input, &mut history, 'p');
+        input.complete(vec![candidate(0..3, "one"), candidate(0..3, "two")]);
+        assert_eq!(ctrl(&mut input, &mut history, 'c'), Action::Cancel);
+        assert!(input.line.is_empty());
+        assert!(input.choices.is_empty());
+        assert_eq!(input.cursor, 0);
+        assert!(input.status.is_none());
+        ctrl(&mut input, &mut history, 'n');
+        assert!(input.line.is_empty());
+        input.insert("help");
+        assert_eq!(
+            key(&mut input, &mut history, KeyCode::Enter),
+            Action::Submit("help".into())
         );
     }
 

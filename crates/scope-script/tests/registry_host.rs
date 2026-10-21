@@ -318,13 +318,10 @@ fn repl_preserves_bindings_across_lines_with_real_registry_host() {
     scope_script::repl::run(std::io::Cursor::new(input), &mut output, &mut host).unwrap();
     let output = String::from_utf8(output).unwrap();
     assert!(
-        output.contains(&format!("{:?}", Value::String(TEXT.into()))),
+        output.contains(&serde_json::to_string(TEXT).unwrap()),
         "{output}"
     );
-    assert!(
-        output.contains(&format!("=> Integer({})", TEXT.len())),
-        "{output}"
-    );
+    assert!(output.contains(&format!("=> {}", TEXT.len())), "{output}");
     assert!(!output.contains("error"), "{output}");
     assert_eq!(host.results.len(), 1);
     drop(host);

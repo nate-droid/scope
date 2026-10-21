@@ -218,7 +218,7 @@ A downstream host can opt into a fixed contract-backed workflow through
 `cli::run_with_registry_and_editing` and `cli::InteractiveEditConfig`. That shell
 requires configured evaluation and never falls back to unevaluated generation.
 Language registration or REPL session selection alone does not enable it. See
-[host configuration, assurance, and examples](docs/design/M2A_HOST_CONFIGURATION.md).
+host configuration, assurance, and examples (historical reference unavailable in this checkout: `docs/design/M2A_HOST_CONFIGURATION.md`).
 Both routes retain explicit review and acceptance; neither applies or saves automatically.
 
 - `source-propose <JSON>` captures the selected buffer and its current version.
@@ -327,7 +327,8 @@ Missing buffers, inactive sessions, language mismatches, and unsupported session
 providers report errors without implicit selection or fallback evaluation.
 
 For example, select a registered session with `:scope session <language-id>`, open
-source with `:scope open <path>`, edit with `:scope edit` and `:done`, then run
+source with `:scope open <path>`, edit with `:scope edit` and Ctrl-S on a TTY
+(or `:scope edit --commands` and `:done`), then run
 `:scope buffer eval`. Inspect definitions with `:scope describe <symbol>` and save
 independently with `:scope save`. These operations retain the existing provider and
 Workspace capability authorization boundaries.
@@ -336,7 +337,14 @@ Workspace capability authorization boundaries.
 limited to 40 lines and 160 Unicode scalars per line. Control characters are
 escaped for display only. Use the editor's `:show START` to browse later pages.
 
-`:scope edit` enters a language-neutral, line-oriented draft editor:
+On a TTY, `:scope edit` enters a language-neutral raw multiline draft editor.
+Arrows and Home/End move through existing source; Enter inserts a newline,
+Backspace/Delete remove text, Tab inserts a tab, and bracketed paste inserts
+literal source rather than submitting shell commands. Ctrl-S accepts; Ctrl-C
+or Escape cancels. Colon commands are source in this mode, not editor actions.
+
+`:scope edit --commands` explicitly selects the legacy cooked, line-oriented
+draft editor. Non-TTY `:scope edit` also uses command mode:
 
 | Editor command | Action |
 | --- | --- |
@@ -344,11 +352,12 @@ escaped for display only. Use the editor's `:show START` to browse later pages.
 | `:insert TEXT` | Insert text at the cursor, preserving spaces; supports `\n`, `\t`, and `\\` escapes. Also inserts source beginning with a colon. |
 | `:delete COUNT` | Delete Unicode scalars forward, including newlines. |
 | `:show [START]` | Display a bounded numbered page, starting at line 1 by default. |
+| `:complete [INDEX]` | List metadata-only source completions, or apply a current item; does not evaluate or authorize. |
 | `:done` | Keep the draft in the selected buffer; neither saves nor executes. |
 | `:cancel` | Drop the draft, leaving the original text and dirty state unchanged. |
 | `:help` | Display editing commands. |
 
-Other input lines insert literally at the cursor with a trailing newline,
+In command mode, other input lines insert literally at the cursor with a trailing newline,
 including blank lines and indentation. The initial cursor is at the start of the
 buffer. The prompt shows its ID, destination, cursor, and `*` for dirty contents.
 EOF cancels the draft. Unknown colon commands are errors, not source or REPL
@@ -361,13 +370,17 @@ retain text. Dirty close/reload are rejected; `:scope discard` and
 `:scope reload-discard` explicitly authorize losing unsaved contents.
 The existing-file-only Save As restriction above still applies.
 
-**Terminal limitations:** this is a cooked, Enter-submitted command editor, not a
-full-screen editor. There are no document arrow-key motions or custom keybindings;
-use `:at` for document movement and the terminal's line editing for pending input.
-Unicode scalars are preserved, but grapheme-cluster motions are not supported.
-Drafts copy the document in memory; display is bounded, not document size. Multiline
-paste is processed as individual input lines, so colon-leading source should use
-`:insert`. Buffers remain shell-local and are not recovered after process exit.
+Both modes edit a private draft: acceptance creates exactly one buffer revision
+if and only if source changed; cancellation creates none. Neither saves nor
+evaluates. Explicit line/column coordinates are one-based Unicode scalars;
+`TextBuffer` uses UTF-8 byte offsets internally, not terminal display columns.
+
+**Limitations:** Unicode-scalar editing is not grapheme-cluster editing. Drafts
+copy source in memory. In command mode, multiline paste is processed as individual
+input lines, so colon-leading source should use `:insert`; use the raw editor for
+bracketed source paste. Buffers remain shell-local, without crash recovery.
+See the [editing tutorial](docs/scratch-editing.md) and
+[architecture diagnosis](docs/design/SCRATCH_EDITOR_DIAGNOSIS.md).
 
 ## Symbol inspection
 

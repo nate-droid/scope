@@ -1,0 +1,17 @@
+[package]
+name = "scope-workbench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Default unprivileged Scope Script workbench"
+
+[[bin]]
+name = "scope"
+path = "src/main.rs"
+
+[dependencies]
+scope-ide = { path = "../scope-ide" }
+scope-script = { path = "../scope-script" }
+
+[dev-dependencies]
+tempfile = "3"

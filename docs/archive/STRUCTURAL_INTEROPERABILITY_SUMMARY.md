@@ -153,9 +153,9 @@ Do not propose SI6 merely to continue the numbering. Future work should resolve 
 
 - [SI1 — Structural Interoperability Discovery](STRUCTURAL_INTEROPERABILITY_DISCOVERY.md)
 - [SI2 — Structural Interoperability Results](STRUCTURAL_INTEROPERABILITY_RESULTS.md), including the completed authorized follow-up in section 8.
-- [SI3 — Real-consumer interoperability boundary review](STRUCTURAL_INTEROPERABILITY_CONSUMER_REVIEW.md)
-- [SI4 — Contract-first interoperability results](CONTRACT_FIRST_INTEROPERABILITY_RESULTS.md)
-- [SI5 — Downstream contract adoption](DOWNSTREAM_CONTRACT_ADOPTION.md)
+- SI3 — Real-consumer interoperability boundary review (historical reference unavailable in this checkout: `../design/STRUCTURAL_INTEROPERABILITY_CONSUMER_REVIEW.md`)
+- SI4 — Contract-first interoperability results (historical reference unavailable in this checkout: `../design/CONTRACT_FIRST_INTEROPERABILITY_RESULTS.md`)
+- SI5 — Downstream contract adoption (historical reference unavailable in this checkout: `../design/DOWNSTREAM_CONTRACT_ADOPTION.md`)
 
 ### Implementation and experimental evidence
 

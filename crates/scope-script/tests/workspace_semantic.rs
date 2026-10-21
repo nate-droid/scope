@@ -11,7 +11,7 @@ use scope_ide::{
     tool::{AgentSession, ToolCall, ToolEffect, semantic::SemanticToolProvider},
     workspace::{Workspace, WorkspaceError},
 };
-use scope_script::{Host, Interpreter, Value, semantic::SemanticHost};
+use scope_script::{ErrorKind, Host, Interpreter, Value, semantic::SemanticHost};
 use std::sync::atomic::Ordering;
 
 const ACTION: &str = "language.example.declarations.describe_selection";
@@ -279,6 +279,174 @@ fn workspace_semantic_boundaries_do_not_mutate_sources() {
         assert_eq!(
             service.calls.load(Ordering::SeqCst),
             usize::from(case == "partial_selection"),
+            "{case}"
+        );
+        assert_eq!(controller.list().count(), 0, "{case}");
+        assert_unchanged(&dir, &workspace, &document, &before);
+    }
+}
+
+#[test]
+fn ss3_conditionals_preserve_semantic_host_boundaries() {
+    let call = format!("scope.invoke(\"semantic\", \"{ACTION}\", {{}})");
+    let cases = [
+        (
+            "selected",
+            format!("if true {{ let result = {call}; print(result) }} else {{ {call} }}"),
+            Some(true),
+            true,
+            1,
+        ),
+        (
+            "unselected",
+            format!("if false {{ {call} }}\nprint(7)"),
+            None,
+            true,
+            0,
+        ),
+        (
+            "else",
+            format!("if false {{ {call} }} else {{ if true {{ print({call}) }} }}"),
+            Some(true),
+            true,
+            1,
+        ),
+        (
+            "denied",
+            format!("if true {{ {call} }}"),
+            Some(false),
+            true,
+            0,
+        ),
+        (
+            "missing_authority",
+            format!("if true {{ {call} }}"),
+            None,
+            true,
+            0,
+        ),
+        (
+            "source_denied",
+            format!(
+                "if true {{ let result = {call}; print(result); if result.status == \"unauthorized\" {{ print(7) }} }}"
+            ),
+            Some(true),
+            false,
+            0,
+        ),
+        (
+            "strict_field",
+            format!("if true {{ let result = {call}; print(result); result.value.missing }}"),
+            Some(true),
+            true,
+            1,
+        ),
+        (
+            "branch_local",
+            format!("if true {{ let local = {call} }}\nlocal"),
+            Some(true),
+            true,
+            1,
+        ),
+        (
+            "syntax_before_effects",
+            format!("print(7); {call}; if true {{ print(1) }} else {{ let broken = [ }}"),
+            Some(true),
+            true,
+            0,
+        ),
+        (
+            "duplicate_before_effects",
+            format!("print(7); {call}; if true {{ print(1) }} else {{ let x = 1; let x = 2 }}"),
+            Some(true),
+            true,
+            0,
+        ),
+        (
+            "outer_shadow_before_effects",
+            format!("let outer = 1; print(7); {call}; if false {{ if true {{ let outer = 2 }} }}"),
+            Some(true),
+            true,
+            0,
+        ),
+    ];
+    for (case, script, authorization, source_allowed, calls) in cases {
+        let (dir, workspace, mut document) = workspace();
+        let before = document.clone();
+        let service = DeclarationLanguage::default();
+        let mut controller = SourceEditController::default();
+        let mut policy_calls = 0;
+        {
+            let target = DocumentSource::new(&mut document, "example.declarations");
+            let provider = SemanticToolProvider::new(
+                &service,
+                &target,
+                &mut controller,
+                PermittedEditScope::Document(target.source_id()),
+                Some(selection()),
+                |_| {
+                    policy_calls += 1;
+                    source_allowed
+                },
+            )
+            .unwrap();
+            let session = AgentSession::builder().provider(provider).build().unwrap();
+            let mut host = SemanticHost::new(
+                session,
+                ACTION,
+                target.text(),
+                target.version(),
+                authorization,
+            );
+            let mut interpreter = Interpreter::new();
+            let result = interpreter.eval(&script, &mut host);
+            let output = interpreter.take_output();
+            match case {
+                "denied" | "missing_authority" => {
+                    assert!(
+                        matches!(result.unwrap_err().kind, ErrorKind::Tool(_)),
+                        "{case}"
+                    );
+                    assert!(output.is_empty());
+                }
+                "strict_field" | "branch_local" => {
+                    assert!(
+                        matches!(result.unwrap_err().kind, ErrorKind::Runtime(_)),
+                        "{case}"
+                    );
+                    assert_eq!(output.len(), usize::from(case == "strict_field"));
+                }
+                "syntax_before_effects"
+                | "duplicate_before_effects"
+                | "outer_shadow_before_effects" => {
+                    assert!(result.is_err(), "{case}");
+                    assert!(output.is_empty(), "{case}: {output:?}");
+                }
+                "unselected" => {
+                    result.unwrap();
+                    assert_eq!(output, [Value::Integer(7)]);
+                }
+                "source_denied" => {
+                    result.unwrap();
+                    assert_eq!(field(&output[0], "status").as_str(), Some("unauthorized"));
+                    assert_eq!(output[1], Value::Integer(7));
+                }
+                _ => {
+                    result.unwrap();
+                    assert_eq!(output.len(), 1);
+                    assert_eq!(field(&output[0], "status").as_str(), Some("read_only"));
+                    assert_eq!(
+                        field(field(&output[0], "value"), "kind").as_str(),
+                        Some("integer_literal_binding")
+                    );
+                    assert!(interpreter.eval("result", &mut host).is_err());
+                }
+            }
+        }
+        assert_eq!(service.calls.load(Ordering::SeqCst), calls, "{case}");
+        assert_eq!(
+            policy_calls,
+            calls + usize::from(case == "source_denied"),
             "{case}"
         );
         assert_eq!(controller.list().count(), 0, "{case}");

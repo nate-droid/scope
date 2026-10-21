@@ -4,7 +4,7 @@
 
 Two deterministic example-only providers with different semantic models participate through the existing `LanguageService` → `SemanticToolProvider` → `AgentSession` path. No production code, generic interfaces, dependencies, Cell sources, or edit workflows were changed.
 
-This follows the [S1 inventory](design/semantic-inventory.md), reuses the completed [S2 declaration provider](SELECTION_DESCRIPTION.md), and retains the [S3 evidence/authority boundaries](EVIDENCE_VISIBILITY.md). These descriptions are provider observations, not evaluation results, proof, execution, or accepted task assurance.
+This follows the S1 inventory (historical reference unavailable in this checkout: `design/semantic-inventory.md`), reuses the completed S2 declaration provider (historical reference unavailable in this checkout: `SELECTION_DESCRIPTION.md`), and retains the S3 evidence/authority boundaries (historical reference unavailable in this checkout: `EVIDENCE_VISIBILITY.md`). These descriptions are provider observations, not evaluation results, proof, execution, or accepted task assurance.
 
 ## Run
 

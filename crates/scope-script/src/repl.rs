@@ -62,12 +62,15 @@ fn evaluate(
 ) -> io::Result<()> {
     let result = interpreter.eval(line, host);
     for value in interpreter.take_output() {
-        writeln!(output, "{value:?}")?;
+        writeln!(output, "{}", crate::presentation::format_value(&value))?;
     }
     match result {
         Ok(Value::Null) => {}
-        Ok(value) => writeln!(output, "=> {value:?}")?,
-        Err(error) => writeln!(output, "{error}")?,
+        Ok(value) => writeln!(output, "=> {}", crate::presentation::format_value(&value))?,
+        Err(error) => {
+            let (line_number, column) = crate::presentation::source_location(line, error.offset);
+            writeln!(output, "{line_number}:{column}: {error}")?;
+        }
     }
     Ok(())
 }

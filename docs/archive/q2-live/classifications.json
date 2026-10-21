@@ -1,0 +1,200 @@
+[
+  {
+    "run": "1-control",
+    "responses": [
+      {
+        "ordinal": 1,
+        "raw": "{\"type\":\"tool\",\"name\":\"fixture.inspect\",\"arguments\":{\"resource\":\"sealed-card\"}}",
+        "valid_json": true,
+        "exactly_one_object": true,
+        "type": "tool"
+      },
+      {
+        "ordinal": 2,
+        "raw": "{\"type\":\"complete\",\"content\":\"cobalt-orchid-731\"}",
+        "valid_json": true,
+        "exactly_one_object": true,
+        "type": "complete"
+      }
+    ],
+    "parser_decisions": [
+      {
+        "accepted": true,
+        "event": "decision",
+        "kind": "tool",
+        "ordinal": 1
+      },
+      {
+        "accepted": true,
+        "event": "decision",
+        "kind": "complete",
+        "ordinal": 2
+      }
+    ]
+  },
+  {
+    "run": "1-variant",
+    "responses": [
+      {
+        "ordinal": 1,
+        "raw": "{\"type\":\"tool\",\"name\":\"fixture.inspect\",\"arguments\":{\"resource\":\"sealed-card\"}}",
+        "valid_json": true,
+        "exactly_one_object": true,
+        "type": "tool"
+      },
+      {
+        "ordinal": 2,
+        "raw": "{\"type\":\"complete\",\"content\":\"cobalt-orchid-731\"}",
+        "valid_json": true,
+        "exactly_one_object": true,
+        "type": "complete"
+      }
+    ],
+    "parser_decisions": [
+      {
+        "accepted": true,
+        "event": "decision",
+        "kind": "tool",
+        "ordinal": 1
+      },
+      {
+        "accepted": true,
+        "event": "decision",
+        "kind": "complete",
+        "ordinal": 2
+      }
+    ]
+  },
+  {
+    "run": "2-control",
+    "responses": [
+      {
+        "ordinal": 1,
+        "raw": "{\"type\":\"tool\",\"name\":\"fixture.inspect\",\"arguments\":{\"resource\":\"sealed-card\"}}",
+        "valid_json": true,
+        "exactly_one_object": true,
+        "type": "tool"
+      },
+      {
+        "ordinal": 2,
+        "raw": "{\"type\":\"complete\",\"content\":\"cobalt-orchid-731\"}",
+        "valid_json": true,
+        "exactly_one_object": true,
+        "type": "complete"
+      }
+    ],
+    "parser_decisions": [
+      {
+        "accepted": true,
+        "event": "decision",
+        "kind": "tool",
+        "ordinal": 1
+      },
+      {
+        "accepted": true,
+        "event": "decision",
+        "kind": "complete",
+        "ordinal": 2
+      }
+    ]
+  },
+  {
+    "run": "2-variant",
+    "responses": [
+      {
+        "ordinal": 1,
+        "raw": "{\"type\":\"tool\",\"name\":\"fixture.inspect\",\"arguments\":{\"resource\":\"sealed-card\"}}",
+        "valid_json": true,
+        "exactly_one_object": true,
+        "type": "tool"
+      },
+      {
+        "ordinal": 2,
+        "raw": "{\"type\":\"complete\",\"content\":\"cobalt-orchid-731\"}",
+        "valid_json": true,
+        "exactly_one_object": true,
+        "type": "complete"
+      }
+    ],
+    "parser_decisions": [
+      {
+        "accepted": true,
+        "event": "decision",
+        "kind": "tool",
+        "ordinal": 1
+      },
+      {
+        "accepted": true,
+        "event": "decision",
+        "kind": "complete",
+        "ordinal": 2
+      }
+    ]
+  },
+  {
+    "run": "3-control",
+    "responses": [
+      {
+        "ordinal": 1,
+        "raw": "{\"type\":\"tool\",\"name\":\"fixture.inspect\",\"arguments\":{\"resource\":\"sealed-card\"}}",
+        "valid_json": true,
+        "exactly_one_object": true,
+        "type": "tool"
+      },
+      {
+        "ordinal": 2,
+        "raw": "{\"type\":\"complete\",\"content\":\"cobalt-orchid-731\"}",
+        "valid_json": true,
+        "exactly_one_object": true,
+        "type": "complete"
+      }
+    ],
+    "parser_decisions": [
+      {
+        "accepted": true,
+        "event": "decision",
+        "kind": "tool",
+        "ordinal": 1
+      },
+      {
+        "accepted": true,
+        "event": "decision",
+        "kind": "complete",
+        "ordinal": 2
+      }
+    ]
+  },
+  {
+    "run": "3-variant",
+    "responses": [
+      {
+        "ordinal": 1,
+        "raw": "{\"type\":\"tool\",\"name\":\"fixture.inspect\",\"arguments\":{\"resource\":\"sealed-card\"}}",
+        "valid_json": true,
+        "exactly_one_object": true,
+        "type": "tool"
+      },
+      {
+        "ordinal": 2,
+        "raw": "{\"type\":\"complete\",\"content\":\"cobalt-orchid-731\"}",
+        "valid_json": true,
+        "exactly_one_object": true,
+        "type": "complete"
+      }
+    ],
+    "parser_decisions": [
+      {
+        "accepted": true,
+        "event": "decision",
+        "kind": "tool",
+        "ordinal": 1
+      },
+      {
+        "accepted": true,
+        "event": "decision",
+        "kind": "complete",
+        "ordinal": 2
+      }
+    ]
+  }
+]

@@ -6,11 +6,11 @@ license.workspace = true
 description = "A capability-oriented semantic development environment built on Cell"
 
 [features]
-default = []
+default = ["tools"]
 tools = []
 logging = ["dep:cell-capability-log"]
 agent = ["tools", "dep:cell-capability-openai", "dep:serde"]
-tui = ["dep:ratatui"]
+tui = ["dep:ratatui", "tools"]
 
 [[example]]
 name = "native_logging"
@@ -37,3 +37,7 @@ ratatui = { version = "0.29", optional = true, features = ["unstable-rendered-li
 
 [dev-dependencies]
 scope-types = { path = "../scope-types" }
+
+[[example]]
+name = "interactive_semantic_inspection"
+required-features = ["tui"]

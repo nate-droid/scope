@@ -1,4 +1,5 @@
 use super::*;
+use crate::source_edit::SourceId;
 use crate::task_contract::{Acceptance, AssurancePolicy, TaskContract, TaskCriterion};
 use scope_language::*;
 use std::{cell::Cell, collections::VecDeque, sync::Mutex};

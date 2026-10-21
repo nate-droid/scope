@@ -1,11 +1,14 @@
-//! A bounded, synchronous expression interpreter. Offsets are UTF-8 byte offsets.
+//! A bounded, synchronous interpreter. Offsets are UTF-8 byte offsets.
 //! Bindings and printed values persist between evaluations. Runtime failures keep
 //! earlier successful statements and host effects; syntax failures execute nothing.
 pub mod completion;
 pub mod host;
 mod parser;
+pub mod presentation;
 pub mod repl;
+pub mod runner;
 pub mod semantic;
+pub mod workbench;
 
 pub use scope_ide::tool::ToolValue as Value;
 use scope_ide::tool::operations::OperationError;
@@ -78,7 +81,10 @@ fn runtime(message: &str) -> ErrorKind {
     ErrorKind::Runtime(message.into())
 }
 fn reserved(name: &str) -> bool {
-    matches!(name, "scope" | "print" | "let" | "true" | "false" | "null")
+    matches!(
+        name,
+        "scope" | "print" | "let" | "if" | "else" | "true" | "false" | "null"
+    )
 }
 
 const MAX_WORK: usize = 1_000_000;
@@ -104,34 +110,66 @@ impl Interpreter {
     pub fn eval(&mut self, source: &str, host: &mut impl Host) -> Result<Value, Error> {
         let statements = parser::parse(source)?;
         // Reject known rebinding before any host effects, including duplicates in this program.
-        let mut names = std::collections::BTreeSet::new();
-        for statement in &statements {
-            if let Some(name) = &statement.binding {
-                if self.bindings.contains_key(name) || !names.insert(name) {
-                    return Err(Error {
-                        offset: statement.offset,
-                        kind: runtime("binding already exists"),
-                    });
-                }
-            }
-        }
+        let names = self.bindings.keys().cloned().collect();
+        check_bindings(&statements, &names)?;
         let mut budget = Budget {
             steps: MAX_STEPS,
             work: MAX_WORK,
         };
+        self.statements(&statements, host, &mut budget)
+    }
+    fn statements(
+        &mut self,
+        statements: &[parser::Statement],
+        host: &mut impl Host,
+        budget: &mut Budget,
+    ) -> Result<Value, Error> {
         let mut result = Value::Null;
         for statement in statements {
-            result = self.expression(&statement.expr, host, &mut budget)?;
-            if let Some(name) = statement.binding {
-                let size = value_size(&result, 0).map_err(|kind| Error {
-                    offset: statement.offset,
-                    kind,
-                })? + name.len();
-                self.retain(size).map_err(|kind| Error {
-                    offset: statement.offset,
-                    kind,
-                })?;
-                self.bindings.insert(name, result.clone());
+            match statement {
+                parser::Statement::Expression {
+                    binding,
+                    expr,
+                    offset,
+                } => {
+                    result = self.expression(expr, host, budget)?;
+                    if let Some(name) = binding {
+                        let size = value_size(&result, 0).map_err(|kind| Error {
+                            offset: *offset,
+                            kind,
+                        })? + name.len();
+                        self.retain(size).map_err(|kind| Error {
+                            offset: *offset,
+                            kind,
+                        })?;
+                        self.bindings.insert(name.clone(), result.clone());
+                    }
+                }
+                parser::Statement::If { condition, yes, no } => {
+                    let value = self.expression(condition, host, budget)?;
+                    let Value::Boolean(selected) = value else {
+                        return Err(Error {
+                            offset: condition.offset,
+                            kind: runtime("if condition must be boolean"),
+                        });
+                    };
+                    let previous: std::collections::BTreeSet<_> =
+                        self.bindings.keys().cloned().collect();
+                    let outcome = self.statements(if selected { yes } else { no }, host, budget);
+                    // Clean up locals even on failure; prints and host effects remain.
+                    self.bindings.retain(|name, value| {
+                        if previous.contains(name) {
+                            true
+                        } else {
+                            self.retained -= value_size(value, 0)
+                                .expect("retained binding was bounded")
+                                + name.len();
+                            false
+                        }
+                    });
+                    outcome?;
+                    result = Value::Null;
+                }
             }
         }
         Ok(result)
@@ -269,6 +307,36 @@ impl Interpreter {
         budget.charge(&value).map_err(at)?;
         Ok(value)
     }
+}
+fn check_bindings(
+    statements: &[parser::Statement],
+    outer: &std::collections::BTreeSet<String>,
+) -> Result<(), Error> {
+    // Reserve every binding in this lexical scope before checking children, so
+    // shadowing does not depend on the order of outer declarations.
+    let mut names = outer.clone();
+    for statement in statements {
+        if let parser::Statement::Expression {
+            binding: Some(name),
+            offset,
+            ..
+        } = statement
+        {
+            if !names.insert(name.clone()) {
+                return Err(Error {
+                    offset: *offset,
+                    kind: runtime("binding already exists"),
+                });
+            }
+        }
+    }
+    for statement in statements {
+        if let parser::Statement::If { yes, no, .. } = statement {
+            check_bindings(yes, &names)?;
+            check_bindings(no, &names)?;
+        }
+    }
+    Ok(())
 }
 struct Budget {
     steps: usize,
@@ -411,6 +479,74 @@ mod tests {
         ] {
             assert!(i.eval(source, &mut h).is_err(), "{source}");
         }
+    }
+    #[test]
+    fn conditional_scopes_offsets_and_persistence() {
+        let mut i = Interpreter::new();
+        let mut h = TestHost::default();
+        i.eval("let baseline = 42", &mut h).unwrap();
+        i.eval("if baseline > 0 {\n let local = {items: [true, null]}\n if local.items[0] { print(local) } else { scope.operations() }\n}\nprint(baseline)", &mut h).unwrap();
+        assert_eq!(h.calls, 0);
+        assert_eq!(i.take_output().len(), 2);
+        assert!(i.eval("local", &mut h).is_err());
+        for source in [
+            "if 1 { print(1) }",
+            "if null {}",
+            "if [] {}",
+            "if {} {}",
+            "if true { let baseline = 2 }",
+            "if false { let x = 1; let x = 2 }",
+            "scope.operations(); if false { print([) }",
+        ] {
+            assert!(i.eval(source, &mut h).is_err(), "{source}");
+        }
+        assert_eq!(h.calls, 0);
+        let source = "if true { let temporary = 1; print(temporary); missing.field }";
+        let error = i.eval(source, &mut h).unwrap_err();
+        assert_eq!(error.offset, source.find("missing").unwrap());
+        assert_eq!(i.take_output(), vec![Value::Integer(1)]);
+        assert!(i.eval("temporary", &mut h).is_err());
+        i.eval(
+            "if false { let same = 1 } else { let same = 2; print(same) }",
+            &mut h,
+        )
+        .unwrap();
+        assert_eq!(i.take_output(), vec![Value::Integer(2)]);
+        assert_eq!(i.eval("baseline", &mut h).unwrap(), Value::Integer(42));
+        assert!(
+            i.eval(
+                &format!("{}{}", "if true {".repeat(65), "}".repeat(65)),
+                &mut h
+            )
+            .is_err()
+        );
+        // All selected expressions share the existing work budget.
+        i.eval(&format!("let large = \"{}\"", "x".repeat(60_000)), &mut h)
+            .unwrap();
+        let source = format!("if true {{ {} }}", "large;".repeat(30));
+        assert!(matches!(
+            i.eval(&source, &mut h).unwrap_err().kind,
+            ErrorKind::LimitExceeded
+        ));
+        // A skipped branch consumes no expression work or host calls.
+        i.eval(&source.replacen("true", "false", 1), &mut h)
+            .unwrap();
+    }
+    #[test]
+    fn conditional_step_budget_is_shared() {
+        let mut i = Interpreter::new();
+        let mut h = TestHost::default();
+        let statements = parser::parse("if true { if true { 1 } }").unwrap();
+        let mut budget = Budget {
+            steps: 2,
+            work: MAX_WORK,
+        };
+        assert!(matches!(
+            i.statements(&statements, &mut h, &mut budget)
+                .unwrap_err()
+                .kind,
+            ErrorKind::LimitExceeded
+        ));
     }
     #[test]
     fn resource_limits() {

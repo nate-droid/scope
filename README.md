@@ -1,171 +1,89 @@
 # Scope
 
-**A development environment where humans and agents can work with a project's meaning—not just its files.**
+Scope is an experimental, capability-oriented development environment. Projects
+supply language semantics and typed operations; Scope provides discovery,
+composition, workspace inspection, and human/agent orchestration. [Cell](https://github.com/nate-droid/cell)
+provides WebAssembly execution and capability enforcement.
 
-Scope is a language-agnostic toolkit for building development environments, language tools, and constrained agent workflows. It gives projects a way to expose **discoverable, typed operations** so that a person, CLI, or agent can inspect what a project can do and use those operations without hardcoding its language or domain into the host.
+## Five minutes: Script workbench
 
-Scope runs executable WebAssembly components through [Cell](https://github.com/nate-droid/cell), which provides explicit capability and resource boundaries.
+From this checkout's root, with the [development prerequisites](docs/development.md):
 
-> **The guiding idea:** Projects own their semantics. Scope owns discovery, typed composition, and orchestration. Cell owns execution and capability enforcement.
+```sh
+cargo run
+```
 
-## Why Scope?
-
-Most development tools treat a project primarily as source files and commands. That works, but a tool or agent often has to rediscover the project's meaning from text: What can be inspected? Which transformation is valid? What inputs does it need? What is safe to run?
-
-Scope explores another approach: **let projects describe the operations they support.** A compiler can expose parsing and code generation. A proof system can expose verification. A simulator can expose state transitions. Scope can discover those operations and connect compatible ones without needing to understand each domain itself.
-
-For example, a compiler project might provide:
+DX4 uses the `scope-workbench` package (binary `scope`), which depends on
+`scope-ide` and `scope-script`. This starts the Script workbench shell in the current directory. The workspace must
+already exist; startup does not create it. Workspace access is read-only by
+default. To enable saves, opt in with `cargo run -- --writable shell`.
+At the prompt:
 
 ```text
-Source text → Parse → Syntax tree → Generate → WASM module
+:scope scratch new script
+:scope edit --commands
+let experiment = {name: "daily", samples: [2, 4, 6]}
+let total = experiment.samples[0] + experiment.samples[1] + experiment.samples[2]
+if total == 12 {
+    print({name: experiment.name, total: total, status: "ok"})
+} else {
+    print({name: experiment.name, total: total, status: "unexpected"})
+}
+:done
+:scope script run
+:scope quit
 ```
 
-A proof project might provide:
+The transcript uses `:scope edit --commands` for explicit cooked lines; `:done`
+commits the draft to memory, not disk. On a TTY, plain `:scope edit` opens the
+multiline keyboard editor: arrows/Home/End move, Enter inserts a newline,
+Backspace/Delete remove text, Tab inserts a tab, and bracketed paste inserts source.
+Ctrl-S accepts; Ctrl-C or Escape cancels. Non-TTY input defaults to commands.
+Use `:at LINE COLUMN`, `:delete COUNT`, and `:insert TEXT` inside the editor.
+`:complete` lists source completions from fresh Script metadata, without live
+bindings; `:complete INDEX` applies a listed completion in command mode. See the
+[short editing tutorial](docs/scratch-editing.md) and [getting started](docs/getting-started.md).
+
+`:scope script run` evaluates selected scratch source with a fresh interpreter
+and `NoHost` on every invocation. It neither saves source nor writes results.
+`:scope run` remains a separate, configured downstream semantic runner; Scope
+Simple (`scope.simple`) is analysis, not Script execution or semantic acceptance.
+Optional agent/model and TUI integrations are not needed for this path. The
+`tools` feature does not grant write authority.
+
+The same runnable source is [examples/workbench.scope](examples/workbench.scope).
+Run it separately with the standalone CLI:
+
+```sh
+cargo run -p scope-script -- examples/workbench.scope
+```
+
+Expected output:
 
 ```text
-Proof candidates → Verify → Checked results → Fitness → Report
+{"name": "daily", "status": "ok", "total": 12}
 ```
 
-The projects define what these steps mean. Scope checks the contracts and connections; Cell executes the bound components under the host's approved policies. **Matching types does not, by itself, prove a result is correct.**
+Edit the file in your editor, save, and rerun. Each file execution uses a fresh
+interpreter with **no host providers or authority**. A `.scope` suffix does not
+install a language, select a host, or grant workspace access.
 
-## What works today
+## Where to go next
 
-Scope is experimental, but its foundations are usable:
+- [Getting started](docs/getting-started.md): exact CLI forms and shell workflow.
+- [Scope Script](docs/scope-script.md): file execution, REPL, output, explicit hosts.
+- [Architecture](docs/architecture.md): responsibilities and authority boundaries.
+- [Development](docs/development.md): Rust, Cell `v0.0.2`, build and validation commands.
+- [Downstream Guide](DOWNSTREAM_GUIDE.md): Rust embedding and language registration.
+- [Harness Guide](HARNESS_GUIDE.md): tool dispatch, authorization, and agent loops.
+- [Security](SECURITY.md) and [Contributing](CONTRIBUTING.md).
 
-- **Typed compositions.** Describe versioned types, ports, and transformation graphs; validate connections; discover compatible pipelines; and execute bound, acyclic WASM pipelines through Cell.
-- **Semantic workspace inspection.** Build revision-aware structural snapshots, source references, and read-only queries without requiring a model.
-- **Language and project extensions.** Register domain-specific language services and semantic tools from downstream Rust crates instead of embedding every language in Scope.
-- **Tools for agents.** Discover structured tools, authorize concrete calls, and run bounded model-driven decision loops. CLI and shell agent tools are read-only by default.
-- **Reviewable text proposals.** Work with bounded, approved-path snapshots; produce replacement proposals; review the before/after text; and explicitly accept or discard changes, with conflict checks.
-- **Human interfaces.** Use a CLI, interactive shell, or optional experimental TUI. Registered interactive language evaluators can support stateful sessions.
-
-Some important limits: downstream language services currently run as trusted native Rust code, not automatically as sandboxed WASM; accepting multiple proposed text changes is sequential rather than atomic; and the TUI is mainly a browsing interface, not a full editor.
-
-For a small downstream terminal scripting experiment, see [Scope Script](crates/scope-script/README.md): a REPL, local script execution, and explicitly authorized read-only workspace examples. Scope does not depend on its interpreter.
-
-## Built with Scope
-
-These experiments live **outside** Scope. They exercise the common infrastructure without making their domain logic part of the framework.
-
-| Project | What it explores |
-| --- | --- |
-| **Glyph** | Language-specific semantics through typed transformations. |
-| **Proof Garden** | A proof-search pipeline with independent WASM verification and fitness components. |
-| **Xpr** | Parsing and code generation as WASM components, producing executable WASM for Cell. |
-
-The goal is to make new experiments possible by composing familiar building blocks, rather than modifying Scope for every new language or project.
-
-## How it fits together
-
-```text
-         Human / CLI / Agent
-                 │
-               Scope
-       discovery · types · tools
-        composition · review
-                 │
-                Cell
-       WASM runtime · capabilities
-          resource policies
-                 │
-       Downstream components
-   compilers · checkers · simulators
-```
-
-There are three distinct choices in a runnable pipeline:
-
-1. **Composition:** What operations are connected?
-2. **Binding:** Which component implements each operation?
-3. **Execution policy:** What may those components access?
-
-A composition description does **not** automatically supply executable components, inputs, or permissions. Scope can plan and validate; Cell is responsible for enforcing runtime capabilities.
-
-## Try it
-
-For prerequisites and repository setup, start with [Building Scope with Cell](BUILDING_WITH_CELL.md). Cell is available at [nate-droid/cell](https://github.com/nate-droid/cell), and this workspace uses its `v0.0.1` tag; a sibling Cell checkout is not required.
-
-From the Scope workspace, explore the CLI and shell:
-
-```sh
-# Inspect the available host interfaces
-cargo run -p scope-ide -- --workspace . capabilities
-
-# Take a bounded structural snapshot
-cargo run -p scope-ide -- --workspace . meta --max-entries 10000 --max-depth 64
-
-# Open the interactive shell
-cargo run -p scope-ide -- open .
-```
-
-Run a small typed-composition example:
-
-```sh
-cargo run -p scope-types --example composition --offline
-cargo run -p scope-execution --example text_pipeline -- 'Hello component world'
-```
-
-The execution example connects a text transformation and word count using Cell-backed WASM components. Its text-processing semantics live in those components, not in Scope.
-
-### Experiment with an agent
-
-Agent integration is opt-in and uses a host-configured OpenAI-compatible model endpoint:
-
-```sh
-cargo run -p scope-ide --features agent -- \
-  --workspace . agent --open README.md 'summarize this file'
-```
-
-This uses Scope's bounded tool-decision loop. **The default CLI/shell agent policy does not allow writes**, even if the workspace itself is writable. Model credentials and provider configuration stay with the host; see [Building Scope with Cell](BUILDING_WITH_CELL.md) and the [Harness Guide](HARNESS_GUIDE.md).
-
-### Explore the experimental TUI
-
-```sh
-cargo run -p scope-ide --features tui -- tui .
-```
-
-The TUI supports browsing files and language information, navigation, and optional custom panes. Full editing and multi-document buffers are not implemented yet.
-
-## Build on Scope
-
-Scope is intended to be extended by other projects. A downstream language can implement `scope_language::LanguageService` and register it with Scope's CLI or app builder. Dynamic plugin loading is not yet available.
-
-You can scaffold an independent starter language crate:
-
-```sh
-cargo run -p xtask -- new-language ../scope-calc-language \
-  --extension calc --id example.calc --name Calc --with-runner
-```
-
-For the integration model and examples, read the [Downstream Guide](DOWNSTREAM_GUIDE.md). If you're interested in agent tool registration, policy, and the bounded decision loop, start with the [Harness Guide](HARNESS_GUIDE.md).
-
-## Where it's going
-
-The next step is a **constrained development session**: an agent discovers project operations, inspects an approved workspace snapshot, proposes a change, runs the project's registered validation tools, and presents the results for human review.
-
-Xpr is the intended first end-to-end example. The goal is not to teach Scope how Xpr works, but to prove that a generic development workflow can use Xpr's own compiler and tests. Later, the same ideas could support more ambitious work—including using Scope to develop parts of Scope itself.
-
-The isolated text-proposal foundation already exists. The complete compile/test/review workflow described here is **planned**, not a current end-to-end feature.
-
-## Design philosophy
-
-- **Projects own meaning.** Scope should not contain special cases for every compiler, prover, or simulator.
-- **Authority is explicit.** Discovering an operation is not permission to execute it.
-- **Types make composition inspectable.** Connections and errors should be understandable before execution where possible.
-- **Humans stay in control.** Agents and human interfaces share the same underlying operations, with explicit authorization and review.
-- **Build from real use cases.** Add generic abstractions when downstream projects demonstrate their value.
-
-Scope is not aiming to replace a mature text editor, offer an unrestricted shell, or become a universal autonomous agent. It is an experiment in the smallest useful layer for **semantic tools and safely orchestrated development workflows**.
-
-## Documentation
-
-- [Building Scope with Cell](BUILDING_WITH_CELL.md) — setup, local development, and validation.
-- [Downstream Guide](DOWNSTREAM_GUIDE.md) — embedding Scope, language integration, and isolated text proposals.
-- [Harness Guide](HARNESS_GUIDE.md) — tool discovery, agent sessions, and policy.
-- [Interactive Sessions](INTERACTIVE_SESSIONS.md) — registering and using interactive evaluators.
-- [UX Design Charter](docs/design/UX_CHARTER.md) — design principles for human and agent interfaces.
-- [`scope-meta`](crates/scope-meta/README.md), [`scope-types`](crates/scope-types/README.md), and [`scope-execution`](crates/scope-execution/README.md) — subsystem details.
-- [Contributing](CONTRIBUTING.md) and [Security](SECURITY.md) — contributions and vulnerability reporting.
+Scope supports typed composition, bounded metadata snapshots, registered semantic
+reads, and reviewable text proposals. These are building blocks, not a complete
+autonomous compile/test/review workflow. Native language services are trusted host
+code, not automatically sandboxed WASM. See [architecture](docs/architecture.md)
+for current limits.
 
 ## License
 
-Scope is licensed under the [MIT License](LICENSE). Dependencies, including Cell, have their own licenses.
+[MIT](LICENSE). Dependencies, including Cell, have their own licenses.

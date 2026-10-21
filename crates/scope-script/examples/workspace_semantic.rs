@@ -12,9 +12,15 @@ use scope_script::{Interpreter, semantic::SemanticHost};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    if args.len() != 2 || args[0] != "--allow-read" {
-        return Err("usage: workspace_semantic --allow-read ROOT (opens example.decl)".into());
+    if !(2..=3).contains(&args.len()) || args[0] != "--allow-read" {
+        return Err(
+            "usage: workspace_semantic --allow-read ROOT [SCRIPT] (opens example.decl)".into(),
+        );
     }
+    let script = match args.get(2) {
+        Some(path) => std::fs::read_to_string(path)?,
+        None => include_str!("workspace_semantic.scope").to_owned(),
+    };
     let workspace = Workspace::read_only(&args[1])?;
     let file = workspace.load_file_revision("example.decl")?;
     let mut document = Document::from_revisioned_workspace_file(DocumentId::new(1), file);
@@ -40,7 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(true),
         );
         let mut interpreter = Interpreter::new();
-        interpreter.eval(include_str!("workspace_semantic.scope"), &mut host)?;
+        interpreter.eval(&script, &mut host)?;
         for value in interpreter.take_output() {
             println!("{value:?}");
         }

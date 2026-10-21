@@ -478,7 +478,13 @@ fn stale_configured_proposal_cannot_overwrite_intervening_edit() {
         proposals.controller.get(ProposalId(1)).unwrap().status(),
         ProposalStatus::Pending
     );
-    assert!(output.is_empty());
+    assert_eq!(
+        String::from_utf8(output).unwrap(),
+        format!(
+            "target: {} (proposal baseline; path is destination context only)\n",
+            super::target_label(buffers.selected().unwrap().source_id(), 0)
+        )
+    );
 }
 
 #[test]

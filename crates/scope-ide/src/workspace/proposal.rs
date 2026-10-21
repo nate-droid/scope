@@ -2,10 +2,8 @@
 #[cfg(test)]
 #[path = "proposal_tests.rs"]
 mod tests;
+use cell_capability_fs::{FileType, FsError, FsErrorKind, SaveOutcome};
 use std::collections::BTreeMap;
-use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
 
 use super::Workspace;
 use crate::path::ScopePath;
@@ -34,17 +32,53 @@ pub struct ProposalChange {
     pub after: String,
 }
 
+/// Cell failures retain their original category, logical path, and operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ProposalErrorKind {
+    Cell(FsError),
+    Policy,
+    NonRegularFile,
+    Budget,
+    NulText,
+    Missing,
+    Conflict,
+    Closed,
+}
+
+/// `.0` and Display retain the human-readable message. Construct Scope errors
+/// with `new`; Cell errors convert with `From<FsError>` without losing detail.
 #[derive(Debug)]
-pub struct ProposalError(pub String);
+pub struct ProposalError(pub String, ProposalErrorKind);
+impl ProposalError {
+    pub fn new(kind: ProposalErrorKind, message: impl Into<String>) -> Self {
+        Self(message.into(), kind)
+    }
+
+    pub fn kind(&self) -> &ProposalErrorKind {
+        &self.1
+    }
+
+    pub fn fs_error(&self) -> Option<&FsError> {
+        match &self.1 {
+            ProposalErrorKind::Cell(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 impl std::fmt::Display for ProposalError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
     }
 }
-impl std::error::Error for ProposalError {}
-impl From<std::io::Error> for ProposalError {
-    fn from(error: std::io::Error) -> Self {
-        Self(error.to_string())
+impl std::error::Error for ProposalError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.fs_error().map(|error| error as &dyn std::error::Error)
+    }
+}
+impl From<FsError> for ProposalError {
+    fn from(error: FsError) -> Self {
+        Self(error.to_string(), ProposalErrorKind::Cell(error))
     }
 }
 
@@ -59,24 +93,26 @@ pub struct Acceptance {
 #[derive(Debug)]
 struct File {
     before: Option<String>,
+    revision: Option<String>,
     after: Option<String>,
     version: u64,
 }
 
 #[derive(Debug)]
 pub struct Proposal {
-    root: PathBuf,
+    workspace: Workspace,
     writable: bool,
     files: BTreeMap<ScopePath, File>,
     limits: ProposalLimits,
     closed: bool,
 }
 
-fn checked_path(root: &Path, path: &ScopePath) -> Result<PathBuf, ProposalError> {
-    let root_metadata = fs::symlink_metadata(root)?;
-    if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
-        return Err(ProposalError(
-            "snapshot root is no longer a regular directory".into(),
+fn checked_path(workspace: &Workspace, path: &ScopePath) -> Result<String, ProposalError> {
+    let root_metadata = workspace.fs.symlink_metadata(super::DEFAULT_MOUNT_NAME)?;
+    if !matches!(root_metadata.file_type, FileType::Directory) {
+        return Err(ProposalError::new(
+            ProposalErrorKind::NonRegularFile,
+            "snapshot root is no longer a regular directory",
         ));
     }
     if path.as_str() == "."
@@ -85,47 +121,60 @@ fn checked_path(root: &Path, path: &ScopePath) -> Result<PathBuf, ProposalError>
             .split('/')
             .any(|part| matches!(part, ".git" | "target" | "build" | "node_modules"))
     {
-        return Err(ProposalError("excluded proposal path".into()));
+        return Err(ProposalError::new(
+            ProposalErrorKind::Policy,
+            "excluded proposal path",
+        ));
     }
-    let mut full = root.to_path_buf();
+    let mut full = super::DEFAULT_MOUNT_NAME.to_string();
     let parts: Vec<_> = path.as_str().split('/').collect();
     for (index, part) in parts.iter().enumerate() {
-        full.push(part);
-        match fs::symlink_metadata(&full) {
-            Ok(meta) if meta.file_type().is_symlink() => {
-                return Err(ProposalError("symlinks are not allowed".into()));
+        full.push('/');
+        full.push_str(part);
+        match workspace.fs.symlink_metadata(&full) {
+            Ok(meta) if matches!(meta.file_type, FileType::Symlink) => {
+                return Err(ProposalError::new(
+                    ProposalErrorKind::Policy,
+                    "symlinks are not allowed",
+                ));
             }
-            Ok(meta) if index + 1 < parts.len() && !meta.is_dir() => {
-                return Err(ProposalError("parent is not a directory".into()));
+            Ok(meta)
+                if index + 1 < parts.len() && !matches!(meta.file_type, FileType::Directory) =>
+            {
+                return Err(ProposalError::new(
+                    ProposalErrorKind::NonRegularFile,
+                    "parent is not a directory",
+                ));
             }
-            Ok(meta) if index + 1 == parts.len() && !meta.is_file() => {
-                return Err(ProposalError("not a regular file".into()));
+            Ok(meta) if index + 1 == parts.len() && !matches!(meta.file_type, FileType::File) => {
+                return Err(ProposalError::new(
+                    ProposalErrorKind::NonRegularFile,
+                    "not a regular file",
+                ));
             }
             Ok(_) => {}
-            Err(error)
-                if error.kind() == std::io::ErrorKind::NotFound && index + 1 == parts.len() => {}
+            Err(error) if error.kind == FsErrorKind::NotFound && index + 1 == parts.len() => {}
             Err(error) => return Err(error.into()),
         }
     }
     Ok(full)
 }
 
-fn read_text(path: &Path, limit: usize) -> Result<Option<String>, ProposalError> {
-    let file = match fs::File::open(path) {
+fn read_text(
+    workspace: &Workspace,
+    path: &str,
+    limit: usize,
+) -> Result<Option<cell_capability_fs::RevisionedText>, ProposalError> {
+    let text = match workspace.fs.read_text_revision_bounded(path, limit) {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind == FsErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    let mut bytes = Vec::new();
-    file.take(limit.saturating_add(1) as u64)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > limit {
-        return Err(ProposalError("file byte budget exceeded".into()));
-    }
-    let text = String::from_utf8(bytes)
-        .map_err(|_| ProposalError("binary/non-UTF-8 file rejected".into()))?;
-    if text.contains('\0') {
-        return Err(ProposalError("binary/NUL text rejected".into()));
+    if text.contents.contains('\0') {
+        return Err(ProposalError::new(
+            ProposalErrorKind::NulText,
+            "binary/NUL text rejected",
+        ));
     }
     Ok(Some(text))
 }
@@ -139,16 +188,30 @@ impl Proposal {
         limits: ProposalLimits,
     ) -> Result<Self, ProposalError> {
         if paths.len() > limits.max_files {
-            return Err(ProposalError("file budget exceeded".into()));
+            return Err(ProposalError::new(
+                ProposalErrorKind::Budget,
+                "file budget exceeded",
+            ));
         }
-        let root = fs::canonicalize(workspace.root())?;
+
         let mut files = BTreeMap::new();
         let mut total = 0usize;
         for path in paths {
-            let before = read_text(&checked_path(&root, path)?, limits.max_file_bytes)?;
+            let snapshot = read_text(
+                workspace,
+                &checked_path(workspace, path)?,
+                limits.max_file_bytes,
+            )?;
+            let (before, revision) = match snapshot {
+                Some(file) => (Some(file.contents), Some(file.revision)),
+                None => (None, None),
+            };
             total = total.saturating_add(before.as_ref().map_or(0, String::len));
             if total > limits.max_total_bytes {
-                return Err(ProposalError("snapshot byte budget exceeded".into()));
+                return Err(ProposalError::new(
+                    ProposalErrorKind::Budget,
+                    "snapshot byte budget exceeded",
+                ));
             }
             if files
                 .insert(
@@ -156,16 +219,20 @@ impl Proposal {
                     File {
                         after: before.clone(),
                         before,
+                        revision,
                         version: 0,
                     },
                 )
                 .is_some()
             {
-                return Err(ProposalError("duplicate approved path".into()));
+                return Err(ProposalError::new(
+                    ProposalErrorKind::Policy,
+                    "duplicate approved path",
+                ));
             }
         }
         Ok(Self {
-            root,
+            workspace: workspace.clone(),
             writable: workspace.writable,
             files,
             limits,
@@ -175,7 +242,10 @@ impl Proposal {
 
     fn active(&self) -> Result<(), ProposalError> {
         if self.closed {
-            Err(ProposalError("proposal is closed".into()))
+            Err(ProposalError::new(
+                ProposalErrorKind::Closed,
+                "proposal is closed",
+            ))
         } else {
             Ok(())
         }
@@ -190,11 +260,14 @@ impl Proposal {
         let file = self
             .files
             .get(path)
-            .ok_or_else(|| ProposalError("path not approved".into()))?;
+            .ok_or_else(|| ProposalError::new(ProposalErrorKind::Policy, "path not approved"))?;
         Ok((
-            file.after
-                .as_deref()
-                .ok_or_else(|| ProposalError("file does not exist in proposal".into()))?,
+            file.after.as_deref().ok_or_else(|| {
+                ProposalError::new(
+                    ProposalErrorKind::Missing,
+                    "file does not exist in proposal",
+                )
+            })?,
             file.version,
         ))
     }
@@ -209,11 +282,14 @@ impl Proposal {
         let file = self
             .files
             .get(path)
-            .ok_or_else(|| ProposalError("path not approved".into()))?;
+            .ok_or_else(|| ProposalError::new(ProposalErrorKind::Policy, "path not approved"))?;
         if expected.map_or(file.after.is_some(), |version| {
             file.after.is_none() || file.version != version
         }) {
-            return Err(ProposalError("creation/revision conflict".into()));
+            return Err(ProposalError::new(
+                ProposalErrorKind::Conflict,
+                "creation/revision conflict",
+            ));
         }
         let total = self
             .files
@@ -223,10 +299,16 @@ impl Proposal {
             .sum::<usize>();
         if text.len() > self.limits.max_file_bytes
             || text.len() > self.limits.max_total_bytes.saturating_sub(total)
-            || text.contains('\0')
         {
-            return Err(ProposalError(
-                "text byte budget exceeded or binary text".into(),
+            return Err(ProposalError::new(
+                ProposalErrorKind::Budget,
+                "text byte budget exceeded",
+            ));
+        }
+        if text.contains('\0') {
+            return Err(ProposalError::new(
+                ProposalErrorKind::NulText,
+                "binary/NUL text rejected",
             ));
         }
         let file = self.files.get_mut(path).unwrap();
@@ -266,51 +348,82 @@ impl Proposal {
         self.closed = true;
     }
 
+    fn check_baseline(&self, change: &ProposalChange) -> Result<String, ProposalError> {
+        let path = checked_path(&self.workspace, &change.path)?;
+        if read_text(&self.workspace, &path, self.limits.max_file_bytes)?.map(|file| file.contents)
+            != change.before
+        {
+            return Err(ProposalError::new(
+                ProposalErrorKind::Conflict,
+                format!("baseline conflict: {}", change.path),
+            ));
+        }
+        Ok(path)
+    }
+
     /// Human host operation only. Preflight all changes, recheck each immediately
     /// before writing. This is not an atomic transaction or compare-and-swap.
     ///
-    /// Path checks and opens are separate, pathname-based host operations, not
-    /// race-resistant directory-handle traversal. Concurrent replacement of a
-    /// leaf, parent, or root ancestor by a symlink can redirect reads/writes
-    /// outside the approved root after a successful check. Exclusive creation
-    /// prevents overwriting an existing final entry, but not parent-directory
-    /// redirection. Hard-linked files are not detected; replacement truncates
-    /// the existing inode and may affect other links. Use only with a trusted
-    /// filesystem and without concurrent hostile mutation. External content
-    /// changes between the final check and write can also be overwritten.
-    /// Inspect both `Acceptance::applied` and `Acceptance::error`: truncation or
-    /// a failed write can leave a partially applied baseline, with no rollback.
+    /// Cell retains the original directory grant and confines each operation.
+    /// Component metadata checks preserve the no-symlink policy only at check
+    /// time: they are not nofollow traversal or namespace locks. A concurrent
+    /// contained symlink substitution can redirect an operation within the grant.
+    /// Use only with a trusted filesystem, including Cell's temporary namespace.
+    /// Snapshot and preflight/recheck reads are bounded. Cell's additional
+    /// expected-revision verification inside save_text currently rereads without
+    /// a byte bound, so concurrent growth can exceed the proposal read budget.
+    /// Revision checking is best-effort: changes after verification can still
+    /// be overwritten.
+    /// Save replaces an inode rather than truncating it; hardlink identity and
+    /// extended security metadata are not preserved. No crash durability is promised.
+    /// Inspect both `Acceptance::applied` and `Acceptance::error`: only successfully
+    /// published paths are reported, including when a later publication fails.
     pub fn accept(&mut self) -> Acceptance {
         let mut result = Acceptance::default();
         let apply = (|| -> Result<(), ProposalError> {
             if !self.writable {
-                return Err(ProposalError("baseline workspace is read-only".into()));
+                return Err(ProposalError::new(
+                    ProposalErrorKind::Policy,
+                    "baseline workspace is read-only",
+                ));
             }
             let changes = self.changes()?;
             for change in &changes {
-                let path = checked_path(&self.root, &change.path)?;
-                if read_text(&path, self.limits.max_file_bytes)? != change.before {
-                    return Err(ProposalError(format!("baseline conflict: {}", change.path)));
-                }
+                self.check_baseline(change)?;
             }
             for change in changes {
-                let path = checked_path(&self.root, &change.path)?;
-                if read_text(&path, self.limits.max_file_bytes)? != change.before {
-                    return Err(ProposalError(format!("baseline conflict: {}", change.path)));
-                }
-                let mut options = OpenOptions::new();
-                options.write(true);
-                if change.before.is_none() {
-                    options.create_new(true);
+                let path = self.check_baseline(&change)?;
+                let revision = if change.before.is_none() {
+                    self.workspace.fs.create_text(&path, &change.after)?
                 } else {
-                    options.truncate(true);
-                }
-                let mut file = options.open(path)?;
-                // Opening/truncating already mutates the baseline; report this path
-                // even when writing fails part-way through.
+                    let expected =
+                        self.files[&change.path]
+                            .revision
+                            .as_deref()
+                            .ok_or_else(|| {
+                                ProposalError::new(
+                                    ProposalErrorKind::Policy,
+                                    "missing baseline revision; replacement blocked",
+                                )
+                            })?;
+                    match self
+                        .workspace
+                        .fs
+                        .save_text(&path, &change.after, Some(expected))?
+                    {
+                        SaveOutcome::Saved(revision) => revision,
+                        SaveOutcome::Conflict(_) => {
+                            return Err(ProposalError::new(
+                                ProposalErrorKind::Conflict,
+                                format!("baseline conflict: {}", change.path),
+                            ));
+                        }
+                    }
+                };
                 result.applied.push(change.path.clone());
-                file.write_all(change.after.as_bytes())?;
-                self.files.get_mut(&change.path).unwrap().before = Some(change.after);
+                let file = self.files.get_mut(&change.path).unwrap();
+                file.before = Some(change.after);
+                file.revision = Some(revision);
             }
             self.discard();
             Ok(())

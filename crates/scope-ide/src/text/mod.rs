@@ -125,6 +125,36 @@ impl TextBuffer {
         self.text.lines().nth(line)
     }
 
+    /// Convert a one-based line and Unicode-scalar column to a byte offset.
+    /// A column immediately after the final scalar is valid, including empty lines.
+    pub fn scalar_offset(&self, line: usize, column: usize) -> Option<usize> {
+        let line_index = line.checked_sub(1)?;
+        let column_index = column.checked_sub(1)?;
+        let mut start = 0;
+        for (index, contents) in self.text.split('\n').enumerate() {
+            if index == line_index {
+                return contents
+                    .char_indices()
+                    .map(|(byte, _)| byte)
+                    .chain(std::iter::once(contents.len()))
+                    .nth(column_index)
+                    .map(|byte| start + byte);
+            }
+            start += contents.len() + 1;
+        }
+        None
+    }
+
+    /// Convert a valid byte cursor to one-based Unicode-scalar coordinates.
+    pub fn scalar_coordinates(&self, cursor: usize) -> Result<(usize, usize), TextBufferError> {
+        self.position_for_byte(cursor, Span::new(cursor, cursor))?;
+        let prefix = &self.text[..cursor];
+        Ok((
+            prefix.bytes().filter(|byte| *byte == b'\n').count() + 1,
+            prefix.rsplit('\n').next().unwrap_or("").chars().count() + 1,
+        ))
+    }
+
     pub fn apply_edit(&mut self, edit: TextEdit) -> Result<(), TextBufferError> {
         let span = self.span_for_range(edit.range)?;
         self.text
@@ -264,6 +294,26 @@ impl From<&str> for TextBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scalar_coordinates_round_trip_unicode_and_trailing_empty_lines() {
+        let source = "é🙂\n猫\n";
+        let buffer = TextBuffer::new(source);
+        for byte in source
+            .char_indices()
+            .map(|(byte, _)| byte)
+            .chain(std::iter::once(source.len()))
+        {
+            let (line, column) = buffer.scalar_coordinates(byte).unwrap();
+            assert_eq!(buffer.scalar_offset(line, column), Some(byte));
+        }
+        assert_eq!(buffer.scalar_offset(3, 1), Some(source.len()));
+        for (line, column) in [(0, 1), (1, 0), (1, 4), (4, 1)] {
+            assert_eq!(buffer.scalar_offset(line, column), None);
+        }
+        assert!(buffer.scalar_coordinates(1).is_err());
+        assert!(buffer.scalar_coordinates(source.len() + 1).is_err());
+    }
 
     #[test]
     fn eof_ranges_round_trip_and_allow_replacement() {

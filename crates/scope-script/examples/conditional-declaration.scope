@@ -1,0 +1,14 @@
+let operation = scope.operations()[0]
+let result = scope.invoke(operation.provider, operation.action, {})
+if result.status == "read_only" {
+    if result.value.kind == "integer_literal_binding" {
+        print(result.value.name)
+        print(result.value.literal)
+        print({outcome: "integer_literal_binding", operation: operation, evaluation: result})
+    } else {
+        print({outcome: "other_declaration", operation: operation, evaluation: result})
+    }
+} else {
+    print({outcome: "not_read_only", operation: operation, evaluation: result})
+}
+result

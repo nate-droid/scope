@@ -120,6 +120,10 @@ pub trait SourceTarget {
     fn text(&self) -> &str;
     fn version(&self) -> u64;
     fn language_id(&self) -> &str;
+    /// Language context only; this path grants no filesystem authority.
+    fn language_path(&self) -> Option<scope_language::LanguagePath<'_>> {
+        None
+    }
     fn apply_source_edit(&mut self, edit: TextEdit) -> Result<(), ProposalError>;
     fn snapshot(&self) -> SourceSnapshot<'_> {
         SourceSnapshot {
@@ -173,6 +177,11 @@ impl SourceTarget for DocumentSource<'_> {
     }
     fn language_id(&self) -> &str {
         self.language
+    }
+    fn language_path(&self) -> Option<scope_language::LanguagePath<'_>> {
+        Some(scope_language::LanguagePath::new(
+            self.document.path().to_string_lossy(),
+        ))
     }
     fn apply_source_edit(&mut self, edit: TextEdit) -> Result<(), ProposalError> {
         self.document.apply_edit(edit).map_err(ProposalError::Text)

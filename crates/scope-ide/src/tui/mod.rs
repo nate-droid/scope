@@ -9,6 +9,7 @@ use crate::app::App;
 mod pane;
 mod panes;
 mod quick_open;
+mod semantic;
 mod session;
 #[cfg(feature = "tools")]
 mod workbench;
@@ -20,7 +21,7 @@ pub use panes::{DocumentPane, FilesPane, LanguagePane};
 
 use session::TerminalSession;
 
-const HELP_TEXT: &str = "Tab/Shift-Tab focus • Ctrl-P quick-open • ↑/↓ move/scroll • PgUp/PgDn scroll • Enter open • r refresh • q/Esc quit";
+const HELP_TEXT: &str = "Tab/Shift-Tab focus • Ctrl-P quick-open • F8 semantic inspection • ↑/↓ move/scroll • PgUp/PgDn scroll • Enter open • r refresh • q/Esc quit";
 
 /// Run the default Scope TUI.
 ///
@@ -49,6 +50,7 @@ pub struct Tui {
     viewports: Vec<Rect>,
     quick_open: Option<quick_open::QuickOpen>,
     status: Option<String>,
+    semantic_inspection: Option<semantic::SemanticInspection>,
 }
 
 impl Tui {
@@ -116,6 +118,9 @@ impl Tui {
         if let Some(picker) = &self.quick_open {
             picker.render(frame, frame.area(), app);
         }
+        if let Some(inspection) = &self.semantic_inspection {
+            inspection.render(frame, frame.area(), app);
+        }
     }
 
     fn render_body(&mut self, frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
@@ -172,6 +177,12 @@ impl Tui {
         if key.kind != KeyEventKind::Press {
             return InputOutcome::Ignored;
         }
+        if let Some(inspection) = &mut self.semantic_inspection {
+            if inspection.handle_key(key, app) {
+                self.semantic_inspection = None;
+            }
+            return InputOutcome::Handled;
+        }
         if let Some(picker) = &mut self.quick_open {
             let before = app.open_document().map(|document| document.id());
             if picker.handle_key(key, app) {
@@ -187,6 +198,12 @@ impl Tui {
                     self.focused = index;
                 }
             }
+            return InputOutcome::Handled;
+        }
+        if key.code == KeyCode::F(8)
+            || (key.code == KeyCode::Char('i') && key.modifiers.contains(KeyModifiers::CONTROL))
+        {
+            self.semantic_inspection = Some(semantic::SemanticInspection::default());
             return InputOutcome::Handled;
         }
         if should_quit(key) {
@@ -312,6 +329,7 @@ impl TuiBuilder {
             focused: 0,
             quick_open: None,
             status: None,
+            semantic_inspection: None,
         }
     }
 }

@@ -3,11 +3,36 @@ use std::io::Write;
 use crate::{
     proposal::{ProposalId, ProposalStatus},
     scratch::ScratchBuffers,
-    source_edit::SourceEditController,
+    source_edit::{SourceEditController, SourceId},
     text::{Position, TextEdit, TextRange},
 };
 
 const DIFF_BYTES: usize = 16 * 1024;
+
+fn target_label(target: SourceId, version: u64) -> String {
+    match target {
+        SourceId::Scratch(id) => {
+            format!("owner=shell-buffer source=Scratch({id}) version={version}")
+        }
+        SourceId::Document(id) => {
+            format!(
+                "owner=app-document source=Document({}) version={version}",
+                id.as_u64()
+            )
+        }
+    }
+}
+
+fn print_target(
+    proposal: &crate::proposal::SourceEditProposal,
+    output: &mut impl Write,
+) -> std::io::Result<()> {
+    writeln!(
+        output,
+        "target: {} (proposal baseline; path is destination context only)",
+        target_label(proposal.target(), proposal.expected_version())
+    )
+}
 
 #[cfg(all(test, feature = "agent"))]
 mod configured_tests;
@@ -260,6 +285,7 @@ impl Proposals {
                 .into());
             };
             let proposal = self.controller.get(id)?;
+            print_target(proposal, output)?;
             writeln!(
                 output,
                 "source proposal {} ready; pending; source unchanged; not saved; source-diff {}",
@@ -299,6 +325,7 @@ impl Proposals {
         )?;
         let next = id.0;
         let proposal = self.controller.get(id)?;
+        print_target(proposal, output)?;
         writeln!(
             output,
             "source proposal {next}: buffer {}, version {}, {} edits; pending, not saved or evaluated; source-diff {next}, source-accept {next}, source-reject {next}",
@@ -327,6 +354,7 @@ impl Proposals {
                     .propose(buffers.selected()?, edits, rationale)?;
                 let next = id.0;
                 let proposal = self.controller.get(id)?;
+                print_target(proposal, output)?;
                 writeln!(
                     output,
                     "source proposal {next} created for buffer {} at version {}; pending, not saved or evaluated; source-proposal {next}, source-diff {next}, source-accept {next}, source-reject {next}",
@@ -341,6 +369,7 @@ impl Proposals {
                     .list()
                     .filter(|p| p.status() == ProposalStatus::Pending)
                 {
+                    print_target(proposal, output)?;
                     writeln!(
                         output,
                         "source proposal {}: buffer {}, version {}, {} edits (pending)",
@@ -354,7 +383,25 @@ impl Proposals {
                 writeln!(output, "{count} pending source proposals")?;
             }
             Command::Review(id) | Command::Diff(id) | Command::Accept(id) | Command::Reject(id) => {
-                let target_buffer = self.controller.get(id)?.target_buffer();
+                let proposal = self.controller.get(id)?;
+                print_target(proposal, output)?;
+                // Never reinterpret a document identity as a shell buffer ID.
+                let target_buffer = match proposal.target() {
+                    SourceId::Scratch(id) => id,
+                    SourceId::Document(_) if matches!(command, Command::Reject(_)) => {
+                        self.controller.reject(id)?;
+                        writeln!(
+                            output,
+                            "source proposal {}: {:?}",
+                            id.0,
+                            self.controller.get(id)?.status()
+                        )?;
+                        return Ok(());
+                    }
+                    SourceId::Document(_) => {
+                        return Err("source proposal target is not a shell buffer".into());
+                    }
+                };
                 match command {
                     Command::Reject(_) => {
                         self.controller.reject(id)?;
@@ -368,6 +415,14 @@ impl Proposals {
                     Command::Accept(_) => {
                         self.controller
                             .accept(id, buffers.get_mut(target_buffer)?)?;
+                        writeln!(
+                            output,
+                            "applied target: {}",
+                            target_label(
+                                SourceId::Scratch(target_buffer),
+                                buffers.get(target_buffer)?.version()
+                            )
+                        )?;
                         let assurance = if self.controller.get(id)?.evidence().is_some() {
                             "not saved; candidate observations retained, not re-evaluated on acceptance"
                         } else {
@@ -482,6 +537,21 @@ fn payload(json: &str) -> Result<(Vec<TextEdit>, Option<String>), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn proposal_target_label_is_owner_tagged_and_uses_supplied_version() {
+        assert_eq!(
+            super::target_label(crate::source_edit::SourceId::Scratch(7), 42),
+            "owner=shell-buffer source=Scratch(7) version=42"
+        );
+        assert_eq!(
+            super::target_label(
+                crate::source_edit::SourceId::Document(crate::document::DocumentId::new(7)),
+                3
+            ),
+            "owner=app-document source=Document(7) version=3"
+        );
+    }
+
     use super::*;
 
     #[cfg(feature = "agent")]
@@ -635,7 +705,7 @@ mod tests {
         assert_eq!(
             String::from_utf8(output.clone()).unwrap(),
             format!(
-                "source proposal 1 created for buffer {target} at version 0; pending, not saved or evaluated; source-proposal 1, source-diff 1, source-accept 1, source-reject 1\n"
+                "target: owner=shell-buffer source=Scratch({target}) version=0 (proposal baseline; path is destination context only)\nsource proposal 1 created for buffer {target} at version 0; pending, not saved or evaluated; source-proposal 1, source-diff 1, source-accept 1, source-reject 1\n"
             )
         );
         assert_eq!(
@@ -656,6 +726,14 @@ mod tests {
             proposals.run(command, &mut buffers, &mut output).unwrap();
             assert_eq!(buffers.selected().unwrap().id(), selected);
         }
+        let feedback = String::from_utf8(output.clone()).unwrap();
+        assert!(feedback.contains(&format!(
+            "target: owner=shell-buffer source=Scratch({target}) version=0"
+        )));
+        assert!(feedback.contains(&format!(
+            "applied target: owner=shell-buffer source=Scratch({target}) version=1"
+        )));
+        assert!(!feedback.contains(&format!("source=Scratch({selected})")));
         assert_eq!(buffers.get(target).unwrap().text(), "changed");
         assert!(buffers.get(target).unwrap().is_dirty());
         assert!(buffers.get(target).unwrap().destination_path().is_none());

@@ -12,6 +12,28 @@ The Scope path dependencies shown here and emitted by the scaffolder are for loc
 
 The `tui`, `tools`, and `agent` features are opt-in; `scope-ide` defaults to no features. Enable `tools` for model-independent tool discovery and execution. The `agent` feature includes `tools` and the OpenAI capability. Default headless and TUI-only builds expose neither module; tools-only builds expose `tool` without compiling the OpenAI capability. Non-agent examples do not require an API key or invoke an agent.
 
+## Normal launcher with Script inspection
+
+Use `scope_ide::cli::run_with_registry_and_command(args, registry, &mut command)`
+to compose a downstream `LanguageRegistry` and `ReadOnlyCommand` through the
+standard CLI pipeline. Existing `run_with_registry` and
+`run_from_args_with_command` remain supported. Registration grants no additional
+workspace or semantic authority.
+
+The shell supports `:scope semantic-target ID` (IDs from `:scope buffers`) to bind
+an independent live scratch, `:scope semantic-target` to report it, and
+`:scope semantic-target none` to clear it. Switching the active scratch does not
+change the binding. `:scope script run` calls
+`ReadOnlyCommand::invoke_script_with_target(source, target, output)` with immutable
+invocation-local scratch borrows. Existing callbacks default to `invoke_script`.
+A closed explicit target fails resolution; it never falls back to disk or the
+App document. Source selection is not semantic authorization.
+
+See the [SI6 contract and Path DX2 handoff](crates/scope-script/docs/SI6.md) and
+[normal-launcher example](crates/scope-script/examples/semantic_target_cli.rs)
+for exact signatures, a verified invocation sequence, revision semantics,
+authorization constraints, and realistic unsaved-source regression coverage.
+
 ## Model-independent harness discovery
 
 With `features = ["tools"]`, use `scope_ide::tool::AgentSession` to register

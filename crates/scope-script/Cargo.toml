@@ -6,10 +6,10 @@ license.workspace = true
 description = "Experimental downstream interpreter for Scope operations"
 
 [dependencies]
+serde_json = "1"
+scope-language = { path = "../scope-language" }
 scope-terminal = { path = "../scope-terminal" }
 scope-ide = { path = "../scope-ide", features = ["tools"] }
 
 [dev-dependencies]
 tempfile = "3"
-scope-language = { path = "../scope-language" }
-serde_json = "1"

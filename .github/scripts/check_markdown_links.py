@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check inline local Markdown links in tracked Markdown (not anchors)."""
+"""Check inline local Markdown links in non-ignored working-tree Markdown."""
 
 import re
 import subprocess
@@ -45,11 +45,13 @@ def local_links(text):
 
 def tracked_markdown(root):
     result = subprocess.run(
-        ['git', 'ls-files', '-z', '--', '*.md', '*.markdown',
+        ['git', 'ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', '*.md', '*.markdown',
          ':!:target/**', ':!:**/target/**'],
         cwd=root, check=True, stdout=subprocess.PIPE,
     )
-    return [Path(name) for name in result.stdout.decode('utf-8').split('\0') if name]
+    # Include new docs and omit unstaged deletions so moves can be checked before staging.
+    return sorted({Path(name) for name in result.stdout.decode('utf-8').split('\0')
+                   if name and (root / name).is_file()})
 
 
 def check(root):
@@ -72,7 +74,7 @@ def main():
         print(error, file=sys.stderr)
     if errors:
         return 1
-    print('All tracked Markdown local link targets exist.')
+    print('All working-tree Markdown local link targets exist.')
     return 0
 
 

@@ -12,7 +12,10 @@ pub mod logging;
 pub mod path;
 pub mod proposal;
 pub mod scratch;
+#[cfg(feature = "tools")]
+pub mod semantic_inspection;
 mod shell_input;
+pub mod source_context;
 pub mod source_edit;
 pub mod task_contract;
 #[cfg(test)]

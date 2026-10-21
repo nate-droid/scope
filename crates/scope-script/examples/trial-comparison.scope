@@ -1,0 +1,11 @@
+let report = scope.invoke("trials", "compare", {})
+if report.trials[0].status == "returned" {
+    if report.trials[1].status == "returned" {
+        print(report)
+    } else {
+        print(report)
+    }
+} else {
+    print(report)
+}
+report

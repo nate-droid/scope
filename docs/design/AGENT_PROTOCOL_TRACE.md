@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-The opt-in runner trace API is implemented. No live run was performed. The downstream failure remains unclassified without its original transcript; see [Structured decision reliability](STRUCTURED_DECISION_RELIABILITY.md).
+The opt-in runner trace API is implemented. No live run was performed. The downstream failure remains unclassified without its original transcript; see Structured decision reliability (historical reference unavailable in this checkout: `STRUCTURED_DECISION_RELIABILITY.md`).
 
 The target is the ordinary REQUEST decision loop in `crates/scope-ide/src/agent_loop.rs`, its Cell adapter in `crates/scope-ide/src/agent.rs`, and the CLI/shell presentation in `crates/scope-ide/src/cli.rs`. It is not the configured edit lifecycle, source-proposal workflow, or a new model client. Tracing must not change parsing, prompts, budgets, tool dispatch, authorization, retries, or completion behavior.
 
@@ -146,7 +146,7 @@ Reproduce the synthetic read-only session, without a backend:
 cargo run --offline -p scope-ide --features agent --example read_only_trace
 ```
 
-`crates/scope-ide/examples/read_only_trace.rs` emits JSONL to stdout, explicitly chosen by this diagnostic example. Redirect only to a protected host-selected file. The committed [READ_ONLY_TRACE_FIXTURE.jsonl](READ_ONLY_TRACE_FIXTURE.jsonl) is its representative deterministic output: three successful `fixture.inspect_word` inspections of alpha/beta/gamma, one completion containing an invalid literal newline, retained host correction, and a valid model-authored completion describing the protocol error, followed by an explicit presentation event. It uses synthetic evidence, not downstream Forth semantics, and is not a live reliability observation.
+`crates/scope-ide/examples/read_only_trace.rs` emits JSONL to stdout, explicitly chosen by this diagnostic example. Redirect only to a protected host-selected file. The committed READ_ONLY_TRACE_FIXTURE.jsonl (historical reference unavailable in this checkout: `READ_ONLY_TRACE_FIXTURE.jsonl`) is its representative deterministic output: three successful `fixture.inspect_word` inspections of alpha/beta/gamma, one completion containing an invalid literal newline, retained host correction, and a valid model-authored completion describing the protocol error, followed by an explicit presentation event. It uses synthetic evidence, not downstream Forth semantics, and is not a live reliability observation.
 
 Validation performed:
 

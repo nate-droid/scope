@@ -1,0 +1,7 @@
+let experiment = {name: "daily", samples: [2, 4, 6]}
+let total = experiment.samples[0] + experiment.samples[1] + experiment.samples[2]
+if total == 12 {
+    print({name: experiment.name, total: total, status: "ok"})
+} else {
+    print({name: experiment.name, total: total, status: "unexpected"})
+}

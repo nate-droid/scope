@@ -53,6 +53,11 @@ fn error_exit_preserves_termios() {
 }
 
 #[test]
+fn bracketed_paste_is_single_line_data_until_enter() {
+    pty_test("paste");
+}
+
+#[test]
 fn tab_completion_uses_current_environment() {
     pty_test("completion");
 }
@@ -129,7 +134,7 @@ try:
 
     def result(keys, value):
         send(keys + b'\r')
-        expect(b'=> Integer(' + str(value).encode() + b')')
+        expect(b'=> ' + str(value).encode() + b'\r\n')
         expect(b'scope> ')
 
     def finish(keys=b':quit\r', status=0):
@@ -173,7 +178,7 @@ try:
                 result(b'le\t answer = 42', 42)
                 result(b'ans\t', 42)
                 send(b'pri\t(answer)\r')
-                expect(b'Integer(42)')
+                expect(b'42\r\n')
                 expect(b'scope> ')
                 # Replace the entire token while preserving the suffix expression.
                 result(b'answrong + 1\x01\x1b[C\x1b[C\x1b[C\t\x05', 43)
@@ -189,6 +194,17 @@ try:
                 expect(b'scope> ')
                 result(b'2', 2)
                 finish()
+            elif scenario == 'paste':
+                # Default Script command policy flattens newlines, drops tabs,
+                # strips controls, and never interprets pasted keys as actions.
+                send(b'\x1b[200~40\r\n+\t2\x03\x04\x1b[201~')
+                expect(b'scope> 40 +2')
+                assert b'=> ' not in transcript, 'paste submitted before Enter'
+                send(b'\r')
+                expect(b'=> 42\r\n')
+                expect(b'scope> ')
+                finish()
+                assert transcript.count(b'=> ') == 1
             elif scenario == 'history':
                 result(b'11', 11)
                 result(b'22', 22)
@@ -208,8 +224,8 @@ try:
                 expect(b'scope> ')
                 result(b'6 * 7', 42)
                 finish()
-                assert b'Integer(918273)' not in transcript, 'cancelled input evaluated'
-                assert transcript.count(b'=> Integer(') == 1, 'unexpected partial evaluation'
+                assert b'\r\n918273\r\n' not in transcript, 'cancelled input evaluated'
+                assert transcript.count(b'=> ') == 1, 'unexpected partial evaluation'
             elif scenario == 'eof':
                 # Ctrl-D deletes under the cursor, but at end of nonempty input
                 # is a no-op, not EOF. On the next empty prompt it exits.

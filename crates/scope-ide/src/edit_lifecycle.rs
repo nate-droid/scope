@@ -594,6 +594,10 @@ impl EditContinuation {
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Session orchestration keeps target resolution, authorization, budgets, and discovery explicit"
+)]
 fn run_edit_session_inventory(
     model: &mut (impl DecisionModel + ?Sized),
     session: &mut AgentSession<'_>,
@@ -721,10 +725,10 @@ fn run_edit_session_inventory(
         {
             return run.finish(OperationBudgetExhausted);
         }
-        if let Some(feedback) = &continuation.feedback {
-            if push_message(&mut messages, "user", feedback.clone(), budgets.transport).is_err() {
-                return run.finish(OperationBudgetExhausted);
-            }
+        if let Some(feedback) = &continuation.feedback
+            && push_message(&mut messages, "user", feedback.clone(), budgets.transport).is_err()
+        {
+            return run.finish(OperationBudgetExhausted);
         }
         let context = json!({"kind":"edit_phase", "phase":format!("{:?}",run.state.phase()), "catalog":compact_catalog(&catalog, &phase_visible), "remaining_budgets":{"inspections":budgets.inspections.saturating_sub(run.inspections),"evaluations":budgets.refinements.saturating_add(1).saturating_sub(run.evaluations),"refinements":budgets.refinements.saturating_sub(run.refinements),"model_invocations":budgets.model_invocations.min(budgets.transport.max_decisions).saturating_sub(run.model_invocations)}, "discovery":discovery.map(|options| json!({"name":DISCOVER_SEMANTIC_OPERATIONS,"arguments":{},"page_size":options.page_size,"description":"Reveal the next sorted page of eligible operations for this phase; no authorization granted. Accepts exactly an empty JSON object: arguments must be {}. page_size is host-owned metadata, not an accepted argument; do not supply page_size inside arguments. No other argument keys are accepted."}))}).to_string();
         if push_message(&mut messages, "user", context, budgets.transport).is_err() {
@@ -1072,13 +1076,13 @@ fn run_edit_session_inventory(
                         .and_then(ToolValue::as_str)
                         .is_some_and(|s| !s.trim().is_empty());
                 if !eligible || !meaningful || run.corrections >= budgets.corrections {
-                    if run.corrections >= budgets.corrections {
-                        if let Some(ToolValue::Object(fields)) = &mut run.last_result {
-                            fields.insert(
-                                "refinement_stopped".into(),
-                                "correction_budget_exhausted".into(),
-                            );
-                        }
+                    if run.corrections >= budgets.corrections
+                        && let Some(ToolValue::Object(fields)) = &mut run.last_result
+                    {
+                        fields.insert(
+                            "refinement_stopped".into(),
+                            "correction_budget_exhausted".into(),
+                        );
                     }
                     return run.finish(ValidationFailure);
                 }
@@ -1231,6 +1235,10 @@ pub fn run_semantic_edit<T: SourceTarget>(
 
 /// Contextual M4 entrypoint. The selected service, selection prerequisites and
 /// explicit capabilities determine eligibility; host intent determines initial visibility.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Preserve the semantic edit API with explicit host-owned discovery and authorization policy"
+)]
 pub fn run_semantic_edit_with_discovery<T: SourceTarget>(
     model: &mut (impl DecisionModel + ?Sized),
     controller: &mut SourceEditController,
@@ -1253,6 +1261,10 @@ pub fn run_semantic_edit_with_discovery<T: SourceTarget>(
     )
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Shared implementation mirrors the semantic edit entry points with optional discovery"
+)]
 fn run_semantic_edit_inventory<T: SourceTarget>(
     model: &mut (impl DecisionModel + ?Sized),
     controller: &mut SourceEditController,
@@ -2038,6 +2050,7 @@ mod intent_tests;
 #[cfg(test)]
 mod semantic_inventory_tests {
     use super::*;
+    use crate::source_edit::SourceId;
     use scope_language::*;
     use std::cell::Cell;
     use std::sync::atomic::{AtomicUsize, Ordering};

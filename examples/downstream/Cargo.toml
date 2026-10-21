@@ -14,7 +14,7 @@ scope-ide = { path = "../../crates/scope-ide" }
 [dev-dependencies]
 scope-types = { path = "../../crates/scope-types" }
 scope-execution = { path = "../../crates/scope-execution" }
-cell = { git = "https://github.com/nate-droid/cell", tag = "v0.0.1" }
+cell = { git = "https://github.com/nate-droid/cell", tag = "v0.0.2" }
 wat = "1"
 
 # Exercise consumption without inheriting Scope's workspace configuration.

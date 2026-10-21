@@ -122,6 +122,11 @@ impl InteractiveLanguageSession for MockSession {
             status: EvaluationStatus::Success,
         };
         match source {
+            "reset-required" => {
+                result.status = EvaluationStatus::Cancelled {
+                    requires_reset: true,
+                };
+            }
             "fail" => {
                 result.output = vec!["before diagnostic".into(), "already newline\n".into()];
                 result.diagnostics = vec![Diagnostic::error(
@@ -227,8 +232,78 @@ fn shell(input: &str) -> (String, Vec<Event>) {
     (String::from_utf8(output).unwrap(), events)
 }
 
+#[test]
+fn line_edit_evaluates_selected_unsaved_source_in_active_session() {
+    let (output, events) = shell(concat!(
+        ":scope session mock\n",
+        ":scope scratch new mock\n",
+        ":scope line 1 \"  edited source\"\n",
+        ":scope show\n",
+        ":scope buffer eval\n",
+        ":scope quit\n",
+    ));
+    assert!(output.contains("  edited source"), "{output}");
+    assert!(
+        events.contains(&Event::Evaluate("  edited source".into(), 1)),
+        "{events:?}"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::Evaluate(_, _)))
+            .count(),
+        1
+    );
+}
+
 fn evaluated(source: &str, count: usize) -> Event {
     Event::Evaluate(source.into(), count)
+}
+
+#[test]
+fn context_reports_reset_block_without_resetting_or_evaluating() {
+    let (output, events) = shell(
+        ":scope scratch new mock\n:scope session mock\nreset-required\n:scope context\n:scope context\n:scope session-reset\n:scope context\n:scope quit\n",
+    );
+    assert_eq!(
+        output
+            .matches("Buffer evaluation target: unavailable (session reset required)")
+            .count(),
+        2
+    );
+    assert!(output.contains("Buffer evaluation target: Scratch(0) @0"));
+    assert_eq!(
+        events,
+        vec![
+            Event::Create,
+            evaluated("reset-required", 1),
+            Event::Reset,
+            Event::Close
+        ]
+    );
+}
+
+#[test]
+fn context_is_observational_and_namespace_controls_session_routing() {
+    let (output, events) = shell(
+        ":scope scratch new mock\n:scope context\n:scope session mock\ncontext\n:scope context\n:scope buffer eval\n:scope scratch new other\n:scope context\n:scope session none\ncontext\nquit\n",
+    );
+    assert!(output.contains("Interactive session: mock"));
+    assert!(output.contains("Buffer evaluation target: Scratch(0) @0"));
+    assert!(
+        output.contains("Buffer evaluation target: unavailable (buffer/session language mismatch)")
+    );
+    assert!(output.contains("Buffer evaluation target: unavailable (no interactive session)"));
+    assert!(output.contains("Shell buffer target: Scratch(0) @0"));
+    assert_eq!(
+        events,
+        vec![
+            Event::Create,
+            evaluated("context", 1),
+            evaluated("", 2),
+            Event::Close
+        ]
+    );
 }
 
 #[test]
@@ -282,7 +357,20 @@ fn reset_clears_state_and_none_returns_to_legacy_shell() {
     );
     assert!(output.contains("session reset\n"));
     assert!(output.contains("mock[1]: three\n"));
-    assert!(output.contains("Active language: none\nscope> Interactive sessions:"));
+    assert!(output.contains("Active language: none\nscope> Discovery:"));
+}
+
+#[test]
+fn language_discovery_in_active_session_is_observational() {
+    let (output, events) =
+        shell(":scope session mock\n:scope languages\n:scope session\n:scope quit\n");
+    assert!(
+        output.contains("Interactive evaluators:\n  mock"),
+        "{output}"
+    );
+    assert!(output.contains("Active session: mock"), "{output}");
+    assert!(output.contains("Active language: mock"), "{output}");
+    assert_eq!(events, vec![Event::Create, Event::Close]);
 }
 
 #[test]

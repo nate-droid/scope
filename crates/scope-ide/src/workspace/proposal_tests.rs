@@ -14,6 +14,138 @@ fn snapshot(fixture: &TempWorkspace, paths: &[&str]) -> Proposal {
 }
 
 #[test]
+fn structured_read_errors_distinguish_cell_scope_and_missing() {
+    use std::error::Error;
+    let fixture = TempWorkspace::new("proposal-structured-errors");
+    fixture.write_bytes("invalid", &[0xff]);
+    fixture.write_file("large", "abcd");
+    fixture.write_file("nul", "\0");
+    fixture.write_file("a", "abc");
+    fixture.write_file("b", "def");
+    fixture.create_dir("directory");
+    let workspace = fixture.workspace();
+    let limits = ProposalLimits {
+        max_files: 2,
+        max_file_bytes: 3,
+        max_total_bytes: 5,
+    };
+    for (name, expected) in [
+        ("invalid", FsErrorKind::InvalidTextEncoding),
+        ("large", FsErrorKind::ContentTooLarge),
+        ("missing/child", FsErrorKind::NotFound),
+    ] {
+        let error = Proposal::new(&workspace, &[path(name)], limits).unwrap_err();
+        let source = error.fs_error().unwrap();
+        assert_eq!(source.kind, expected);
+        assert!(source.path.starts_with("project/"));
+        assert!(!source.operation.is_empty());
+        assert_eq!(
+            error.source().unwrap().downcast_ref::<FsError>(),
+            Some(source)
+        );
+        assert_eq!(error.to_string(), error.0);
+    }
+    for (paths, kind) in [
+        (vec![path("target/new")], ProposalErrorKind::Policy),
+        (vec![path("directory")], ProposalErrorKind::NonRegularFile),
+        (vec![path("nul")], ProposalErrorKind::NulText),
+        (vec![path("a"), path("b")], ProposalErrorKind::Budget),
+    ] {
+        let error = Proposal::new(&workspace, &paths, limits).unwrap_err();
+        assert_eq!(error.kind(), &kind);
+        assert!(error.fs_error().is_none());
+        assert!(error.source().is_none());
+    }
+    let mut proposal = Proposal::new(&workspace, &[path("new")], limits).unwrap();
+    assert_eq!(
+        proposal.read(&path("new")).unwrap_err().kind(),
+        &ProposalErrorKind::Missing
+    );
+    assert_eq!(
+        proposal
+            .create(&path("new"), "four".into())
+            .unwrap_err()
+            .kind(),
+        &ProposalErrorKind::Budget
+    );
+    assert_eq!(
+        proposal
+            .create(&path("new"), "\0".into())
+            .unwrap_err()
+            .kind(),
+        &ProposalErrorKind::NulText
+    );
+}
+
+#[test]
+fn no_grant_never_falls_back_to_host_root_or_installed_cell() {
+    let fixture = TempWorkspace::new("proposal-no-grant");
+    fixture.write_file("a", "host content");
+    let mut workspace = fixture.workspace();
+    // Keep the descriptive root and installed Cell, but remove the filesystem
+    // receiver's grants. Neither may be used as an alternate authority.
+    workspace.fs = cell_capability_fs::Workspace::new();
+    let error = Proposal::new(&workspace, &[path("a")], ProposalLimits::default()).unwrap_err();
+    assert!(error.fs_error().is_some());
+    let mut proposal = snapshot(&fixture, &["new"]);
+    proposal.create(&path("new"), "proposed".into()).unwrap();
+    proposal.workspace.fs = cell_capability_fs::Workspace::new();
+    let result = proposal.accept();
+    assert!(result.error.is_some());
+    assert!(result.applied.is_empty());
+    assert!(!fixture.host_path_exists("new"));
+    assert_eq!(fixture.read_file("a"), "host content");
+}
+
+#[cfg(unix)]
+#[test]
+fn concurrent_cell_creates_have_exactly_one_complete_publication() {
+    use std::sync::{Arc, Barrier};
+    let fixture = TempWorkspace::new("proposal-concurrent-create");
+    let workspace = fixture.workspace();
+    let barrier = Arc::new(Barrier::new(2));
+    let results = std::thread::scope(|threads| {
+        let handles: Vec<_> = ["first complete content", "second complete content"]
+            .into_iter()
+            .map(|text| {
+                let workspace = workspace.clone();
+                let barrier = barrier.clone();
+                threads.spawn(move || {
+                    let mut proposal =
+                        Proposal::new(&workspace, &[path("new")], ProposalLimits::default())
+                            .unwrap();
+                    proposal.create(&path("new"), text.into()).unwrap();
+                    let change = proposal.changes().unwrap().pop().unwrap();
+                    let checked = proposal.check_baseline(&change).unwrap();
+                    // Both contenders have observed absence before either publishes.
+                    // Exercise the real Cell publication primitive, without sleeps
+                    // or mocks, at the exact post-recheck boundary used by accept.
+                    barrier.wait();
+                    (text, workspace.fs.create_text(checked, text))
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        results.iter().filter(|(_, result)| result.is_ok()).count(),
+        1
+    );
+    let (winner, revision) = results.iter().find(|(_, result)| result.is_ok()).unwrap();
+    let loser = results.iter().find(|(_, result)| result.is_err()).unwrap();
+    assert_eq!(
+        loser.1.as_ref().unwrap_err().kind,
+        FsErrorKind::AlreadyExists
+    );
+    let published = workspace.load_file_revision("new").unwrap();
+    assert_eq!(published.contents, *winner);
+    assert_eq!(&published.revision, revision.as_ref().unwrap());
+}
+
+#[test]
 fn isolated_create_replace_review_accept() {
     let fixture = TempWorkspace::new("proposal-happy");
     fixture.write_file("a", "user edits");
@@ -51,6 +183,52 @@ fn preflight_all_paths_before_writing_and_creation_conflict() {
 }
 
 #[test]
+fn replacement_uses_retained_revision_and_blocks_missing_token() {
+    let fixture = TempWorkspace::new("proposal-retained-revision");
+    fixture.write_file("a", "original");
+    let mut proposal = snapshot(&fixture, &["a"]);
+    let revision = proposal.files[&path("a")].revision.clone().unwrap();
+    assert_eq!(
+        revision,
+        fixture
+            .workspace()
+            .load_file_revision("a")
+            .unwrap()
+            .revision
+    );
+    proposal.replace(&path("a"), "proposed".into(), 0).unwrap();
+    // Bytes still pass the bounded preflight. Only Cell's save-time expected
+    // revision check can reject this deliberately mismatched retained token.
+    proposal.files.get_mut(&path("a")).unwrap().revision = Some("invalid-token".into());
+    let result = proposal.accept();
+    assert!(
+        result
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("baseline conflict")
+    );
+    assert!(result.applied.is_empty());
+    assert_eq!(fixture.read_file("a"), "original");
+    proposal.files.get_mut(&path("a")).unwrap().revision = None;
+    let result = proposal.accept();
+    assert!(
+        result
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("replacement blocked")
+    );
+    assert!(result.applied.is_empty());
+    assert_eq!(fixture.read_file("a"), "original");
+    proposal.files.get_mut(&path("a")).unwrap().revision = Some(revision);
+    let result = proposal.accept();
+    assert!(result.error.is_none(), "{:?}", result.error);
+    assert_eq!(result.applied, vec![path("a")]);
+    assert_eq!(fixture.read_file("a"), "proposed");
+}
+
+#[test]
 fn stale_baseline_and_discard_preserve_external_edits() {
     let fixture = TempWorkspace::new("proposal-stale");
     fixture.write_file("a", "original");
@@ -70,7 +248,17 @@ fn exact_approval_exclusions_binary_and_budgets() {
     fixture.write_file("binary", "\0");
     fixture.create_dir("target");
     fixture.create_dir(".git");
-    for name in ["binary", "target/new", ".git/config", "missing/new"] {
+    for name in [
+        ".",
+        "binary",
+        "target/new",
+        ".git/config",
+        "build/new",
+        "node_modules/new",
+        "missing/new",
+        "binary/child",
+        "target",
+    ] {
         assert!(
             Proposal::new(
                 &fixture.workspace(),
@@ -97,6 +285,136 @@ fn exact_approval_exclusions_binary_and_budgets() {
     assert!(proposal.create(&path("new"), "four".into()).is_err());
     assert!(proposal.create(&path("new"), "\0".into()).is_err());
     assert!(proposal.changes().unwrap().is_empty());
+}
+
+#[test]
+fn snapshot_limits_and_preflight_growth_are_bounded() {
+    let fixture = TempWorkspace::new("proposal-read-bounds");
+    fixture.write_file("a", "abc");
+    fixture.write_file("b", "def");
+    fixture.write_bytes("invalid", &[0xff]);
+    let limits = ProposalLimits {
+        max_files: 2,
+        max_file_bytes: 3,
+        max_total_bytes: 5,
+    };
+    let workspace = fixture.workspace();
+    for paths in [
+        vec![path("a"), path("b")],
+        vec![path("a"), path("a")],
+        vec![path("invalid")],
+    ] {
+        assert!(Proposal::new(&workspace, &paths, limits).is_err());
+    }
+    assert!(
+        Proposal::new(
+            &workspace,
+            &[path("a")],
+            ProposalLimits {
+                max_files: 0,
+                ..limits
+            }
+        )
+        .is_err()
+    );
+    fixture.write_file("large", "abcd");
+    assert!(Proposal::new(&workspace, &[path("large")], limits).is_err());
+    let mut proposal = Proposal::new(&workspace, &[path("a"), path("new")], limits).unwrap();
+    proposal.replace(&path("a"), "xyz".into(), 0).unwrap();
+    assert!(proposal.create(&path("new"), "abc".into()).is_err());
+    proposal.create(&path("new"), "de".into()).unwrap();
+    fixture.write_file("a", "grown beyond budget");
+    let result = proposal.accept();
+    assert!(result.error.is_some());
+    assert!(result.applied.is_empty());
+    assert!(!fixture.host_path_exists("new"));
+}
+
+#[cfg(unix)]
+#[test]
+fn retained_grant_survives_root_replacement_before_snapshot_and_acceptance() {
+    let fixture = TempWorkspace::new("proposal-retained");
+    fixture.write_file("grant/a", "original");
+    let workspace = Workspace::new(fixture.root().join("grant").to_string_lossy()).unwrap();
+    std::fs::rename(fixture.root().join("grant"), fixture.root().join("moved")).unwrap();
+    fixture.write_file("grant/a", "decoy");
+    let mut proposal = Proposal::new(
+        &workspace,
+        &[path("a"), path("new")],
+        ProposalLimits::default(),
+    )
+    .unwrap();
+    assert_eq!(proposal.read(&path("a")).unwrap().0, "original");
+    drop(workspace);
+    std::fs::rename(
+        fixture.root().join("moved"),
+        fixture.root().join("moved-again"),
+    )
+    .unwrap();
+    proposal.replace(&path("a"), "saved".into(), 0).unwrap();
+    proposal.create(&path("new"), "created".into()).unwrap();
+    let result = proposal.accept();
+    assert!(result.error.is_none(), "{:?}", result.error);
+    assert_eq!(result.applied, vec![path("a"), path("new")]);
+    assert_eq!(fixture.read_file("grant/a"), "decoy");
+    assert!(!fixture.host_path_exists("grant/new"));
+    assert_eq!(fixture.read_file("moved-again/a"), "saved");
+    assert_eq!(fixture.read_file("moved-again/new"), "created");
+}
+
+#[cfg(unix)]
+#[test]
+fn replacement_does_not_truncate_other_hardlinks() {
+    let fixture = TempWorkspace::new("proposal-hardlink");
+    fixture.write_file("a", "original");
+    std::fs::hard_link(fixture.root().join("a"), fixture.root().join("alias")).unwrap();
+    let mut proposal = snapshot(&fixture, &["a"]);
+    proposal
+        .replace(&path("a"), "replacement".into(), 0)
+        .unwrap();
+    let result = proposal.accept();
+    assert!(result.error.is_none(), "{:?}", result.error);
+    assert_eq!(fixture.read_file("a"), "replacement");
+    assert_eq!(fixture.read_file("alias"), "original");
+}
+
+#[cfg(unix)]
+#[test]
+fn publication_failure_reports_only_successes_and_can_retry() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = TempWorkspace::new("proposal-publication");
+    fixture.write_file("z", "original");
+    std::fs::set_permissions(
+        fixture.root().join("z"),
+        std::fs::Permissions::from_mode(0o444),
+    )
+    .unwrap();
+    let mut proposal = snapshot(&fixture, &["a", "z"]);
+    proposal.create(&path("a"), "created".into()).unwrap();
+    proposal.replace(&path("z"), "saved".into(), 0).unwrap();
+    let result = proposal.accept();
+    assert!(result.error.is_some());
+    assert_eq!(result.applied, vec![path("a")]);
+    assert_eq!(fixture.read_file("a"), "created");
+    assert_eq!(fixture.read_file("z"), "original");
+    assert_eq!(
+        proposal
+            .changes()
+            .unwrap()
+            .iter()
+            .map(|change| change.path.clone())
+            .collect::<Vec<_>>(),
+        vec![path("z")]
+    );
+    std::fs::set_permissions(
+        fixture.root().join("z"),
+        std::fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+    let result = proposal.accept();
+    assert!(result.error.is_none(), "{:?}", result.error);
+    assert_eq!(result.applied, vec![path("z")]);
+    assert_eq!(fixture.read_file("z"), "saved");
 }
 
 #[test]
