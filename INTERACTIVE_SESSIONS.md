@@ -45,6 +45,68 @@ See the runnable [typed runtime example](crates/scope-ide/examples/embedded_shel
 cargo run -p scope-ide --example embedded_shell
 ```
 
+### Read-only host commands
+
+Hosts can supply a borrowed callback through
+`scope_ide::cli::run_with_session_and_command(app, session, &mut command, input, output)`.
+It uses the same redirected shell and session ownership as `run_with_session`.
+The callback implements this interface:
+
+```rust,ignore
+impl scope_ide::cli::ReadOnlyCommand for HostCommand {
+    fn invoke(
+        &mut self,
+        document: &scope_ide::document::Document,
+        selection: scope_ide::text::TextRange,
+        operation: &str,
+        output: &mut dyn std::io::Write,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Inspect the live document and dispatch a host-defined operation.
+        writeln!(output, "{operation}: version {}", document.version())?;
+        Ok(())
+    }
+}
+```
+
+Invoke it only through the explicit namespace:
+
+```text
+:scope host inspect --selection 0:1..0:3
+```
+
+The syntax is exactly
+`:scope host <operation> --selection <line>:<column>..<line>:<column>`.
+Host selections use **zero-based lines and UTF-8 byte columns**, with a half-open
+range. In the example, `0:1..0:3` selects `é`, not two characters. This differs
+from the one-based coordinates of `scratch replace`. Missing/malformed selections,
+reversed ranges, out-of-bounds positions, and positions inside a UTF-8 character
+are errors; they do not invoke the callback.
+
+The callback borrows the live **App open document**, including unsaved
+edits, rather than rereading its file or using a stale snapshot. Before transferring
+ownership, the host can call `app.open_path("example.decl")` and optionally edit
+`app.open_document_mut()`. With no active runtime, legacy `open` and `replace`
+also operate on this document. The example selection above assumes its text is
+`aéz`. The namespaced `:scope open`, `:scope show`, and scratch commands operate
+on the separate shell buffers, not this target; they do not open an App document. Its document
+identity and version identify that in-memory snapshot: repeated inspection does
+not edit it; subsequent edits preserve identity and advance the version. No open App
+document is an error. The callback receives no mutable document or session access;
+registration does not grant filesystem authority, register agent tools, or evaluate
+source. Hosts define and validate their own operation names.
+
+A shell without a registered callback reports an error for this command. Callback
+errors are printed as shell errors and the loop continues: later host commands,
+editing, and explicit evaluation remain usable. Namespaced host commands never fall
+back to language evaluation, even on failure. Bare `host ...` is not a host-command
+alias: without a session it is rejected, and with a session it remains ordinary
+language source, just like other unprefixed input.
+
+This narrow read-only hook is not the broader mutable, generation-aware host
+namespace proposal below. A callback retaining its own runtime handle is responsible
+for checking whether that runtime is still valid; this interface supplies no active
+session attachment or generation token.
+
 ### Ownership and lifecycle
 
 | Event | Contract |

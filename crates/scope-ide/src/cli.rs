@@ -301,6 +301,47 @@ fn run_shell_inner(
     )
 }
 
+/// A trusted host operation borrowing the live document for this invocation only.
+/// No workspace or runtime access is supplied. Hosts remain responsible for
+/// concrete operation authorization and for the purity of their native code.
+/// Errors are displayed by the shell; they do not alter runtime lifecycle.
+pub trait ReadOnlyCommand {
+    fn invoke(
+        &mut self,
+        document: &crate::document::Document,
+        selection: TextRange,
+        operation: &str,
+        output: &mut dyn Write,
+    ) -> Result<(), Box<dyn std::error::Error>>;
+}
+
+/// Runs the owned shell with one explicitly installed read-only host callback.
+/// Invoke with `:scope host NAME --selection LINE:BYTE..LINE:BYTE` (zero-based).
+/// All source borrows end before the next shell submission. A host may construct
+/// a command-local `DocumentSource` using its registered language service.
+pub fn run_with_session_and_command(
+    app: App,
+    session: InteractiveSession,
+    command: &mut dyn ReadOnlyCommand,
+    input: impl BufRead,
+    output: impl Write,
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_shell_owned(
+        app,
+        session,
+        #[cfg(feature = "agent")]
+        AgentConfig::local(DEFAULT_AGENT_MODEL, DEFAULT_AGENT_BASE_URL),
+        #[cfg(not(feature = "agent"))]
+        AgentConfig,
+        input,
+        output,
+        false,
+        #[cfg(feature = "agent")]
+        None,
+        Some(command),
+    )
+}
+
 /// Runs the generic shell with a host-created application and session owner.
 ///
 /// Takes ownership of both. REPL and explicit buffer evaluation use this exact
@@ -327,6 +368,7 @@ pub fn run_with_session(
         false,
         #[cfg(feature = "agent")]
         None,
+        None,
     )
 }
 
@@ -347,6 +389,7 @@ fn run_shell_configured(
         interactive,
         #[cfg(feature = "agent")]
         editing,
+        None,
     )
 }
 
@@ -358,6 +401,7 @@ fn run_shell_owned(
     mut output: impl Write,
     interactive: bool,
     #[cfg(feature = "agent")] editing: Option<InteractiveEditConfig>,
+    mut host_command: Option<&mut dyn ReadOnlyCommand>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let max_history = if interactive {
         std::env::var("SCOPE_HISTORY_LIMIT")
@@ -579,6 +623,25 @@ fn run_shell_owned(
             }
         }
         match ShellCommand::parse(command) {
+            Ok(ShellCommand::Host {
+                operation,
+                selection,
+            }) => {
+                let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+                    if !line.starts_with(":scope ") {
+                        return Err("host command requires explicit :scope namespace".into());
+                    }
+                    let callback = host_command
+                        .as_deref_mut()
+                        .ok_or("no read-only host command installed")?;
+                    let document = app.open_document().ok_or("no open document")?;
+                    document.buffer().span_for_range(selection)?;
+                    callback.invoke(document, selection, &operation, &mut output)
+                })();
+                if let Err(error) = result {
+                    writeln!(output, "error: {error}")?;
+                }
+            }
             #[cfg(feature = "agent")]
             Ok(ShellCommand::Source(source_proposals::Command::AgentEdit(request))) => {
                 let result = (|| -> Result<(), Box<dyn std::error::Error>> {
@@ -1127,21 +1190,36 @@ fn print_shell_help(output: &mut impl Write) -> std::io::Result<()> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ShellCommand {
+    Host {
+        operation: String,
+        selection: TextRange,
+    },
     Help,
     Source(source_proposals::Command),
-    Proposal { paths: Vec<ScopePath> },
+    Proposal {
+        paths: Vec<ScopePath>,
+    },
     ProposalReview,
     ProposalAccept,
     ProposalDiscard,
-    ProposalAgent { request: String },
+    ProposalAgent {
+        request: String,
+    },
     Capabilities,
     Authority,
     Files,
-    Open { path: ScopePath },
+    Open {
+        path: ScopePath,
+    },
     OpenSelected,
     Show,
-    Lines { start: usize, end: usize },
-    Replace { edit: TextEdit },
+    Lines {
+        start: usize,
+        end: usize,
+    },
+    Replace {
+        edit: TextEdit,
+    },
     Language,
     Outline,
     Diagnostics,
@@ -1149,7 +1227,9 @@ enum ShellCommand {
     Save,
     Revert,
     Refresh,
-    Agent { request: String },
+    Agent {
+        request: String,
+    },
     Quit,
 }
 
@@ -1198,6 +1278,20 @@ macro_rules! shell_commands {
 }
 
 shell_commands! { line, trimmed, parts, command;
+            "host" => {
+                let usage = || ShellError::UnexpectedArgument(
+                    "usage: :scope host NAME --selection LINE:BYTE..LINE:BYTE (zero-based)".into());
+                let operation = parts.next().ok_or_else(usage)?.to_owned();
+                if parts.next() != Some("--selection") { return Err(usage()); }
+                let coordinates = parts.next().ok_or_else(usage)?;
+                reject_shell_extra(parts)?;
+                let (start, end) = coordinates.split_once("..").ok_or_else(usage)?;
+                let position = |value: &str| -> Result<Position, ShellError> {
+                    let (line, column) = value.split_once(':').ok_or_else(usage)?;
+                    Ok(Position::new(line.parse().map_err(|_| usage())?, column.parse().map_err(|_| usage())?))
+                };
+                Ok(Self::Host { operation, selection: TextRange::new(position(start)?, position(end)?) })
+            },
             "source-propose" | "source-proposals" | "source-proposal" | "source-diff" | "source-accept" | "source-reject" => {
                 source_proposals::Command::parse(command, &trimmed[command.len()..])
                     .map(Self::Source).map_err(ShellError::UnexpectedArgument)
@@ -1311,6 +1405,9 @@ pub(crate) fn complete_commands(
     }
     let prefix = &source[start..cursor];
     let mut names = ShellCommand::names().to_vec();
+    if !explicit {
+        names.retain(|name| *name != "host");
+    }
     if explicit {
         names.extend_from_slice(&[
             "scratch",
@@ -1352,6 +1449,14 @@ pub(crate) fn complete_commands(
 fn completion_uses_parser_names_and_namespace_context() {
     let complete = |s: &str, active| complete_commands(s, s.len(), active).unwrap();
     assert_eq!(complete("hel", false)[0].insert_text, "help");
+    for active in [false, true] {
+        let items = complete(":scope hos", active);
+        assert_eq!(items[0].insert_text, "host");
+        assert_eq!(items[0].replacement, 7..10);
+        assert!(complete(":scope host inspect", active).is_empty());
+    }
+    assert!(complete("hos", false).is_empty());
+    assert!(complete_commands("hos", 3, true).is_none());
     assert_eq!(complete("sym", false)[0].insert_text, "symbols");
     assert!(complete_commands("help", 4, true).is_none());
     assert!(complete(":scope unknown", true).is_empty());
@@ -1368,7 +1473,9 @@ fn completion_uses_parser_names_and_namespace_context() {
     assert_eq!(item.replacement, 2..7);
     let all = complete("", false);
     for name in ShellCommand::names() {
-        if !cfg!(feature = "agent") && matches!(*name, "agent" | "ask" | "proposal-agent") {
+        if *name == "host"
+            || (!cfg!(feature = "agent") && matches!(*name, "agent" | "ask" | "proposal-agent"))
+        {
             continue;
         }
         assert!(all.iter().any(|item| item.label == *name));

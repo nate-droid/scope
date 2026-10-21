@@ -314,6 +314,200 @@ fn eof_evaluation_error_and_clear_cleanup() {
     }
 }
 
+#[derive(Default)]
+struct RecordingCommand {
+    calls: Vec<(
+        scope_ide::document::Document,
+        scope_ide::text::TextRange,
+        String,
+    )>,
+}
+impl cli::ReadOnlyCommand for RecordingCommand {
+    fn invoke(
+        &mut self,
+        document: &scope_ide::document::Document,
+        selection: scope_ide::text::TextRange,
+        operation: &str,
+        output: &mut dyn Write,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.calls
+            .push((document.clone(), selection, operation.to_owned()));
+        if operation == "fail" {
+            return Err(io::Error::other("injected host failure").into());
+        }
+        writeln!(output, "host-result:{operation}")?;
+        Ok(())
+    }
+}
+fn preopened_app(text: &str) -> App {
+    use scope_ide::text::{Position, TextEdit, TextRange};
+    let mut app = app();
+    app.open_path("Cargo.toml").unwrap();
+    let document = app.open_document_mut().unwrap();
+    let original = document.text();
+    let end = Position::new(
+        original.bytes().filter(|byte| *byte == b'\n').count(),
+        original.rsplit('\n').next().unwrap().len(),
+    );
+    document
+        .apply_edit(TextEdit::replace(
+            TextRange::new(Position::new(0, 0), end),
+            text,
+        ))
+        .unwrap();
+    app
+}
+
+fn command_shell(
+    app: App,
+    session: InteractiveSession,
+    command: &mut RecordingCommand,
+    input: &str,
+) -> String {
+    let mut output = Vec::new();
+    cli::run_with_session_and_command(app, session, command, input.as_bytes(), &mut output)
+        .unwrap();
+    String::from_utf8(output).unwrap()
+}
+
+#[test]
+fn host_command_observes_live_unsaved_document_identity_version_and_selection() {
+    use scope_ide::text::{Position, TextRange};
+    let mut command = RecordingCommand::default();
+    let output = command_shell(
+        preopened_app("aéz\nnext"),
+        InteractiveSession::new(),
+        &mut command,
+        concat!(
+            ":scope host inspect --selection 0:1..0:3\n",
+            ":scope host inspect --selection 0:1..0:3\n",
+            "replace 2 1 2 5 changed\n",
+            ":scope host inspect --selection 0:3..1:7\n",
+            ":scope quit\n",
+        ),
+    );
+    assert!(!output.contains("error:"), "{output}");
+    assert_eq!(output.matches("host-result:inspect").count(), 3);
+    assert_eq!(command.calls.len(), 3);
+    let (first, selection, operation) = &command.calls[0];
+    assert_eq!(first.text(), "aéz\nnext");
+    assert!(first.is_dirty());
+    assert_eq!(
+        *selection,
+        TextRange::new(Position::new(0, 1), Position::new(0, 3))
+    );
+    assert_eq!(operation, "inspect");
+    assert_eq!(first, &command.calls[1].0);
+    let (edited, selection, _) = &command.calls[2];
+    assert_eq!(edited.id(), first.id());
+    assert_eq!(edited.evaluation_source_id(), first.evaluation_source_id());
+    assert!(edited.version() > first.version());
+    assert_eq!(edited.text(), "aéz\nchanged");
+    assert!(edited.is_dirty());
+    assert_eq!(
+        *selection,
+        TextRange::new(Position::new(0, 3), Position::new(1, 7))
+    );
+}
+
+#[test]
+fn host_command_rejects_missing_document_and_invalid_syntax_or_selection() {
+    let mut command = RecordingCommand::default();
+    let output = command_shell(
+        app(),
+        InteractiveSession::new(),
+        &mut command,
+        ":scope host inspect --selection 0:0..0:0\n:scope quit\n",
+    );
+    assert!(output.contains("error: no open document"), "{output}");
+    assert!(command.calls.is_empty());
+    let mut input = String::new();
+    let invalid = [
+        "host inspect --selection 0:0..0:1", // Bare host is not a shell command.
+        ":scope host",
+        ":scope host inspect",
+        ":scope host inspect --selection",
+        ":scope host inspect --selection nope",
+        ":scope host inspect --selection 0:2..0:3", // Inside é.
+        ":scope host inspect --selection 0:3..0:1", // Reversed.
+        ":scope host inspect --selection 1:0..1:0", // Missing line.
+        ":scope host inspect --selection 0:0..0:5", // Past line end.
+        ":scope host inspect --selection 0:0..0:1 extra",
+    ];
+    for line in invalid {
+        input.push_str(line);
+        input.push('\n');
+    }
+    input.push_str(":scope host inspect --selection 0:1..0:3\n:scope quit\n");
+    let output = command_shell(
+        preopened_app("aéz"),
+        InteractiveSession::new(),
+        &mut command,
+        &input,
+    );
+    assert_eq!(output.matches("error:").count(), invalid.len(), "{output}");
+    assert_eq!(command.calls.len(), 1);
+    assert_eq!(command.calls[0].2, "inspect");
+    assert!(output.contains("host-result:inspect"), "{output}");
+}
+
+#[test]
+fn host_command_without_callback_reports_error_and_shell_remains_usable() {
+    let mut output = Vec::new();
+    cli::run_with_session(
+        preopened_app("aéz"),
+        InteractiveSession::new(),
+        &b":scope host inspect --selection 0:0..0:0\n:scope help\n:scope quit\n"[..],
+        &mut output,
+    )
+    .unwrap();
+    let output = String::from_utf8(output).unwrap();
+    assert!(output.contains("error:"), "{output}");
+    assert!(output.contains("Commands:"), "{output}");
+}
+
+#[test]
+fn host_callback_failure_continues_without_evaluating_namespaced_commands() {
+    let (runtime, session) = installed("host");
+    let mut command = RecordingCommand::default();
+    let output = command_shell(
+        preopened_app("live unsaved source"),
+        session,
+        &mut command,
+        concat!(
+            "before\n",
+            ":scope scratch new host\n",
+            ":scope scratch replace 1 1 1 1 buffer-source\n",
+            ":scope host fail --selection 0:0..0:6\n",
+            ":scope host inspect --selection 0:0..0:6\n",
+            "host inspect --selection 0:0..0:6\n",
+            ":scope buffer eval\n",
+            "after\n",
+            ":scope quit\n",
+        ),
+    );
+    assert!(output.contains("error:"), "{output}");
+    assert!(output.contains("injected host failure"), "{output}");
+    assert!(output.contains("host-result:inspect"), "{output}");
+    assert_eq!(command.calls.len(), 2);
+    assert_eq!(command.calls[0].0.text(), "live unsaved source");
+    assert!(command.calls[0].0.is_dirty());
+    assert_eq!(command.calls[0].0, command.calls[1].0);
+    assert_eq!(command.calls[0].2, "fail");
+    assert_eq!(command.calls[1].2, "inspect");
+    assert_eq!(
+        events(&runtime),
+        [
+            "evaluate:before",
+            "evaluate:host inspect --selection 0:0..0:6",
+            "evaluate:buffer-source",
+            "evaluate:after",
+            "close",
+            "drop",
+        ]
+    );
+}
+
 struct BrokenReader;
 impl Read for BrokenReader {
     fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
