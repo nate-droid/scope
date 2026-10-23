@@ -17,9 +17,10 @@ mod decision;
 mod trace;
 pub use decision::edit::{
     EditBudgets, EditCapabilities, EditDispatch, EditEvent, EditOutcome, EditPhase, EditRun,
-    EditState, EditSummary, InvalidTransition, ModelCompletion, SemanticDiscoveryOptions,
-    SemanticEditOptions, ToolResultClassification, run_edit_session, run_edit_session_with_state,
-    run_semantic_edit, run_semantic_edit_with_discovery,
+    EditState, EditSummary, InvalidTransition, InvestigationCompletion, InvestigationEvidence,
+    ModelCompletion, SemanticDiscoveryOptions, SemanticEditOptions, SemanticInvestigationOptions,
+    ToolResultClassification, run_edit_session, run_edit_session_with_state, run_semantic_edit,
+    run_semantic_edit_with_discovery, run_semantic_investigation_with_discovery,
 };
 pub use decision::{
     AgentLimits, AgentRun, AgentStop, DecisionModel, read_only_policy, run_session,

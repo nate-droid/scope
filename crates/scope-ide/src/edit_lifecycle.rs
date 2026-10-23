@@ -43,7 +43,7 @@ impl EditState {
         if !matches!(
             (self.phase, next),
             (Resolve, Inspect | Propose | Blocked)
-                | (Inspect, Propose | Blocked)
+                | (Inspect, Propose | Finished | Blocked)
                 | (Propose, Validate | Blocked)
                 | (Validate, Propose | Finished | Blocked)
         ) {
@@ -99,6 +99,8 @@ pub struct EditCapabilities {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditOutcome {
     ProposalReady,
+    InvestigationCompleted,
+    InvestigationInconclusive,
     UnsupportedRequest,
     MissingPrerequisite,
     AmbiguousTarget,
@@ -266,6 +268,11 @@ pub struct EditRun {
     /// result without changing its provider status or evaluation evidence.
     pub last_result: Option<ToolValue>,
     pub trace: Vec<EditEvent>,
+    /// Owned snapshot retained even on pre-dispatch failures.
+    pub source_snapshot: Option<ToolValue>,
+    pub discovered_operations: Vec<String>,
+    pub evidence: Vec<InvestigationEvidence>,
+    pub conclusion: Option<String>,
     started: std::time::Instant,
     elapsed_ms: Option<u128>,
 }
@@ -283,6 +290,10 @@ impl Default for EditRun {
             corrections: 0,
             last_result: None,
             trace: Vec::new(),
+            source_snapshot: None,
+            discovered_operations: Vec::new(),
+            evidence: Vec::new(),
+            conclusion: None,
             started: std::time::Instant::now(),
             elapsed_ms: None,
         }
@@ -348,11 +359,18 @@ impl EditRun {
         self.trace.push(EditEvent::Transition { from, to: next });
     }
     fn finish(mut self, outcome: EditOutcome) -> Self {
-        self.transition(if outcome == EditOutcome::ProposalReady {
-            EditPhase::Finished
-        } else {
-            EditPhase::Blocked
-        });
+        self.transition(
+            if matches!(
+                outcome,
+                EditOutcome::ProposalReady
+                    | EditOutcome::InvestigationCompleted
+                    | EditOutcome::InvestigationInconclusive
+            ) {
+                EditPhase::Finished
+            } else {
+                EditPhase::Blocked
+            },
+        );
         self.outcome = outcome;
         self.elapsed_ms = Some(self.started.elapsed().as_millis());
         self.trace.push(EditEvent::Terminated(outcome));
@@ -608,6 +626,30 @@ fn run_edit_session_inventory(
     dispatch: EditDispatch<'_>,
     discovery: Option<&SemanticDiscoveryOptions>,
 ) -> EditRun {
+    run_objective_session_inventory(
+        model,
+        session,
+        resolved,
+        request,
+        capabilities,
+        budgets,
+        dispatch,
+        discovery,
+        None,
+    )
+}
+
+fn run_objective_session_inventory(
+    model: &mut (impl DecisionModel + ?Sized),
+    session: &mut AgentSession<'_>,
+    resolved: Result<SourceId, TargetResolutionError>,
+    request: &str,
+    capabilities: &EditCapabilities,
+    budgets: EditBudgets,
+    dispatch: EditDispatch<'_>,
+    discovery: Option<&SemanticDiscoveryOptions>,
+    mut completion: Option<&mut CompletionPolicy<'_>>,
+) -> EditRun {
     use EditOutcome::*;
     let mut run = EditRun::default();
     match resolved {
@@ -630,23 +672,30 @@ fn run_edit_session_inventory(
             return run.finish(MissingPrerequisite);
         }
     }
-    if capabilities.propose.is_empty() {
+    if completion.is_none() && capabilities.propose.is_empty() {
         return run.finish(UnsupportedRequest);
     }
     if request.trim().is_empty() {
         return run.finish(MissingPrerequisite);
     }
     run.transition(
-        if capabilities.inspect_first && !capabilities.inspect.is_empty() {
+        if completion.is_some() || (capabilities.inspect_first && !capabilities.inspect.is_empty())
+        {
             EditPhase::Inspect
         } else {
             EditPhase::Propose
         },
     );
     let mut messages = Vec::new();
-    let system = format!(
-        "{PROTOCOL}\nThis is a bounded edit task. During Inspect use read tools or return complete to advance to Propose. During Propose invoke one permitted semantic edit tool. For language tools the decision arguments object must contain ONLY expected_version, expected_source, and arguments. Copy expected_version and expected_source from edit_request exactly. Put language-operation fields (such as a symbol name) inside arguments.arguments, not beside expected_version. Catalog metadata (operation, effect, target, scope, inputs) is descriptive and must not be sent as invocation fields. A proposal ends execution; never apply it. Complete without a proposal means unsupported request."
-    );
+    let system = if completion.is_some() {
+        format!(
+            "{PROTOCOL}\nThis is a bounded read-only investigation. Discover and invoke permitted read operations, inspect evidence, then return complete with an evidence-backed conclusion or explicit uncertainty. Never propose, apply or save. Language tool arguments must contain only expected_version, expected_source, and arguments, copied from edit_request; operation-specific inputs belong inside arguments.arguments. Completion is assessed by the host and does not establish semantic correctness."
+        )
+    } else {
+        format!(
+            "{PROTOCOL}\nThis is a bounded edit task. During Inspect use read tools or return complete to advance to Propose. During Propose invoke one permitted semantic edit tool. For language tools the decision arguments object must contain ONLY expected_version, expected_source, and arguments. Copy expected_version and expected_source from edit_request exactly. Put language-operation fields (such as a symbol name) inside arguments.arguments, not beside expected_version. Catalog metadata (operation, effect, target, scope, inputs) is descriptive and must not be sent as invocation fields. A proposal ends execution; never apply it. Complete without a proposal means unsupported request."
+        )
+    };
     if push_message(&mut messages, "system", system.clone(), budgets.transport).is_err()
         || push_message(&mut messages, "user", request.into(), budgets.transport).is_err()
     {
@@ -670,6 +719,7 @@ fn run_edit_session_inventory(
     {
         return run.finish(MissingPrerequisite);
     }
+    run.discovered_operations = visible.clone();
     let is_evaluation = |name: &str| {
         catalog.lookup(name).is_some_and(|entry| {
             entry.definition.effect == ToolEffect::Read
@@ -757,6 +807,18 @@ fn run_edit_session_inventory(
             return run.finish(OperationBudgetExhausted);
         }
         let call = match parse_decision(&text) {
+            Ok(Decision::Complete { content }) if completion.is_some() => {
+                let assessment = completion.as_mut().unwrap()(&content, &run.evidence);
+                run.conclusion = Some(content);
+                let supported = run.evidence.iter().any(|e| {
+                    field(&e.response, "status").and_then(ToolValue::as_str) == Some("read_only")
+                });
+                return run.finish(match assessment {
+                    InvestigationCompletion::Completed if supported => InvestigationCompleted,
+                    InvestigationCompletion::Unsupported => UnsupportedRequest,
+                    _ => InvestigationInconclusive,
+                });
+            }
             Ok(Decision::Complete { .. }) if run.state.phase() == EditPhase::Inspect => {
                 if refinement_pending {
                     return run.finish(ValidationFailure);
@@ -831,6 +893,7 @@ fn run_edit_session_inventory(
                 phase: run.state.phase(),
             });
             let revealed = reveal_operations(allowed, &mut visible, options.page_size);
+            run.discovered_operations = visible.clone();
             run.trace.push(EditEvent::Discovery { revealed });
             if revealed == 0 {
                 run.trace.push(EditEvent::NoProgressReason {
@@ -954,6 +1017,11 @@ fn run_edit_session_inventory(
                 return run.finish(outcome);
             }
         };
+        run.evidence.push(InvestigationEvidence {
+            call: call.clone(),
+            source: relevant_state.clone(),
+            response: value.clone(),
+        });
         continuation.retain(call.clone(), relevant_state.clone(), value.clone());
         run.last_result = Some(value.clone());
         let status = field(&value, "status").and_then(ToolValue::as_str);
@@ -1127,7 +1195,7 @@ fn run_edit_session_inventory(
                                 field(check, "outcome").and_then(ToolValue::as_str) == Some("Passed")))
                         }
                     };
-                    if !established {
+                    if !established && completion.is_none() {
                         if evaluating {
                             refinement_pending = true;
                             if run.refinements >= budgets.refinements
@@ -1198,7 +1266,11 @@ fn run_edit_session_inventory(
 
         // Inspection is host-bounded; the last permitted read automatically
         // advances rather than spending another decision to restate a plan.
-        if inspecting && run.inspections >= budgets.inspections && !has_evaluation {
+        if completion.is_none()
+            && inspecting
+            && run.inspections >= budgets.inspections
+            && !has_evaluation
+        {
             run.transition(EditPhase::Propose);
         }
     }
@@ -1207,6 +1279,67 @@ fn run_edit_session_inventory(
 #[cfg(test)]
 #[path = "edit_observability_tests.rs"]
 mod observability_tests;
+
+/// An immutable invocation record owned by the returned run.
+#[derive(Debug, Clone)]
+pub struct InvestigationEvidence {
+    pub call: ToolCall,
+    pub source: ToolValue,
+    pub response: ToolValue,
+}
+
+/// Host assessment, not a model assertion or a proof of language correctness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvestigationCompletion {
+    Completed,
+    Inconclusive,
+    Unsupported,
+}
+type CompletionPolicy<'a> =
+    dyn FnMut(&str, &[InvestigationEvidence]) -> InvestigationCompletion + 'a;
+
+#[derive(Debug, Default)]
+pub struct SemanticInvestigationOptions {
+    /// Explicitly exposed read operations; independent authorization still applies.
+    pub operations: Vec<String>,
+    pub budgets: EditBudgets,
+}
+
+/// Investigate a bound snapshot without proposal authority. The host must assess
+/// the conclusion against retained evidence. Missing successful read evidence
+/// always yields an inconclusive result, even if the callback accepts it.
+#[allow(clippy::too_many_arguments)]
+pub fn run_semantic_investigation_with_discovery<T: SourceTarget>(
+    model: &mut (impl DecisionModel + ?Sized),
+    controller: &mut SourceEditController,
+    target: &T,
+    service: &dyn scope_language::LanguageService,
+    request: AgentEditRequest<'_>,
+    options: &SemanticInvestigationOptions,
+    discovery: &SemanticDiscoveryOptions,
+    policy: impl for<'a> FnMut(crate::tool::semantic::SemanticAuthorization<'a>) -> bool,
+    mut completion: impl FnMut(&str, &[InvestigationEvidence]) -> InvestigationCompletion,
+) -> EditRun {
+    let options = SemanticEditOptions {
+        capabilities: EditCapabilities {
+            inspect: options.operations.clone(),
+            propose: Vec::new(),
+            inspect_first: true,
+        },
+        budgets: options.budgets,
+    };
+    run_semantic_objective_inventory(
+        model,
+        controller,
+        target,
+        service,
+        request,
+        &options,
+        policy,
+        Some(discovery),
+        Some(&mut completion),
+    )
+}
 
 /// Execution policy for the M1/M2 convenience entry point.
 #[derive(Debug, Default)]
@@ -1275,84 +1408,113 @@ fn run_semantic_edit_inventory<T: SourceTarget>(
     policy: impl for<'a> FnMut(crate::tool::semantic::SemanticAuthorization<'a>) -> bool,
     discovery: Option<&SemanticDiscoveryOptions>,
 ) -> EditRun {
-    if request.scope != PermittedEditScope::Document(target.source_id())
-        || request.source.id != target.source_id()
-    {
-        return EditRun::default().finish(EditOutcome::AuthorizationFailure);
-    }
-    if request.source.version != target.version()
-        || request.source.text != target.text()
-        || request.source.language != target.language_id()
-        || request.instruction.trim().is_empty()
-    {
-        return EditRun::default().finish(EditOutcome::MissingPrerequisite);
-    }
-    let task_context = controller.task_contract().map(|task| task.context());
-    let provider = match crate::tool::semantic::SemanticToolProvider::new(
-        service,
-        target,
-        controller,
-        request.scope,
-        request.selection,
-        policy,
-    ) {
-        Ok(provider) => provider,
-        Err(ToolError::Denied { .. }) => {
+    run_semantic_objective_inventory(
+        model, controller, target, service, request, options, policy, discovery, None,
+    )
+}
+
+fn run_semantic_objective_inventory<T: SourceTarget>(
+    model: &mut (impl DecisionModel + ?Sized),
+    controller: &mut SourceEditController,
+    target: &T,
+    service: &dyn scope_language::LanguageService,
+    request: AgentEditRequest<'_>,
+    options: &SemanticEditOptions,
+    policy: impl for<'a> FnMut(crate::tool::semantic::SemanticAuthorization<'a>) -> bool,
+    discovery: Option<&SemanticDiscoveryOptions>,
+    completion: Option<&mut CompletionPolicy<'_>>,
+) -> EditRun {
+    let snapshot = ToolValue::object([
+        ("source_id", format!("{:?}", target.source_id()).into()),
+        ("version", target.version().to_string().into()),
+        ("source", target.text().into()),
+    ]);
+    let result = (|| {
+        if request.scope != PermittedEditScope::Document(target.source_id())
+            || request.source.id != target.source_id()
+        {
             return EditRun::default().finish(EditOutcome::AuthorizationFailure);
         }
-        Err(_) => return EditRun::default().finish(EditOutcome::MissingPrerequisite),
-    };
-    let mut session = match AgentSession::builder().provider(provider).build() {
-        Ok(session) => session,
-        Err(_) => return EditRun::default().finish(EditOutcome::MissingPrerequisite),
-    };
-    let selection = request.selection.map(|range| json!({"start":{"line":range.start.line,"column":range.start.column},"end":{"line":range.end.line,"column":range.end.column}}));
-    let context = json!({"kind":"edit_request", "instruction":request.instruction, "target_buffer":target.source_id().raw(), "target_kind":match target.source_id() { SourceId::Scratch(_) => "scratch", SourceId::Document(_) => "document" }, "language":target.language_id(), "expected_version":target.version().to_string(), "expected_source":target.text(), "selection":selection, "scope":"single_document", "task_contract":task_context}).to_string();
-    let operations = service.semantic_operations();
-    let eligible = |names: &[String], effect| {
-        names
-            .iter()
-            .filter(|name| {
-                operations.iter().any(|operation| {
-                    **name == format!("language.{}.{}", service.language_id(), operation.id)
-                        && operation.effect == effect
-                        && (operation.target == scope_language::SemanticTargetRequirement::Document
-                            || request.selection.is_some())
+        if request.source.version != target.version()
+            || request.source.text != target.text()
+            || request.source.language != target.language_id()
+            || request.instruction.trim().is_empty()
+        {
+            return EditRun::default().finish(EditOutcome::MissingPrerequisite);
+        }
+        let task_context = controller.task_contract().map(|task| task.context());
+        let provider = match crate::tool::semantic::SemanticToolProvider::new(
+            service,
+            target,
+            controller,
+            request.scope,
+            request.selection,
+            policy,
+        ) {
+            Ok(provider) => provider,
+            Err(ToolError::Denied { .. }) => {
+                return EditRun::default().finish(EditOutcome::AuthorizationFailure);
+            }
+            Err(_) => return EditRun::default().finish(EditOutcome::MissingPrerequisite),
+        };
+        let mut session = match AgentSession::builder().provider(provider).build() {
+            Ok(session) => session,
+            Err(_) => return EditRun::default().finish(EditOutcome::MissingPrerequisite),
+        };
+        let selection = request.selection.map(|range| json!({"start":{"line":range.start.line,"column":range.start.column},"end":{"line":range.end.line,"column":range.end.column}}));
+        let context = json!({"kind":"edit_request", "instruction":request.instruction, "target_buffer":target.source_id().raw(), "target_kind":match target.source_id() { SourceId::Scratch(_) => "scratch", SourceId::Document(_) => "document" }, "language":target.language_id(), "expected_version":target.version().to_string(), "expected_source":target.text(), "selection":selection, "scope":"single_document", "task_contract":task_context}).to_string();
+        let operations = service.semantic_operations();
+        let eligible = |names: &[String], effect| {
+            names
+                .iter()
+                .filter(|name| {
+                    operations.iter().any(|operation| {
+                        **name == format!("language.{}.{}", service.language_id(), operation.id)
+                            && operation.effect == effect
+                            && (operation.target
+                                == scope_language::SemanticTargetRequirement::Document
+                                || request.selection.is_some())
+                    })
                 })
-            })
-            .cloned()
-            .collect()
-    };
-    let capabilities = EditCapabilities {
-        inspect: eligible(
-            &options.capabilities.inspect,
-            scope_language::SemanticOperationEffect::Read,
-        ),
-        propose: eligible(
-            &options.capabilities.propose,
-            scope_language::SemanticOperationEffect::ProposeChanges,
-        ),
-        inspect_first: options.capabilities.inspect_first,
-    };
-    run_edit_session_inventory(
-        model,
-        &mut session,
-        Ok(target.source_id()),
-        &context,
-        &capabilities,
-        options.budgets,
-        EditDispatch {
-            policy: &mut |_, _| true,
-            relevant_state: &mut |_| {
-                ToolValue::object([
-                    ("source_id", format!("{:?}", target.source_id()).into()),
-                    ("version", target.version().to_string().into()),
-                    ("source", target.text().into()),
-                ])
+                .cloned()
+                .collect()
+        };
+        let capabilities = EditCapabilities {
+            inspect: eligible(
+                &options.capabilities.inspect,
+                scope_language::SemanticOperationEffect::Read,
+            ),
+            propose: eligible(
+                &options.capabilities.propose,
+                scope_language::SemanticOperationEffect::ProposeChanges,
+            ),
+            inspect_first: options.capabilities.inspect_first,
+        };
+        run_objective_session_inventory(
+            model,
+            &mut session,
+            Ok(target.source_id()),
+            &context,
+            &capabilities,
+            options.budgets,
+            EditDispatch {
+                policy: &mut |_, _| true,
+                relevant_state: &mut |_| {
+                    ToolValue::object([
+                        ("source_id", format!("{:?}", target.source_id()).into()),
+                        ("version", target.version().to_string().into()),
+                        ("source", target.text().into()),
+                    ])
+                },
             },
-        },
-        discovery,
-    )
+            discovery,
+            completion,
+        )
+    })();
+    EditRun {
+        source_snapshot: Some(snapshot),
+        ..result
+    }
 }
 
 #[cfg(test)]
@@ -2049,6 +2211,9 @@ mod intent_tests;
 
 #[cfg(test)]
 mod semantic_inventory_tests {
+    mod investigation_tests {
+        include!("investigation_tests.rs");
+    }
     use super::*;
     use crate::source_edit::SourceId;
     use scope_language::*;
