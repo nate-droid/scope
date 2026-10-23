@@ -42,6 +42,11 @@ retention failure after dispatch does not undo a read. These are logical budgets
 not allocator limits or host cancellation. Native providers are trusted,
 synchronous code: Script adds no sandbox, hard deadline, or rollback.
 
+For multi-operation downstream composition, see the [SI7 integration contract](../../docs/scope-script.md#composing-downstream-semantic-reads-si7)
+and runnable [multi-operation example](examples/multi_semantic.rs). Exposure and
+per-operation authorization are separate; existing single-operation constructors
+remain supported.
+
 ## Validation
 
 ```sh

@@ -50,6 +50,117 @@ Simple (`scope.simple`) supplies analysis; neither its analysis nor pure Script
 success is downstream semantic acceptance. Interactive language sessions and
 host-backed Script remain explicit embedding choices.
 
+## Composing downstream semantic reads (SI7)
+
+`ScriptRunner` is the reusable `ReadOnlyCommand` adapter for
+`scope_ide::cli::run_with_registry_and_command`. A launcher can explicitly expose
+several existing operations from one `LanguageService` against one bound target:
+
+```rust,ignore
+let mut runner = ScriptRunner::with_operations(
+    service,
+    [
+        ("inspect".to_owned(), Some(true)),
+        ("check".to_owned(), None),
+    ],
+)?;
+run_with_registry_and_command(args, registry, &mut runner)?;
+```
+
+Use actual language-local operation IDs, not these illustrative names. Exact API:
+
+```rust,ignore
+pub fn with_operations(
+    service: &'a dyn LanguageService,
+    operations: impl IntoIterator<Item = (String, Option<bool>)>,
+) -> Result<Self, Box<dyn std::error::Error>>;
+```
+
+The existing `ScriptRunner::new(service, operation_id, authorization)` remains
+compatible. The collection constructor rejects empty collections, duplicate IDs,
+unknown IDs, and non-`Read` operations. It does not replace earlier bindings.
+The normal semantic provider also rejects duplicate full identities, including
+collisions between providers in an `AgentSession`. Short names are never used for
+Script dispatch: identities remain `language.<language_id>.<operation_id>`.
+There is no alias or language-wide permission mechanism.
+
+For hosts already constructing a semantic `AgentSession`, the lower-level API is:
+
+```rust,ignore
+pub fn with_bindings(
+    session: AgentSession<'a>,
+    bindings: impl IntoIterator<Item = (String, Option<bool>)>,
+    expected_source: impl Into<String>,
+    expected_version: u64,
+) -> Result<Self, Box<dyn std::error::Error>>;
+```
+
+This is `SemanticHost::with_bindings`; it accepts full operation identities and
+rejects duplicate bindings. As with `SemanticHost::new`, the embedding must install
+trusted semantic providers and capture source/version tokens from their target.
+Unknown bindings are not discoverable and invocation fails explicitly. Non-read
+bindings are excluded from discovery and explicitly rejected on invocation.
+Discovery preserves the underlying session catalog order and original semantic
+metadata, including typed arguments, effect, target, purpose, and constraints.
+
+### Exposure is not authorization
+
+There are four distinct boundaries: a language advertises operations; the host
+selects exact identities for Script exposure; each selected identity separately
+receives `Some(true)` authorization (both `None` and `Some(false)` deny); and the
+semantic provider checks its host-bound target, scope, revision, typed arguments,
+and source policy. Discovery does not grant authority. The runner installs the
+same per-operation read-only restriction at both the Script/session and semantic
+provider boundaries. Registered but unexposed operations remain unavailable.
+Argument-validation or source-policy failures can be structured semantic envelopes;
+a successful interpreter result alone is not semantic success.
+
+The runner uses independent Script and semantic scratch sources. Each run captures
+fresh host-owned snapshots; retained `RunRecord` evidence keeps the original text,
+identity, and revision even after later edits. No source is implicitly saved and
+scripts supply neither filesystem paths nor revision tokens. A scratch language
+mismatch fails provider construction. Without a bound target, the existing pure
+Script callback remains available but has no semantic host. Document-based `run`
+continues to use the embedding's configured language for its cloned document;
+embeddings must select the appropriate service rather than infer authority from a
+filename.
+
+The adapter supports one service and one target per runner, not multiple target
+routing. All operations share the existing 64-call host budget. For compatibility,
+`RunRecord.operation` remains the entry operation label (the lexically first full
+binding for scratch callbacks), not a list of calls; `results` retains all returned
+semantic envelopes. Provider descriptions are expected to remain stable during a
+session, as in the existing semantic provider contract.
+
+Only declared `Read` effects are supported. Candidate evaluation is callable only
+when its existing operation is genuinely declared `Read` and independently
+authorized; purpose metadata grants nothing. `ProposeChanges`, edit/review flows,
+runtime authority, and filesystem capabilities are not added. Native language
+providers remain trusted code; this adapter does not sandbox their computation.
+
+### Runnable demonstration
+
+From the repository root:
+
+```sh
+cargo run -p scope-script --example multi_semantic --locked --offline
+```
+
+The [demo](../crates/scope-script/examples/multi_semantic.rs) installs a small
+fixture language, discovers `echo` and `measure`, invokes both against an independent
+unsaved target, and combines their envelopes into a report. It then prints explicit
+rejections for a registered-but-hidden operation and an exposed-but-denied one;
+only the two authorized reads reach the provider. No downstream dependencies or
+files are needed.
+
+SI7 extends the two Script adapters, not the underlying semantic system:
+`SemanticToolProvider` and `AgentSession` already represented multiple operations,
+typed dispatch, source policies, and duplicate rejection. Their existing facilities
+were reusable, but the single-action fields in both Script adapters prevented
+collection exposure. Downstream adoption only requires replacing the single
+constructor with the collection constructor and choosing authorization separately
+for each existing read operation; registry and launcher composition stay unchanged.
+
 ## Saved files: edit, run, repeat
 
 From the repository root:

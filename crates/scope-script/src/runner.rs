@@ -9,7 +9,7 @@ use scope_ide::{
     tool::{AgentSession, semantic::SemanticToolProvider},
 };
 use scope_language::{LanguageService, RevisionId, SourceId};
-use std::io::Write;
+use std::{collections::BTreeMap, io::Write};
 
 /// Owned provenance: records never borrow a live shell buffer.
 #[derive(Debug, Clone)]
@@ -34,13 +34,12 @@ pub struct RunRecord {
     pub outcome: Result<Value, Error>,
 }
 
-/// One explicitly installed semantic read. `None` and `Some(false)` deny execution.
+/// Explicitly installed semantic reads. `None` and `Some(false)` deny execution.
 /// Discovery and pure scripts require no authorization. This grants no workspace,
 /// runtime, file persistence, proposal, or source-edit access to scripts.
 pub struct ScriptRunner<'a> {
     service: &'a dyn LanguageService,
-    action: String,
-    authorization: Option<bool>,
+    bindings: BTreeMap<String, Option<bool>>,
     pub records: Vec<RunRecord>,
 }
 impl<'a> ScriptRunner<'a> {
@@ -51,10 +50,47 @@ impl<'a> ScriptRunner<'a> {
     ) -> Self {
         Self {
             service,
-            action: format!("language.{}.{}", service.language_id(), operation_id),
-            authorization,
+            bindings: BTreeMap::from([(
+                format!("language.{}.{}", service.language_id(), operation_id),
+                authorization,
+            )]),
             records: Vec::new(),
         }
+    }
+
+    /// Expose existing language-local read operation IDs against one bound target.
+    /// Authorization is independent for each entry; missing permission denies calls.
+    /// Empty, duplicate, unknown, and non-read selections are rejected.
+    pub fn with_operations(
+        service: &'a dyn LanguageService,
+        operations: impl IntoIterator<Item = (String, Option<bool>)>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let descriptions = service.semantic_operations();
+        let mut bindings = BTreeMap::new();
+        for (id, authorization) in operations {
+            let action = format!("language.{}.{id}", service.language_id());
+            if bindings.contains_key(&action) {
+                return Err(format!("duplicate script operation: {id}").into());
+            }
+            let description = descriptions
+                .iter()
+                .find(|description| description.id == id)
+                .ok_or_else(|| format!("unknown script operation: {id}"))?;
+            if description.effect != scope_language::SemanticOperationEffect::Read {
+                return Err(
+                    format!("unsupported script operation effect: {id} is not Read").into(),
+                );
+            }
+            bindings.insert(action, authorization);
+        }
+        if bindings.is_empty() {
+            return Err("script operations must not be empty".into());
+        }
+        Ok(Self {
+            service,
+            bindings,
+            records: Vec::new(),
+        })
     }
 
     /// Selection is in the target, never in the script. Setup errors precede
@@ -66,7 +102,7 @@ impl<'a> ScriptRunner<'a> {
         selection: TextRange,
         operation: &str,
     ) -> Result<&RunRecord, Box<dyn std::error::Error>> {
-        if operation != self.action {
+        if !self.bindings.contains_key(operation) {
             return Err(format!("unavailable script operation: {operation}").into());
         }
         TextBuffer::new(document.text()).span_for_range(selection)?;
@@ -99,7 +135,12 @@ impl<'a> ScriptRunner<'a> {
             revision: RevisionId::from_version(target.version()),
             text: target.text().to_owned(),
         };
-        let operation = self.action.clone();
+        let operation = self
+            .bindings
+            .keys()
+            .next()
+            .expect("runner has a binding")
+            .clone();
         let record = self.evaluate(source, target, snapshot, selection, &operation)?;
         write_record(record, output)
     }
@@ -118,7 +159,8 @@ impl<'a> ScriptRunner<'a> {
             text: source.text().to_owned(),
         };
         let mut controller = SourceEditController::default();
-        let allowed = self.authorization == Some(true);
+        let bindings = &self.bindings;
+        let language = self.service.language_id();
         let provider = SemanticToolProvider::new(
             self.service,
             target,
@@ -126,17 +168,20 @@ impl<'a> ScriptRunner<'a> {
             PermittedEditScope::Document(target.source_id()),
             Some(selection),
             move |request| {
-                allowed && request.operation.effect == scope_language::SemanticOperationEffect::Read
+                let action = format!("language.{language}.{}", request.operation.id);
+                bindings.get(&action) == Some(&Some(true))
+                    && request.operation.effect == scope_language::SemanticOperationEffect::Read
             },
         )?;
         let session = AgentSession::builder().provider(provider).build()?;
-        let mut host = SemanticHost::new(
+        let mut host = SemanticHost::with_bindings(
             session,
-            &self.action,
+            self.bindings
+                .iter()
+                .map(|(action, authorization)| (action.clone(), *authorization)),
             target.text(),
             target.version(),
-            self.authorization,
-        );
+        )?;
         let catalog = host
             .operations()
             .map_err(|kind| Error { offset: 0, kind })?;
@@ -180,11 +225,14 @@ impl<H: Host> Host for CapturedHost<'_, H> {
         Ok(value)
     }
 }
-// Completion advertises only the explicitly installed action; it carries no authority.
-struct AuthoringHost<'a>(&'a str);
+// Completion advertises all explicitly installed actions; it carries no authority.
+struct AuthoringHost<'a>(&'a BTreeMap<String, Option<bool>>);
 impl Host for AuthoringHost<'_> {
     fn operation_names(&self) -> Vec<(String, String)> {
-        vec![("semantic".into(), self.0.into())]
+        self.0
+            .keys()
+            .map(|action| ("semantic".into(), action.clone()))
+            .collect()
     }
     fn operations(&mut self) -> Result<Value, crate::ErrorKind> {
         Err(crate::ErrorKind::Runtime(
@@ -215,7 +263,7 @@ impl ReadOnlyCommand for ScriptRunner<'_> {
     ) -> Vec<scope_ide::language::CompletionItem> {
         use scope_terminal::CompletionProvider;
         let interpreter = Interpreter::new();
-        let host = AuthoringHost(&self.action);
+        let host = AuthoringHost(&self.bindings);
         crate::completion::ScriptCompletionProvider::new(&interpreter, &host)
             .complete(draft, cursor)
             .into_iter()
