@@ -99,7 +99,10 @@ fn real_m1_m2_adapter_preserves_review_and_binds_snapshot() {
         version: 7,
     };
     let mut controller = SourceEditController::default();
-    let responses = ["bad","new"].map(|text|json!({"type":"tool","name":"language.neutral.replace","arguments":{"expected_version":"7","expected_source":"old","arguments":{"text":text}}}).to_string());
+    let responses = ["bad", "new"].map(|text| {
+        json!({"type":"tool","name":"language.neutral.replace","arguments":{"text":text}})
+            .to_string()
+    });
     let mut model = script(responses.into());
     let options = SemanticEditOptions {
         capabilities: EditCapabilities {
@@ -130,6 +133,74 @@ fn real_m1_m2_adapter_preserves_review_and_binds_snapshot() {
     controller.accept(id, &mut target).unwrap();
     assert_eq!(target.text(), "new");
     assert_eq!(target.version(), 8);
+}
+
+#[test]
+fn semantic_runners_bind_multiline_source_and_accept_domain_only_calls() {
+    let original = "old\nsecond\n";
+    let replacement = "new\nline";
+    let target = NativeTarget {
+        text: original.into(),
+        version: 7,
+    };
+    let mut controller = SourceEditController::default();
+    let mut model = script(vec![
+        semantic_call("survey", replacement),
+        json!({"type":"complete","content":"Observed\nsource"}).to_string(),
+    ]);
+    let investigation = run_semantic_investigation_with_discovery(
+        &mut model,
+        &mut controller,
+        &target,
+        &EvaluatingService,
+        AgentEditRequest::new(&target, "inspect"),
+        &SemanticInvestigationOptions {
+            operations: vec!["language.neutral.survey".into()],
+            ..Default::default()
+        },
+        &SemanticDiscoveryOptions {
+            initial_operations: vec!["language.neutral.survey".into()],
+            page_size: 1,
+        },
+        |authorization| {
+            assert_eq!(authorization.source.text, original);
+            assert_eq!(authorization.arguments, &json!({"text":replacement}));
+            true
+        },
+        |content, evidence| {
+            assert_eq!(content, "Observed\nsource");
+            assert_eq!(evidence.len(), 1);
+            InvestigationCompletion::Completed
+        },
+    );
+    assert_eq!(investigation.outcome, EditOutcome::InvestigationCompleted);
+    let mut model = script(vec![semantic_call("replace", replacement)]);
+    let edit = run_semantic_edit(
+        &mut model,
+        &mut controller,
+        &target,
+        &NativeService,
+        AgentEditRequest::new(&target, "replace"),
+        &SemanticEditOptions {
+            capabilities: EditCapabilities {
+                propose: vec!["language.neutral.replace".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        |authorization| {
+            assert_eq!(authorization.source.text, original);
+            assert_eq!(authorization.arguments, &json!({"text":replacement}));
+            true
+        },
+    );
+    assert_eq!(edit.outcome, EditOutcome::ProposalReady);
+    assert_eq!(
+        controller.preview(edit.proposal.unwrap(), &target).unwrap(),
+        "new\nline\nsecond\n"
+    );
+    assert_eq!(target.text(), original);
+    assert_eq!(target.version(), 7);
 }
 
 struct EvaluatingService;
@@ -220,7 +291,7 @@ fn generic_provider_violation_reaches_refinement_and_revised_proposal() {
     let call = |operation: &str, text: &str| {
         json!({
             "type":"tool", "name":format!("language.neutral.{operation}"),
-            "arguments":{"expected_version":"7", "expected_source":"old", "arguments":{"text":text}}
+            "arguments":{"text":text}
         })
         .to_string()
     };
@@ -274,7 +345,7 @@ fn generic_provider_violation_reaches_refinement_and_revised_proposal() {
 fn semantic_call(operation: &str, text: &str) -> String {
     json!({
         "type": "tool", "name": format!("language.neutral.{operation}"),
-        "arguments": {"expected_version": "7", "expected_source": "old", "arguments": {"text": text}}
+        "arguments": {"text": text}
     })
     .to_string()
 }
@@ -417,10 +488,7 @@ fn guided_refinement_survives_optional_source_inspection() {
             guidance["primary_action"],
             "submit_changed_candidate_using_evaluator"
         );
-        assert_eq!(
-            guidance["decision"]["arguments"]["arguments"]["text"],
-            "wrong"
-        );
+        assert_eq!(guidance["decision"]["arguments"]["text"], "wrong");
         assert_eq!(guidance["remaining_refinements"], 2);
         assert!(
             guidance["inspection_scope"]
@@ -1002,7 +1070,8 @@ fn model_and_proposal_budgets_and_repetition_allowance_are_finite() {
 
 #[test]
 fn malformed_decision_receives_feedback_then_proposal_finishes() {
-    let mut model = script(vec!["```json\n{}\n```".into(), tool("edit", 0)]);
+    let malformed = "{\"type\":\"complete\",\"content\":\"first\nsecond\"}";
+    let mut model = script(vec![malformed.into(), tool("edit", 0)]);
     let (mut session, calls) = session(vec![ToolValue::object([
         ("status", "proposal".into()),
         ("proposal_id", "1".into()),
@@ -1015,13 +1084,32 @@ fn malformed_decision_receives_feedback_then_proposal_finishes() {
     assert!(
         model.messages[1]
             .iter()
+            .all(|m| m.role != "assistant" && m.content != malformed)
+    );
+    let feedback = model.messages[1]
+        .iter()
+        .filter(|message| message.role == "user")
+        .filter_map(|message| serde_json::from_str::<serde_json::Value>(&message.content).ok())
+        .find(|value| value["kind"] == "protocol_error")
+        .expect("retained protocol correction");
+    assert_eq!(feedback["category"], "malformed_response");
+    let instruction = feedback["instruction"].as_str().unwrap();
+    assert!(instruction.contains(r#"newlines inside JSON strings as \n"#));
+    assert!(instruction.contains("exactly one complete JSON decision"));
+    assert!(
+        model.messages[1]
+            .iter()
             .any(|m| m.role == "user" && m.content.contains("protocol_error"))
     );
 }
 
 #[test]
 fn malformed_decisions_stop_at_transport_budget_without_dispatch() {
-    let mut model = script(vec!["not json".into(); 3]);
+    let mut model = script(vec![
+        "{\"type\":\"complete\",\"content\":\"first\nsecond\"}"
+            .into();
+        3
+    ]);
     let (mut session, calls) = session(vec![]);
     let result = run(&mut model, &mut session, true, EditBudgets::default());
     assert_eq!(result.outcome, EditOutcome::NoProgress);

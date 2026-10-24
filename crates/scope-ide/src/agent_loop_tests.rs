@@ -81,6 +81,43 @@ fn protocol_failures_are_not_language_diagnostics() {
     );
 }
 
+const MALFORMED_MULTILINE: &str = "{\"type\":\"complete\",\"content\":\"first\nsecond\"}";
+const MULTILINE_COMPLETE: &str = r#"{"type":"complete","content":"first\nsecond"}"#;
+
+#[test]
+fn schema_errors_are_invalid_decisions_and_recover_without_dispatch() {
+    for text in [
+        r#"{"type":"complete","content":"done","extra":true}"#,
+        r#"{"type":"complete"}"#,
+        r#"{"type":"complete","content":42}"#,
+        r#"{"type":"other","content":"done"}"#,
+        r#"{"type":"tool","name":"echo","arguments":[]}"#,
+        r#"{"type":"tool","name":"echo","arguments":{"x":1.5}}"#,
+        r#"{"type":"tool","name":"echo","arguments":{"x":1,"x":2}}"#,
+    ] {
+        assert_eq!(
+            parse_decision(text).unwrap_err().category(),
+            "invalid_decision"
+        );
+        let (mut session, calls) = session();
+        let mut model = FakeModel::new(&[text, COMPLETE]);
+        let run = run_session(
+            &mut model,
+            &mut session,
+            "inspect",
+            AgentLimits::default(),
+            read_only_policy,
+        )
+        .unwrap();
+        assert_eq!((run.decisions, run.tool_calls, run.malformed), (2, 0, 1));
+        assert_eq!(run.stop, AgentStop::Completed);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        let feedback: Value =
+            serde_json::from_str(&model.conversations[1].last().unwrap().1).unwrap();
+        assert_eq!(feedback["category"], "invalid_decision");
+    }
+}
+
 #[test]
 fn decision_framing_failures_never_dispatch() {
     let invalid = [
@@ -88,8 +125,6 @@ fn decision_framing_failures_never_dispatch() {
         r#"{"type":"tool","name":"echo","arguments":{}} {"type":"complete","content":"done"}"#,
         "```json\n{\"type\":\"complete\",\"content\":\"done\"}\n```",
         r#"Here is the decision: {"type":"complete","content":"done"}"#,
-        r#"{"type":"complete","content":"done","extra":true}"#,
-        r#"{"type":"tool","name":"echo","arguments":[]}"#,
     ];
     for text in invalid {
         assert_eq!(
@@ -123,7 +158,7 @@ fn decision_framing_failures_never_dispatch() {
 #[test]
 fn default_malformed_budget_stops_on_third_failure_without_completion() {
     let (mut session, calls) = session();
-    let mut model = FakeModel::new(&["bad", "bad", "bad"]);
+    let mut model = FakeModel::new(&[MALFORMED_MULTILINE; 3]);
     let run = run_session(
         &mut model,
         &mut session,
@@ -225,11 +260,13 @@ fn q1_multi_decisions_never_reach_authorization_or_mutation() {
         format!(r#"{{"type":"tool","name":"write","arguments":{{}},"actions":[{ECHO}]}}"#),
     ];
     for clarified in [false, true] {
-        for response in &responses {
-            assert_eq!(
-                parse_decision(response).unwrap_err().category(),
+        for (index, response) in responses.iter().enumerate() {
+            let category = if index == 1 || index == 3 {
+                "invalid_decision"
+            } else {
                 "malformed_response"
-            );
+            };
+            assert_eq!(parse_decision(response).unwrap_err().category(), category);
             for recover in [false, true] {
                 let (mut session, calls) = session();
                 let replies = if recover {
@@ -268,7 +305,7 @@ fn q1_multi_decisions_never_reach_authorization_or_mutation() {
                 assert_eq!(calls.load(Ordering::SeqCst), 0);
                 let feedback: Value =
                     serde_json::from_str(&model.inner.conversations[1].last().unwrap().1).unwrap();
-                assert_eq!(feedback["category"], "malformed_response");
+                assert_eq!(feedback["category"], category);
             }
         }
     }
@@ -630,7 +667,7 @@ fn oversized_tool_feedback_stops_without_rollback_or_another_model_call() {
 
 #[test]
 fn trace_associates_responses_feedback_and_preserves_execution() {
-    let replies = [ECHO, ECHO, ECHO, "bad", COMPLETE];
+    let replies = [ECHO, ECHO, ECHO, MALFORMED_MULTILINE, MULTILINE_COMPLETE];
     let (mut plain_session, plain_calls) = session();
     let mut plain_model = FakeModel::new(&replies);
     let plain = run_session(
@@ -692,6 +729,11 @@ fn trace_associates_responses_feedback_and_preserves_execution() {
         .iter()
         .find(|e| e["event"] == "feedback" && e["ordinal"] == 4)
         .unwrap();
+    assert_eq!(plain.content, "first\nsecond");
+    assert_eq!(correction["envelope"]["category"], "malformed_response");
+    let instruction = correction["envelope"]["instruction"].as_str().unwrap();
+    assert!(instruction.contains(r#"newlines inside JSON strings as \n"#));
+    assert!(instruction.contains("exactly one complete JSON decision"));
     assert_eq!(correction["envelope"]["kind"], "protocol_error");
     assert_eq!(correction["retained"], true);
     assert_eq!(events[events.len() - 2]["event"], "outcome");

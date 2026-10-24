@@ -44,6 +44,142 @@ impl SourceTarget for Target {
         Ok(())
     }
 }
+#[test]
+fn projected_arguments_preserve_authority_schema_and_strict_validation() {
+    for allow in [false, true] {
+        let service = Service::default();
+        let target = Target::default();
+        let mut controller = SourceEditController::default();
+        {
+            let provider = SemanticToolProvider::new(
+                &service,
+                &target,
+                &mut controller,
+                scope(),
+                Some(selection()),
+                |authorization| {
+                    assert_eq!(authorization.source.text, "old");
+                    assert_eq!(authorization.source.version, 7);
+                    assert_eq!(authorization.source.id, SourceId::Scratch(42));
+                    assert_eq!(authorization.source.language, "mock");
+                    assert_eq!(authorization.arguments, &json!({"name": "new"}));
+                    allow
+                },
+            )
+            .unwrap();
+            assert_eq!(provider.tools()[0].inputs.len(), 3);
+            let mut provider = provider.with_projected_arguments().unwrap();
+            assert_eq!(provider.tools()[0].inputs.len(), 1);
+            assert_eq!(provider.tools()[0].inputs[0].name, "name");
+            let metadata = provider.metadata("language.mock.rename").unwrap();
+            let schema = field(&metadata, "invocation_schema");
+            assert_eq!(
+                field(schema, "additionalProperties"),
+                &ToolValue::Boolean(false)
+            );
+            let domain =
+                || ToolCall::new("language.mock.rename").with_argument("name", "new".into());
+            for key in [
+                "expected_source",
+                "expected_version",
+                "arguments",
+                "source_id",
+                "language",
+                "target",
+                "selection",
+            ] {
+                let result = provider
+                    .invoke(domain().with_argument(key, "override".into()))
+                    .unwrap();
+                assert_eq!(
+                    field(&result.value, "status").as_str(),
+                    Some("invalid_arguments")
+                );
+                assert_eq!(field(&result.value, "invocation_schema"), schema);
+            }
+            assert_status(
+                provider.invoke(domain()).unwrap(),
+                if allow { "proposal" } else { "unauthorized" },
+            );
+        }
+        assert_eq!(service.calls.load(Ordering::SeqCst), usize::from(allow));
+        assert_eq!(controller.list().count(), usize::from(allow));
+    }
+}
+
+#[test]
+fn projected_baseline_is_exact_and_never_recaptured() {
+    use std::cell::Cell;
+    struct ChangingTarget {
+        text: Cell<&'static str>,
+        version: Cell<u64>,
+        id: Cell<u64>,
+        language: Cell<&'static str>,
+    }
+    impl SourceTarget for ChangingTarget {
+        fn source_id(&self) -> SourceId {
+            SourceId::Scratch(self.id.get())
+        }
+        fn text(&self) -> &str {
+            self.text.get()
+        }
+        fn version(&self) -> u64 {
+            self.version.get()
+        }
+        fn language_id(&self) -> &str {
+            self.language.get()
+        }
+        fn apply_source_edit(&mut self, _: TextEdit) -> Result<(), ProposalError> {
+            unreachable!()
+        }
+    }
+    for original in ["old\n", "old\r\n", "old\n\n", "old ", "o\u{301}ld"] {
+        let target = ChangingTarget {
+            text: Cell::new(original),
+            version: Cell::new(7),
+            id: Cell::new(42),
+            language: Cell::new("mock"),
+        };
+        let service = Service::default();
+        let mut controller = SourceEditController::default();
+        let authorizations = Cell::new(0);
+        let mut provider = SemanticToolProvider::new(
+            &service,
+            &target,
+            &mut controller,
+            scope(),
+            Some(selection()),
+            |authorization| {
+                assert_eq!(authorization.source.text, original);
+                authorizations.set(authorizations.get() + 1);
+                false
+            },
+        )
+        .unwrap()
+        .with_projected_arguments()
+        .unwrap();
+        let domain = || ToolCall::new("language.mock.rename").with_argument("name", "new".into());
+        assert_status(provider.invoke(domain()).unwrap(), "unauthorized");
+        for changed in ["old", "old\n ", "óld"] {
+            target.text.set(changed);
+            assert_status(provider.invoke(domain()).unwrap(), "revision_conflict");
+        }
+        target.text.set(original);
+        target.version.set(8);
+        assert_status(provider.invoke(domain()).unwrap(), "revision_conflict");
+        target.version.set(7);
+        target.id.set(43);
+        assert_status(provider.invoke(domain()).unwrap(), "revision_conflict");
+        target.id.set(42);
+        target.language.set("other");
+        assert_status(provider.invoke(domain()).unwrap(), "revision_conflict");
+        target.language.set("mock");
+        assert_status(provider.invoke(domain()).unwrap(), "unauthorized");
+        assert_eq!(authorizations.get(), 2);
+        assert_eq!(service.calls.load(Ordering::SeqCst), 0);
+    }
+}
+
 fn selection() -> TextRange {
     TextRange::new(Position::new(0, 0), Position::new(0, 3))
 }

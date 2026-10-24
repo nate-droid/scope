@@ -116,12 +116,12 @@ fn model(buffers: &ScratchBuffers, candidates: &[&str]) -> Model {
         decisions: candidates
             .iter()
             .map(|candidate| {
-                // The tool is document-bound by the host; its envelope has no target-ID field.
+                // The host binds target identity and source preconditions.
                 assert_eq!(buffers.selected().unwrap().source_id(), id);
                 json!({"type":"tool", "name":"language.configured-fixture.replace", "arguments":{
-                "expected_version":buffer.version().to_string(), "expected_source":buffer.text(),
-                "arguments":{"candidate":candidate}
-            }}).to_string()
+                    "candidate":candidate
+                }})
+                .to_string()
             })
             .collect(),
     }

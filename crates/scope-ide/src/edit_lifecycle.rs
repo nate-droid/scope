@@ -457,7 +457,11 @@ pub struct SemanticDiscoveryOptions {
     pub page_size: usize,
 }
 
-fn compact_catalog(catalog: &crate::tool::SessionCatalog, names: &[String]) -> serde_json::Value {
+fn compact_catalog(
+    catalog: &crate::tool::SessionCatalog,
+    names: &[String],
+    projected: bool,
+) -> serde_json::Value {
     let mut entries: Vec<_> = catalog
         .tools
         .iter()
@@ -481,20 +485,28 @@ fn compact_catalog(catalog: &crate::tool::SessionCatalog, names: &[String]) -> s
                     operation.insert(key.into(), value.clone());
                 }
             }
+
+            let inputs = if projected {
+                let mut single = catalog.clone();
+                single.tools = vec![entry.clone()];
+                to_json(single.to_value())["tools"][0]["definition"]["inputs"].clone()
+            } else {
+                json!([
+                    {"name":"expected_version","kind":"string","required":true},
+                    {"name":"expected_source","kind":"string","required":true},
+                    {"name":"arguments","kind":"object","required":true}
+                ])
+            };
             json!({
                 "name":entry.definition.name,
                 "operation":operation,
                 "invocation_schema":metadata.get("invocation_schema"),
-                "inputs":[
-                    {"name":"expected_version","kind":"string","required":true},
-                    {"name":"expected_source","kind":"string","required":true},
-                    {"name":"arguments","kind":"object","required":true}
-                ],
-                "preconditions":{
+                "inputs":inputs,
+                "preconditions":if projected { json!({"ownership":"Host binds exact source, revision, identity, scope and selection; send only domain arguments."}) } else { json!({
                     "expected_version":"Exact decimal u64 revision of resolved target",
                     "expected_source":"Exact original source of resolved target",
                     "selection":"Host-provided selection required when operation.target is Selection"
-                },
+                }) },
                 "scope":"single_document",
                 "effect_semantics":if metadata.get("purpose").and_then(serde_json::Value::as_str) == Some("CandidateEvaluation") && entry.definition.effect == ToolEffect::Read {
                     "Executes a disposable candidate; does not install its definitions or modify active source. Returned evidence may support a later proposal; candidate definitions are not present in the document."
@@ -636,6 +648,7 @@ fn run_edit_session_inventory(
         dispatch,
         discovery,
         None,
+        false,
     )
 }
 
@@ -649,6 +662,7 @@ fn run_objective_session_inventory(
     dispatch: EditDispatch<'_>,
     discovery: Option<&SemanticDiscoveryOptions>,
     mut completion: Option<&mut CompletionPolicy<'_>>,
+    projected_arguments: bool,
 ) -> EditRun {
     use EditOutcome::*;
     let mut run = EditRun::default();
@@ -687,7 +701,16 @@ fn run_objective_session_inventory(
         },
     );
     let mut messages = Vec::new();
-    let system = if completion.is_some() {
+    let system = if projected_arguments {
+        let objective = if completion.is_some() {
+            "This is a bounded read-only investigation. Discover and invoke permitted read operations, inspect evidence, then complete with an evidence-backed conclusion or explicit uncertainty. Never propose, apply or save. Completion is assessed by the host, not proof of semantic correctness."
+        } else {
+            "This is a bounded edit task. During Inspect use read tools or complete to advance to Propose. During Propose invoke one permitted semantic edit tool. A proposal ends execution; never apply it. Complete without a proposal means unsupported request."
+        };
+        format!(
+            "{PROTOCOL}\n{objective} For language tools, put only operation-specific domain fields directly in the decision arguments object, matching invocation_schema. The host binds the exact source, revision, target, scope and selection. Do not send expected_version, expected_source, an arguments wrapper, or catalog metadata. Escape literal newlines inside JSON strings as \\n."
+        )
+    } else if completion.is_some() {
         format!(
             "{PROTOCOL}\nThis is a bounded read-only investigation. Discover and invoke permitted read operations, inspect evidence, then return complete with an evidence-backed conclusion or explicit uncertainty. Never propose, apply or save. Language tool arguments must contain only expected_version, expected_source, and arguments, copied from edit_request; operation-specific inputs belong inside arguments.arguments. Completion is assessed by the host and does not establish semantic correctness."
         )
@@ -780,7 +803,7 @@ fn run_objective_session_inventory(
         {
             return run.finish(OperationBudgetExhausted);
         }
-        let context = json!({"kind":"edit_phase", "phase":format!("{:?}",run.state.phase()), "catalog":compact_catalog(&catalog, &phase_visible), "remaining_budgets":{"inspections":budgets.inspections.saturating_sub(run.inspections),"evaluations":budgets.refinements.saturating_add(1).saturating_sub(run.evaluations),"refinements":budgets.refinements.saturating_sub(run.refinements),"model_invocations":budgets.model_invocations.min(budgets.transport.max_decisions).saturating_sub(run.model_invocations)}, "discovery":discovery.map(|options| json!({"name":DISCOVER_SEMANTIC_OPERATIONS,"arguments":{},"page_size":options.page_size,"description":"Reveal the next sorted page of eligible operations for this phase; no authorization granted. Accepts exactly an empty JSON object: arguments must be {}. page_size is host-owned metadata, not an accepted argument; do not supply page_size inside arguments. No other argument keys are accepted."}))}).to_string();
+        let context = json!({"kind":"edit_phase", "phase":format!("{:?}",run.state.phase()), "catalog":compact_catalog(&catalog, &phase_visible, projected_arguments), "remaining_budgets":{"inspections":budgets.inspections.saturating_sub(run.inspections),"evaluations":budgets.refinements.saturating_add(1).saturating_sub(run.evaluations),"refinements":budgets.refinements.saturating_sub(run.refinements),"model_invocations":budgets.model_invocations.min(budgets.transport.max_decisions).saturating_sub(run.model_invocations)}, "discovery":discovery.map(|options| json!({"name":DISCOVER_SEMANTIC_OPERATIONS,"arguments":{},"page_size":options.page_size,"description":"Reveal the next sorted page of eligible operations for this phase; no authorization granted. Accepts exactly an empty JSON object: arguments must be {}. page_size is host-owned metadata, not an accepted argument; do not supply page_size inside arguments. No other argument keys are accepted."}))}).to_string();
         if push_message(&mut messages, "user", context, budgets.transport).is_err() {
             return run.finish(OperationBudgetExhausted);
         }
@@ -865,7 +888,7 @@ fn run_objective_session_inventory(
                     attempt: malformed,
                 });
                 let feedback = json!({"kind":"protocol_error", "error":error.to_string(), "category":error.category(),
-                    "instruction":"Return exactly one JSON decision matching the system protocol, without markdown or surrounding text. Use the current phase's listed tools or its permitted completion transition."}).to_string();
+                    "instruction":error.correction()}).to_string();
                 continuation.feedback = Some(feedback);
                 continue;
             }
@@ -907,7 +930,7 @@ fn run_objective_session_inventory(
                 .cloned()
                 .collect();
             let feedback =
-                json!({"kind":"tool_result","ok":true,"value":compact_catalog(&catalog, &names)})
+                json!({"kind":"tool_result","ok":true,"value":compact_catalog(&catalog, &names, projected_arguments)})
                     .to_string();
             continuation.feedback = Some(feedback);
             continue;
@@ -1457,6 +1480,10 @@ fn run_semantic_objective_inventory<T: SourceTarget>(
             }
             Err(_) => return EditRun::default().finish(EditOutcome::MissingPrerequisite),
         };
+        let provider = match provider.with_projected_arguments() {
+            Ok(provider) => provider,
+            Err(_) => return EditRun::default().finish(EditOutcome::MissingPrerequisite),
+        };
         let mut session = match AgentSession::builder().provider(provider).build() {
             Ok(session) => session,
             Err(_) => return EditRun::default().finish(EditOutcome::MissingPrerequisite),
@@ -1509,6 +1536,7 @@ fn run_semantic_objective_inventory<T: SourceTarget>(
             },
             discovery,
             completion,
+            true,
         )
     })();
     EditRun {
@@ -2157,6 +2185,7 @@ mod inventory_tests {
         let compact = compact_catalog(
             &session.catalog(),
             &["language.test.z".into(), "language.test.a".into()],
+            false,
         );
         assert_eq!(compact["tools"][0]["name"], "language.test.a");
         assert_eq!(compact["tools"][1]["name"], "language.test.z");
@@ -2337,7 +2366,7 @@ mod semantic_inventory_tests {
         }
     }
     fn tool(name: &str) -> String {
-        json!({"type":"tool","name":name,"arguments":{"expected_version":"7","expected_source":"old","arguments":{"text":"new"}}}).to_string()
+        json!({"type":"tool","name":name,"arguments":{"text":"new"}}).to_string()
     }
     fn discover() -> String {
         json!({"type":"tool","name":DISCOVER_SEMANTIC_OPERATIONS,"arguments":{}}).to_string()
@@ -2554,18 +2583,12 @@ mod semantic_inventory_tests {
         assert_eq!(result.run.outcome, EditOutcome::ProposalReady);
         assert_eq!((result.dispatches, result.policies), (1, 2));
         let advertised = &result.contexts[1]["catalog"]["tools"][0];
-        assert_eq!(
-            advertised["inputs"],
-            json!([
-                {"name":"expected_version","kind":"string","required":true},
-                {"name":"expected_source","kind":"string","required":true},
-                {"name":"arguments","kind":"object","required":true}
-            ])
-        );
+        assert_eq!(advertised["inputs"].as_array().unwrap().len(), 1);
+        assert_eq!(advertised["inputs"][0]["name"], "text");
         assert_eq!(advertised["operation"]["arguments"][0]["name"], "text");
         assert_eq!(advertised["operation"]["arguments"][0]["required"], true);
         assert_eq!(
-            advertised["invocation_schema"]["properties"]["arguments"]["properties"]["text"]["type"],
+            advertised["invocation_schema"]["properties"]["text"]["type"],
             "string"
         );
         assert_eq!(
@@ -2573,8 +2596,12 @@ mod semantic_inventory_tests {
             false
         );
         assert_eq!(advertised["scope"], "single_document");
-        assert!(advertised["preconditions"]["expected_version"].is_string());
-        assert!(advertised["preconditions"]["expected_source"].is_string());
+        assert!(advertised["preconditions"]["ownership"].is_string());
+        assert!(
+            advertised["invocation_schema"]["properties"]
+                .get("expected_source")
+                .is_none()
+        );
         assert!(advertised["result"].as_str().unwrap().contains("proposal"));
         let text = advertised.to_string();
         assert!(!text.contains("constraints"));
@@ -2716,9 +2743,13 @@ mod semantic_inventory_tests {
             validations: AtomicUsize::new(0),
         };
         let mut model = Model {
-            decisions: texts.iter().map(|text| {
-                json!({"type":"tool","name":"language.mock.replace","arguments":{"expected_version":"7","expected_source":"old","arguments":{"text":text}}}).to_string()
-            }).collect(),
+            decisions: texts
+                .iter()
+                .map(|text| {
+                    json!({"type":"tool","name":"language.mock.replace","arguments":{"text":text}})
+                        .to_string()
+                })
+                .collect(),
             ..Default::default()
         };
         let mut controller = SourceEditController::default();

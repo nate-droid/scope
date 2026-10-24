@@ -103,6 +103,17 @@ pub enum ProtocolError {
     InvalidDecision(String),
 }
 impl ProtocolError {
+    fn correction(&self) -> String {
+        let reason = match self {
+            Self::IncompleteResponse => "The response was empty or incomplete.",
+            Self::MalformedResponse(_) => "The response was not valid JSON.",
+            Self::InvalidDecision(_) => "The JSON did not match the decision schema.",
+        };
+        format!(
+            r#"{reason} Return exactly one complete JSON decision object matching the system protocol, with no markdown or surrounding text. Escape literal newlines inside JSON strings as \n (and quotes/backslashes as \"/\\). For example: {{"type":"complete","content":"First line\nSecond line"}}. No tool was dispatched; retained tool results remain authoritative. Use only the current phase's permitted tools or completion transition."#
+        )
+    }
+
     pub fn category(&self) -> &'static str {
         match self {
             Self::IncompleteResponse => "incomplete_response",
@@ -125,13 +136,14 @@ fn parse_decision(text: &str) -> Result<Decision, ProtocolError> {
     if text.trim().is_empty() {
         return Err(ProtocolError::IncompleteResponse);
     }
-    let decision: Decision = serde_json::from_str(text).map_err(|error| {
-        if error.is_eof() {
-            ProtocolError::IncompleteResponse
-        } else {
-            ProtocolError::MalformedResponse(error.to_string())
-        }
-    })?;
+    let decision: Decision =
+        serde_json::from_str(text).map_err(|error| match error.classify() {
+            serde_json::error::Category::Eof => ProtocolError::IncompleteResponse,
+            serde_json::error::Category::Data => ProtocolError::InvalidDecision(error.to_string()),
+            serde_json::error::Category::Syntax | serde_json::error::Category::Io => {
+                ProtocolError::MalformedResponse(error.to_string())
+            }
+        })?;
     match &decision {
         Decision::Tool { name, .. } => {
             if name.trim().is_empty() {
@@ -379,7 +391,7 @@ fn run_session_inner(
                     run.stop = AgentStop::MalformedBudget;
                     return Ok(run);
                 }
-                json!({"kind":"protocol_error", "category":error.category(), "error":error.to_string(), "instruction":"Return one valid decision object matching the system protocol. No tool was dispatched; retained tool results remain authoritative."})
+                json!({"kind":"protocol_error", "category":error.category(), "error":error.to_string(), "instruction":error.correction()})
             }
         };
         let retained = push_message(&mut messages, "user", feedback.to_string(), limits);

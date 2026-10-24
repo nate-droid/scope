@@ -146,7 +146,7 @@ impl DecisionModel for Model {
 }
 fn propose(candidate: &str) -> String {
     json!({"type":"tool","name":"language.intent.replace","arguments":{
-        "expected_version":"7","expected_source":"old","arguments":{"candidate":candidate}
+        "candidate":candidate
     }})
     .to_string()
 }

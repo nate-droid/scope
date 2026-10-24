@@ -87,6 +87,70 @@ impl<'a, T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool>
         self.native_result.as_ref()
     }
 
+    /// Opt in to model-facing calls containing only registered language arguments.
+    /// Captures the exact current source, revision, identity, and language once;
+    /// retries never recapture or normalize the host baseline. The raw provider's
+    /// explicit-envelope API remains unchanged. Scope and policy still authorize
+    /// every invocation; discovery does not grant authority. Returns an error for
+    /// Number or Null argument kinds, which the tool input protocol cannot express.
+    pub fn with_projected_arguments(self) -> Result<impl ToolProvider + 'a, ToolError>
+    where
+        P: 'a,
+    {
+        for (tool, operation) in self.tools.iter().zip(&self.operations) {
+            if operation.arguments.iter().any(|field| {
+                matches!(
+                    field.kind,
+                    scope_language::SemanticArgumentKind::Number
+                        | scope_language::SemanticArgumentKind::Null
+                )
+            }) {
+                return Err(ToolError::execution(
+                    &tool.name,
+                    "projected arguments cannot represent Number or Null inputs in the tool protocol",
+                ));
+            }
+        }
+        let source = self.target.snapshot();
+        let tools = self
+            .tools
+            .iter()
+            .cloned()
+            .zip(&self.operations)
+            .map(|(mut tool, operation)| {
+                tool.inputs = operation
+                    .arguments
+                    .iter()
+                    .map(|field| ToolInputDefinition {
+                        name: field.name.clone(),
+                        description: field.description.clone(),
+                        kind: match field.kind {
+                            scope_language::SemanticArgumentKind::String => ToolInputKind::String,
+                            scope_language::SemanticArgumentKind::Integer => ToolInputKind::Integer,
+                            scope_language::SemanticArgumentKind::Boolean => ToolInputKind::Boolean,
+                            scope_language::SemanticArgumentKind::Object => ToolInputKind::Object,
+                            scope_language::SemanticArgumentKind::Array => ToolInputKind::Array,
+                            scope_language::SemanticArgumentKind::Number
+                            | scope_language::SemanticArgumentKind::Null => {
+                                unreachable!("checked above")
+                            }
+                        },
+                        required: field.required,
+                    })
+                    .collect();
+                tool
+            })
+            .collect();
+        Ok(HostBoundArguments {
+            id: source.id,
+            version: source.version,
+            source: source.text.to_owned(),
+            language: source.language.to_owned(),
+            provider: self,
+            tools,
+        })
+    }
+
     pub fn new(
         service: &'a dyn LanguageService,
         target: &'a T,
@@ -159,6 +223,85 @@ impl<'a, T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool>
         })
     }
 }
+/// Private implementation keeps construction tied to a resolved semantic provider.
+struct HostBoundArguments<'a, T: SourceTarget, P> {
+    provider: SemanticToolProvider<'a, T, P>,
+    tools: Vec<ToolDefinition>,
+    id: crate::source_edit::SourceId,
+    version: u64,
+    source: String,
+    language: String,
+}
+
+impl<T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool> ToolProvider
+    for HostBoundArguments<'_, T, P>
+{
+    fn tools(&self) -> &[ToolDefinition] {
+        &self.tools
+    }
+    fn provider_name(&self) -> Option<&str> {
+        self.provider.provider_name()
+    }
+    fn output_description(&self, name: &str) -> Option<&str> {
+        self.provider.output_description(name)
+    }
+    fn metadata(&self, name: &str) -> Option<ToolValue> {
+        let mut metadata = self.provider.metadata(name)?;
+        if let ToolValue::Object(fields) = &mut metadata {
+            let index = self.tools.iter().position(|tool| tool.name == name)?;
+            let schema = invocation_schema(&self.provider.operations[index]);
+            fields.insert(
+                "invocation_schema".into(),
+                from_json(schema["properties"]["arguments"].clone())?,
+            );
+        }
+        Some(metadata)
+    }
+    fn invoke(&mut self, call: ToolCall) -> Result<ToolResult, ToolError> {
+        self.provider.native_result = None;
+        let schema = self.metadata(&call.name).and_then(|metadata| {
+            let ToolValue::Object(mut fields) = metadata else {
+                return None;
+            };
+            fields.remove("invocation_schema")
+        });
+        let live = self.provider.target.snapshot();
+        if live.id != self.id || live.language != self.language {
+            return Ok(outcome(
+                "revision_conflict",
+                "host-bound target identity or language changed",
+            ));
+        }
+        let mut result = self.provider.invoke(ToolCall {
+            name: call.name,
+            arguments: [
+                ("expected_version".into(), self.version.to_string().into()),
+                ("expected_source".into(), self.source.clone().into()),
+                ("arguments".into(), ToolValue::Object(call.arguments)),
+            ]
+            .into_iter()
+            .collect(),
+        })?;
+        if let ToolValue::Object(fields) = &mut result.value {
+            if fields.get("status").and_then(ToolValue::as_str) == Some("invalid_arguments") {
+                if let Some(ToolValue::String(message)) = fields.get_mut("message") {
+                    *message = format!(
+                        "{}. Retry using invocation_schema with language arguments only; the host owns source preconditions.",
+                        message
+                            .split(". Language fields belong inside arguments.")
+                            .next()
+                            .unwrap_or("Invalid arguments")
+                    );
+                }
+                if let Some(schema) = schema {
+                    fields.insert("invocation_schema".into(), schema);
+                }
+            }
+        }
+        Ok(result)
+    }
+}
+
 impl<T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool> ToolProvider
     for SemanticToolProvider<'_, T, P>
 {
