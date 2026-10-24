@@ -71,6 +71,8 @@ pub struct EditBudgets {
     pub corrections: usize,
     pub model_invocations: usize,
     /// Suppressed duplicate calls tolerated before NoProgress; never redispatched.
+    /// Default 0 stops immediately; 1 permits one feedback opportunity, subject
+    /// to unchanged model/transport budgets. Shared by editing and investigation.
     pub repeated_calls: usize,
     pub transport: AgentLimits,
 }
@@ -579,7 +581,12 @@ impl EditContinuation {
         }
     }
 
-    fn context(&self, phase: EditPhase, remaining_refinements: usize) -> String {
+    fn context(
+        &self,
+        phase: EditPhase,
+        remaining_refinements: usize,
+        investigation: bool,
+    ) -> String {
         let guidance = self.refinement.as_ref().map(|(call, _, value)| {
             let evaluation = field(value, "evaluation");
             let outcome = evaluation.and_then(|e| field(e, "outcome")).and_then(ToolValue::as_str);
@@ -601,8 +608,8 @@ impl EditContinuation {
             "candidate_refinement":guidance,
             "kind":"edit_continuation",
             "phase":format!("{phase:?}"),
-            "next_action":if phase == EditPhase::Propose { "invoke_permitted_proposal_tool" } else if self.refinement.is_some() { "follow_candidate_refinement" } else { "inspect_or_complete_to_propose" },
-            "completion":if phase == EditPhase::Inspect { "advance_to_propose" } else { "unsupported_without_proposal" },
+            "next_action":if investigation { "inspect_or_conclude" } else if phase == EditPhase::Propose { "invoke_permitted_proposal_tool" } else if self.refinement.is_some() { "follow_candidate_refinement" } else { "inspect_or_complete_to_propose" },
+            "completion":if investigation { "host_assessed_conclusion_or_uncertainty" } else if phase == EditPhase::Inspect { "advance_to_propose" } else { "unsupported_without_proposal" },
             "invalidation":if self.invalidated == 0 { serde_json::Value::Null } else {
                 json!({"removed_results":self.invalidated,"instruction":"Relevant host state changed; stale evidence was removed. Inspect again if needed; original request preconditions and authorization remain unchanged."})
             },
@@ -791,6 +798,7 @@ fn run_objective_session_inventory(
                 continuation.context(
                     run.state.phase(),
                     budgets.refinements.saturating_sub(run.refinements),
+                    completion.is_some(),
                 ),
                 budgets.transport,
             )
@@ -965,7 +973,12 @@ fn run_objective_session_inventory(
         {
             repeated += 1;
             run.trace.push(EditEvent::RepeatedCall);
-            let feedback = json!({"kind":"no_progress", "reason":"identical call on unchanged target; not dispatched", "instruction":"This candidate or operation was already evaluated in the same source context. Reuse retained evidence; revise the candidate or expectations before evaluating again, or advance to Propose only if the evidence supports it."});
+            let instruction = if completion.is_some() {
+                "This operation was already invoked with identical arguments in the same source context; it was not dispatched again. Its retained result is in edit_continuation.evidence. Choose a different permitted operation, meaningfully different arguments, or complete with your own conclusion or explicit uncertainty. The host assesses completion; existing evidence is not necessarily sufficient."
+            } else {
+                "This candidate or operation was already evaluated in the same source context. Reuse retained evidence; revise the candidate or expectations before evaluating again, or advance to Propose only if the evidence supports it."
+            };
+            let feedback = json!({"kind":"no_progress", "reason":"identical call on unchanged target; not dispatched", "instruction":instruction});
             continuation.feedback = Some(feedback.to_string());
             if repeated > budgets.repeated_calls {
                 run.trace.push(EditEvent::NoProgressReason {
@@ -1564,9 +1577,11 @@ mod continuation_tests {
             "replacement evidence".into(),
         );
         continuation.retain(call, "revision-two".into(), "new evidence".into());
-        let context: serde_json::Value = serde_json::from_str(
-            &continuation.context(EditPhase::Propose, EditBudgets::default().refinements),
-        )
+        let context: serde_json::Value = serde_json::from_str(&continuation.context(
+            EditPhase::Propose,
+            EditBudgets::default().refinements,
+            false,
+        ))
         .unwrap();
         assert_eq!(context["evidence"].as_array().unwrap().len(), 2);
         assert_eq!(context["evidence"][0]["value"], "replacement evidence");
@@ -1598,9 +1613,11 @@ mod continuation_tests {
                 ("validation_status", "NotEvaluated".into()),
             ]),
         );
-        let context: serde_json::Value = serde_json::from_str(
-            &continuation.context(EditPhase::Propose, EditBudgets::default().refinements),
-        )
+        let context: serde_json::Value = serde_json::from_str(&continuation.context(
+            EditPhase::Propose,
+            EditBudgets::default().refinements,
+            false,
+        ))
         .unwrap();
         assert_eq!(
             context["evidence"][2]["call"]["arguments"]["candidate"],

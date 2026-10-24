@@ -2,6 +2,37 @@ use super::*;
 
 const READ: &str = "language.mock.inspect";
 
+#[derive(Default)]
+struct Model {
+    decisions: std::collections::VecDeque<String>,
+    contexts: Vec<serde_json::Value>,
+    conversations: Vec<Vec<serde_json::Value>>,
+    conversation_bytes: Vec<usize>,
+}
+
+impl DecisionModel for Model {
+    fn decide(
+        &mut self,
+        messages: &[crate::agent::DecisionMessage],
+        _: u32,
+    ) -> Result<String, String> {
+        self.contexts
+            .push(serde_json::from_str(&messages.last().unwrap().content).unwrap());
+        self.conversations.push(
+            messages
+                .iter()
+                .map(|message| {
+                    serde_json::from_str(&message.content)
+                        .unwrap_or_else(|_| json!(message.content))
+                })
+                .collect(),
+        );
+        self.conversation_bytes
+            .push(messages.iter().map(|message| message.content.len()).sum());
+        Ok(self.decisions.pop_front().expect("unexpected decision"))
+    }
+}
+
 fn investigation_options() -> SemanticInvestigationOptions {
     SemanticInvestigationOptions {
         operations: vec![READ.into()],
@@ -15,6 +46,8 @@ struct InvestigationResult {
     dispatches: usize,
     policies: usize,
     completions: usize,
+    conversations: Vec<Vec<serde_json::Value>>,
+    conversation_bytes: Vec<usize>,
 }
 
 fn investigate(
@@ -81,6 +114,8 @@ fn investigate(
         dispatches: service.dispatches.load(Ordering::SeqCst),
         policies: policies.get(),
         completions: completions.get(),
+        conversations: model.conversations,
+        conversation_bytes: model.conversation_bytes,
     }
 }
 
@@ -334,10 +369,98 @@ fn repeated_read_is_suppressed_and_does_not_duplicate_evidence() {
 
 #[test]
 fn suppressed_read_can_reuse_evidence_and_complete_within_retry_budget() {
+    for (assessment, outcome) in [
+        (
+            InvestigationCompletion::Completed,
+            EditOutcome::InvestigationCompleted,
+        ),
+        (
+            InvestigationCompletion::Inconclusive,
+            EditOutcome::InvestigationInconclusive,
+        ),
+        (
+            InvestigationCompletion::Unsupported,
+            EditOutcome::UnsupportedRequest,
+        ),
+    ] {
+        let result = investigate(
+            vec![discover(), tool(READ), tool(READ), complete()],
+            SemanticInvestigationOptions {
+                budgets: EditBudgets {
+                    repeated_calls: 1,
+                    ..Default::default()
+                },
+                ..investigation_options()
+            },
+            vec![],
+            true,
+            assessment,
+        );
+        assert_eq!(result.run.outcome, outcome);
+        assert_eq!(
+            (result.dispatches, result.policies, result.completions),
+            (1, 1, 1)
+        );
+        assert_eq!(result.run.model_invocations, 4);
+        assert_eq!(result.run.inspections, 1);
+        assert_eq!(result.run.evidence.len(), 1);
+        assert_eq!(result.run.conclusion.as_deref(), Some("done"));
+        assert_recovery_context(&result, 3);
+    }
+}
+
+fn assert_recovery_context(result: &InvestigationResult, index: usize) {
+    let messages = &result.conversations[index];
+    let continuation = messages
+        .iter()
+        .find(|message| message["kind"] == "edit_continuation")
+        .unwrap();
+    assert_eq!(continuation["phase"], "Inspect");
+    assert_eq!(continuation["next_action"], "inspect_or_conclude");
+    assert_eq!(
+        continuation["completion"],
+        "host_assessed_conclusion_or_uncertainty"
+    );
+    let evidence = &result.run.evidence[0];
+    assert_eq!(evidence.call.name, READ);
+    assert_eq!(
+        to_json(ToolValue::Object(evidence.call.arguments.clone())),
+        json!({"text":"new"})
+    );
+    assert_snapshot(&evidence.source);
+    assert_eq!(continuation["evidence"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        continuation["evidence"][0]["call"],
+        json!({"name":READ,"arguments":{"text":"new"}})
+    );
+    assert_eq!(
+        continuation["evidence"][0]["value"],
+        to_json(evidence.response.clone())
+    );
+    let feedback = messages
+        .iter()
+        .find(|message| message["kind"] == "no_progress")
+        .unwrap();
+    let instruction = feedback["instruction"].as_str().unwrap();
+    assert!(instruction.contains("edit_continuation.evidence"));
+    assert!(instruction.contains("host assesses completion"));
+    assert!(!instruction.contains("Propose"));
+    assert!(
+        result
+            .contexts
+            .iter()
+            .all(|context| context["phase"] == "Inspect")
+    );
+}
+
+#[test]
+fn recovery_can_dispatch_meaningfully_changed_read_arguments() {
     let mut options = investigation_options();
     options.budgets.repeated_calls = 1;
+    let changed =
+        json!({"type":"tool","name":READ,"arguments":{"text":"different query"}}).to_string();
     let result = investigate(
-        vec![tool(READ), tool(READ), complete()],
+        vec![tool(READ), tool(READ), changed, complete()],
         options,
         vec![READ.into()],
         true,
@@ -346,9 +469,163 @@ fn suppressed_read_can_reuse_evidence_and_complete_within_retry_budget() {
     assert_eq!(result.run.outcome, EditOutcome::InvestigationCompleted);
     assert_eq!(
         (result.dispatches, result.policies, result.completions),
-        (1, 1, 1)
+        (2, 2, 1)
+    );
+    assert_eq!(result.run.inspections, 2);
+    assert_eq!(result.run.evidence.len(), 2);
+    assert_ne!(result.run.evidence[0].call, result.run.evidence[1].call);
+    assert_eq!(
+        to_json(ToolValue::Object(
+            result.run.evidence[1].call.arguments.clone()
+        )),
+        json!({"text":"different query"})
+    );
+    assert_snapshot(&result.run.evidence[1].source);
+    assert_recovery_context(&result, 2);
+}
+
+#[test]
+fn recovery_repeat_exhaustion_allows_only_one_opportunity() {
+    let mut options = investigation_options();
+    options.budgets.repeated_calls = 1;
+    let result = investigate(
+        vec![tool(READ), tool(READ), tool(READ), complete()],
+        options,
+        vec![READ.into()],
+        true,
+        InvestigationCompletion::Completed,
+    );
+    assert_eq!(result.run.outcome, EditOutcome::NoProgress);
+    assert_eq!(result.run.model_invocations, 3);
+    assert_eq!(
+        (result.dispatches, result.policies, result.completions),
+        (1, 1, 0)
     );
     assert_eq!(result.run.evidence.len(), 1);
+    assert!(result.run.conclusion.is_none());
+    assert_eq!(
+        result
+            .run
+            .trace
+            .iter()
+            .filter(|event| **event == EditEvent::RepeatedCall)
+            .count(),
+        2
+    );
+    assert_recovery_context(&result, 2);
+}
+
+#[test]
+fn malformed_during_recovery_preserves_evidence_and_obeys_retry_budget() {
+    for recover in [false, true] {
+        let mut options = investigation_options();
+        options.budgets.repeated_calls = 1;
+        options.budgets.transport.max_malformed = usize::from(recover);
+        let result = investigate(
+            vec![tool(READ), tool(READ), "not json".into(), complete()],
+            options,
+            vec![READ.into()],
+            true,
+            InvestigationCompletion::Completed,
+        );
+        assert_eq!(
+            result.run.outcome,
+            if recover {
+                EditOutcome::InvestigationCompleted
+            } else {
+                EditOutcome::NoProgress
+            }
+        );
+        assert_eq!(result.run.model_invocations, if recover { 4 } else { 3 });
+        assert_eq!(
+            (result.dispatches, result.policies, result.completions),
+            (1, 1, usize::from(recover))
+        );
+        assert_eq!(result.run.evidence.len(), 1);
+        assert_recovery_context(&result, 2);
+    }
+}
+
+#[test]
+fn decision_budgets_bound_recovery_without_losing_evidence() {
+    for transport in [false, true] {
+        let mut options = investigation_options();
+        options.budgets.repeated_calls = 1;
+        if transport {
+            options.budgets.transport.max_decisions = 2;
+        } else {
+            options.budgets.model_invocations = 2;
+        }
+        let result = investigate(
+            vec![tool(READ), tool(READ), complete()],
+            options,
+            vec![READ.into()],
+            true,
+            InvestigationCompletion::Completed,
+        );
+        assert_eq!(result.run.outcome, EditOutcome::OperationBudgetExhausted);
+        assert_eq!(result.run.model_invocations, 2);
+        assert_eq!(
+            (result.dispatches, result.policies, result.completions),
+            (1, 1, 0)
+        );
+        assert_eq!(result.run.evidence.len(), 1);
+        assert_eq!(
+            result.run.last_result.as_ref(),
+            Some(&result.run.evidence[0].response)
+        );
+        assert!(result.run.conclusion.is_none());
+    }
+}
+
+#[test]
+fn conversation_size_limit_stops_before_recovery_model_call() {
+    let mut options = investigation_options();
+    options.budgets.repeated_calls = 1;
+    let baseline = investigate(
+        vec![tool(READ), tool(READ), complete()],
+        SemanticInvestigationOptions {
+            budgets: EditBudgets {
+                repeated_calls: 1,
+                ..Default::default()
+            },
+            ..investigation_options()
+        },
+        vec![READ.into()],
+        true,
+        InvestigationCompletion::Completed,
+    );
+    let limit = baseline.conversation_bytes[2] - 1;
+    assert!(
+        baseline.conversation_bytes[..2]
+            .iter()
+            .all(|bytes| *bytes <= limit)
+    );
+    options.budgets.transport.max_conversation_bytes = limit;
+    let result = investigate(
+        vec![tool(READ), tool(READ), complete()],
+        options,
+        vec![READ.into()],
+        true,
+        InvestigationCompletion::Completed,
+    );
+    assert_eq!(result.run.outcome, EditOutcome::OperationBudgetExhausted);
+    assert_eq!(result.run.model_invocations, 2);
+    assert_eq!(
+        (result.dispatches, result.policies, result.completions),
+        (1, 1, 0)
+    );
+    assert_eq!(result.run.evidence.len(), 1);
+    assert_eq!(result.run.evidence[0].call, baseline.run.evidence[0].call);
+    assert_eq!(
+        result.run.evidence[0].response,
+        baseline.run.evidence[0].response
+    );
+    assert_eq!(
+        result.run.evidence[0].source,
+        baseline.run.evidence[0].source
+    );
+    assert!(result.run.conclusion.is_none());
 }
 
 #[test]

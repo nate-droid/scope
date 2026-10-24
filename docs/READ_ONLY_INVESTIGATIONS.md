@@ -119,6 +119,10 @@ timeout guarantee. Authorized source/results may reach the configured model.
 No downstream semantic dispatcher, operation changes, planner, Forth dependency,
 or live-model experiment is required.
 
+For opt-in duplicate feedback using the existing `budgets.repeated_calls = 1`,
+see [AI3 bounded repeated-call recovery](AI3_REPEATED_CALL_RECOVERY.md). The default
+remains immediate `NoProgress`; suppressed calls are never redispatched.
+
 ## Deterministic demonstration
 
 `crates/scope-ide/src/investigation_tests.rs` contains a scripted model and

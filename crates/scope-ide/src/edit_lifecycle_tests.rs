@@ -1598,9 +1598,11 @@ fn generic_evaluation_evidence_is_invalidated_by_changed_source() {
         });
         assert!(continuation.evidence.is_empty());
         assert!(continuation.feedback.is_none());
-        let context: serde_json::Value = serde_json::from_str(
-            &continuation.context(EditPhase::Inspect, EditBudgets::default().refinements),
-        )
+        let context: serde_json::Value = serde_json::from_str(&continuation.context(
+            EditPhase::Inspect,
+            EditBudgets::default().refinements,
+            false,
+        ))
         .unwrap();
         assert_eq!(context["invalidation"]["removed_results"], 1);
     }
