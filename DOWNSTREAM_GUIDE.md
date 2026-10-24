@@ -4,13 +4,13 @@ Scope supports external Rust language services through compile-time composition.
 
 ## Prerequisites and current limits
 
-Use a local Scope source checkout. Cell is fetched from https://github.com/nate-droid/cell at tag `v0.0.1` through Scope's workspace dependencies; no sibling Cell checkout is required. No registry release availability is assumed here. Scope is licensed under the [MIT License](LICENSE); dependencies, including Cell, are covered by their own licenses. This guide makes no MSRV guarantee.
+Use a local Scope source checkout. Cell is fetched from https://github.com/nate-droid/cell at tag `v0.0.2` through Scope's workspace dependencies; no sibling Cell checkout is required. No registry release availability is assumed here. Scope is licensed under the [MIT License](LICENSE); dependencies, including Cell, are covered by their own licenses. This guide makes no MSRV guarantee.
 
-No Wasm target is needed for these host integrations. [Building Scope with Cell](BUILDING_WITH_CELL.md) documents the Cell Git dependency, toolchain, and Scope build/test commands. For Cell's guest and component APIs, consult the documentation at the matching [Cell tag](https://github.com/nate-droid/cell/tree/v0.0.1).
+No Wasm target is needed for these host integrations. [Building Scope with Cell](BUILDING_WITH_CELL.md) documents the Cell Git dependency, toolchain, and Scope build/test commands. For Cell's guest and component APIs, consult the documentation at the matching [Cell tag](https://github.com/nate-droid/cell/tree/v0.0.2).
 
-The Scope path dependencies shown here and emitted by the scaffolder are for local development, not portable distribution. Scope dependencies remain local; use the same Cell Git URL and `v0.0.1` tag for direct Cell dependencies in standalone consumers.
+The Scope path dependencies shown here and emitted by the scaffolder are for local development, not portable distribution. Scope dependencies remain local; use the same Cell Git URL and `v0.0.2` tag for direct Cell dependencies in standalone consumers.
 
-The `tui`, `tools`, and `agent` features are opt-in; `scope-ide` defaults to no features. Enable `tools` for model-independent tool discovery and execution. The `agent` feature includes `tools` and the OpenAI capability. Default headless and TUI-only builds expose neither module; tools-only builds expose `tool` without compiling the OpenAI capability. Non-agent examples do not require an API key or invoke an agent.
+`scope-ide` enables `tools` by default for model-independent tool discovery and execution. `tui` and `agent` are opt-in and include `tools`; `agent` additionally includes the OpenAI capability. With `default-features = false`, neither tools nor agents are installed unless requested. Tools-only builds expose `tool` without compiling the OpenAI capability. Non-agent examples do not require an API key or invoke an agent.
 
 ## Normal launcher with Script inspection
 

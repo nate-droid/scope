@@ -133,33 +133,10 @@ scratch state cannot redirect it. Existing source-provider and T1 suites cover
 post-execution freshness, identity replacement, human confirmation isolation,
 proposal rejection, and language-native transport errors.
 
-## Validation (2026-10-22)
-
-- `cargo fmt --all -- --check`: passed.
-- `cargo test -p scope-ide --features agent --lib cli::`: 114 passed before three
-  additional context regressions; focused final `cli::agent_semantics`: 13 passed.
-- `cargo test -p scope-ide --features agent,tui --lib`: 500 passed initially.
-  A subsequent full invocation intermittently failed the existing
-  `workbench::tests::readonly_apply_failure_preserves_source` filesystem test
-  (`external` versus `original`), outside changed files.
-- `cargo test -p scope-ide --features agent,tui --tests -- --skip workbench::tests::readonly_apply_failure_preserves_source`:
-  passed, including library and integration coverage for provider composition,
-  cross-provider discovery, T1, source context, and shell routing.
-- `cargo clippy -p scope-ide --features agent,tui --lib -- -D warnings`: passed.
-- All-target strict Clippy remains blocked by four existing findings in
-  `edit_lifecycle_tests.rs` (three default-field reassignments and a collapsible
-  conditional). No broad cleanup was performed.
-- `cargo check -p scope-ide --no-default-features`: passed, with existing dead-code
-  warnings for proposal validation/evidence setters.
-
-The previously reported combined-feature SourceId test-compilation conflict is
-not present; distinct source-ID types were left untouched. No external model,
-source writes, proposal acceptance, or autonomous editing experiment was run.
-
 ## Limits
 
 This is a synchronous, explicitly called host composition API, not automatic
 semantic enablement for every built-in shell agent command. Semantic mode does
 not retain generic filesystem readers. The caller supplies policy and limits
 per run. Native providers remain trusted in-process implementations; semantic
-effect declarations do not sandbox malicious language services. Stop after T2b.
+effect declarations do not sandbox malicious language services.

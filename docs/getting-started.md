@@ -10,7 +10,7 @@ No model server, API key, or Wasm target is needed for the default shell.
 cargo run
 ```
 
-DX4 defaults to package `scope-workbench`, binary `scope`, depending on
+The default entry point uses package `scope-workbench`, binary `scope`, depending on
 `scope-ide` and `scope-script`. No arguments starts the workbench shell in the current directory, including with piped
 input. Startup requires an existing workspace and does not create directories.
 Workspace access defaults to read-only. In-memory editing is not permission to

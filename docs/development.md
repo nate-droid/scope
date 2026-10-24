@@ -31,7 +31,7 @@ directories. Enable workspace writes explicitly with
 `cargo run -- --writable shell`; place `--writable` before the command. `meta`
 always uses a read-only mount, even with `--writable`.
 
-The default feature set is `["tools"]`. Tool availability does not grant write
+The `scope-ide` default feature set is `["tools"]`. Tool availability does not grant write
 authority. `--no-default-features` disables tools; it does not change filesystem
 authority. Agent/model, TUI, and logging integrations remain opt-in.
 
@@ -44,7 +44,7 @@ cargo run --locked -- --help
 cargo run --locked -p scope-script -- crates/scope-script/examples/daily.scope
 ```
 
-The root default member is `scope-ide`. No arguments opens the shell in the
+The root default member is `scope-workbench` (binary `scope`). No arguments opens the shell in the
 current existing directory; it does not create a workspace. Script is a separate
 binary. See [getting started](getting-started.md) for argument placement and
 read-only authority boundaries.
@@ -57,9 +57,9 @@ adds native logging. Use `--no-default-features` when explicitly checking the
 minimal feature configuration.
 
 ```sh
-cargo run --locked --no-default-features -- --help
-cargo run --locked --features tui -- tui .
-cargo run --locked --features agent -- --workspace . agent --open README.md 'summarize this file'
+cargo run --locked -p scope-ide --no-default-features -- --help
+cargo run --locked -p scope-ide --features tui -- tui .
+cargo run --locked -p scope-ide --features agent -- --workspace . agent --open README.md 'summarize this file'
 ```
 
 The agent command sends selected context and tool feedback to the configured

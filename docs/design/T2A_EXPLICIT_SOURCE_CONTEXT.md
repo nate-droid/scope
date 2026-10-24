@@ -2,7 +2,7 @@
 
 T2A exposes the existing source owners and their command targets without merging them. It supplies a borrowed, read-only resolver for an explicitly requested owner and an observational shell report. It does **not** implement a new source-selection command, change T1 inspection routing, install an agent semantic provider, or create a source store or revision scheme.
 
-This records the implementation in `crates/scope-ide/src/source_context.rs`, `crates/scope-ide/src/cli/context.rs`, `crates/scope-ide/src/cli.rs`, and the proposal labels in `crates/scope-ide/src/cli/source_proposals.rs`. It follows [T1 shell semantic inspection](T1_SHELL_SEMANTIC_INSPECTION.md) and the source/session and agent-composition boundaries in [Terminal-first interaction](TERMINAL_FIRST_INTERACTION.md). The broader T2 selection adapter proposed by T1 is not completed by this observational slice.
+This records the implementation in `crates/scope-ide/src/source_context.rs`, `crates/scope-ide/src/cli/context.rs`, `crates/scope-ide/src/cli.rs`, and the proposal labels in `crates/scope-ide/src/cli/source_proposals.rs`. It follows [T1 shell semantic inspection](T1_SHELL_SEMANTIC_INSPECTION.md) and the [source-aware evaluation contract](../SOURCE_EVALUATION.md). The broader T2 selection adapter proposed by T1 is not completed by this observational slice.
 
 ## Actual commands and routing
 
@@ -114,11 +114,11 @@ target: owner=shell-buffer source=Scratch(7) version=42 (proposal baseline; path
 
 The formatter also supports document targets as `owner=app-document source=Document(7) version=3`. These are examples of label formatting, not globally meaningful IDs or proof that shell proposal creation targets App documents. The version is the proposal's supplied expected version, not the current selection's version. Selecting another buffer must not relabel or retarget a retained proposal. Review and acceptance continue through existing controller validation; owner/path display is not acceptance authority.
 
-## Authorization and future source-bound agent composition
+## Authorization and source-bound agent composition
 
 T2A installs **no** `SemanticToolProvider` in the normal terminal agent. `context` printing an agent document context or edit source describes existing routing and prerequisites, not a new provider registration or permission grant. Human T1 confirmation remains scoped to its captured invocation and grants no agent authority.
 
-A future opt-in agent bind should consume an explicit owner choice, not infer authority from `HostSourceContext`, path equality, active session, highlighted file, or whichever source happens to exist:
+An opt-in agent bind must consume an explicit owner choice, not infer authority from `HostSourceContext`, path equality, active session, highlighted file, or whichever source happens to exist:
 
 1. Resolve the requested `SourceKind` and fail explicitly if it is missing. For an initial document-only bridge, request `App` explicitly and reject unsupported buffer scope rather than substituting App for Buffer.
 2. Borrow the actual owner's live in-memory source through the existing source-target adapter (for App, `DocumentSource`). Bind tagged identity, exact text, version, language and path for the run; do not reread disk or make a new mutable authoritative source copy. Re-derive context after transitions, not during a supposedly stable binding as a way to silently retarget it.
@@ -133,27 +133,6 @@ Read metadata is a trusted native provider declaration, not an OS sandbox or gua
 
 Current limitations are deliberate: observational aggregate only; no persistent owner selection; T1 remains App-only, synchronous, argument-free and read-only; active sessions still require clearing before bare App open; pathless buffers do not acquire semantic services from language IDs; context does not capture catalogs or authorization and does not invalidate/revalidate retained results itself. Feature labels report compile-time availability, not runtime provider installation or successful authorization. Existing save/conflict and workspace-proposal non-transactionality limitations remain unchanged.
 
-The next minimal integration is a single opt-in, explicitly App-bound read-only terminal-agent composition path using this resolver, existing source adapters, explicit document scope and separate agent/semantic policy. Keep buffer-aware semantic execution and any user-facing owner-selection vocabulary as separate, tested extensions. Do not add panes, a new source store, revisions, automatic provider registration, proposal acceptance, or source/session switching to make the report appear unified.
+The [terminal-agent composition API](T2B_TERMINAL_AGENT_SEMANTICS.md) provides explicit App-bound read-only hosting with separate agent/semantic policy. Keep buffer-aware semantic execution and any user-facing owner-selection vocabulary as separate, tested extensions. Do not add panes, a new source store, revisions, automatic provider registration, proposal acceptance, or source/session switching to make the report appear unified.
 
 Required integration coverage should include missing requested owner with the other present, explicit None with both present, same-path/different-owner text and versions, reopening identity, restored-text staleness, session mismatch, denied policy with zero dispatch, scope mismatch, provider collisions, unchanged source/disk, and retained proposal baselines after buffer selection changes.
-
-## Validation status
-
-Implementation inspection found focused tests in `source_context.rs` for explicit resolution/observational aggregation, owner transitions, same-path distinct identity/text/versions without mutation, and neutral semantics versus interactive language. `cli/context.rs` contains parser and actual shell context-transition coverage; proposal-label tests check tagged ownership and supplied versions. Their presence is not a claim that they passed.
-
-Automated validation passed (all Cargo commands used `--offline`):
-
-- `cargo fmt --all -- --check` and `git --no-pager diff --check`.
-- `cargo test --offline -p scope-ide` and the full `--no-default-features` suite.
-- `cargo test --offline -p scope-ide --features agent,tui --test shell_semantic_inspection --test embedded_shell --test source_edit_controller --test interactive_semantic_inspection`.
-- `cargo test --offline -p scope-ide --features agent,tui --test agent_public_api` (2 tests).
-- T1's unchanged `shell_inspection_walkthrough -- --nocapture` test; no evaluator/model/credentials/network required.
-- `cargo test --offline -p scope-language -p scope-terminal` and `cargo test --offline -p scope-script` (including existing terminal/PTY regressions).
-- `cargo clippy --offline -p scope-ide --lib --test shell_semantic_inspection --test embedded_shell -- -D warnings`.
-
-New tests cover explicit resolution failures, no source, App-only/buffer-only/both owners, same-path divergent unsaved content, independent versions, new identity on reopen, buffer switching/discard, observational repeated context, actual parser/session routing, evaluation feedback and reset blocking, retained proposal-baseline labels, and stale inspection remaining stale across context reports. Existing inspection/proposal/source-edit tests remain regression coverage. No manual terminal walkthrough was performed.
-
-Known combined-feature failures were rerun and remain separate from passing results:
-
-- `cargo test --offline -p scope-ide --features agent,tui --lib`: 8 existing compilation errors in `intent_tests.rs` and `edit_lifecycle.rs`, involving ambiguous evaluator/edit `SourceId`, incompatible `SourceTarget::source_id`, and nonexistent evaluator `SourceId::Scratch`.
-- `cargo clippy --offline -p scope-ide --features agent,tui --lib -- -D warnings`: 6 existing findings: argument counts at `edit_lifecycle.rs:597,1234,1256` and the unchanged `run_shell_owned` signature, plus nested-if findings at `edit_lifecycle.rs:724,1075`. No unrelated fixes or allowances were added.

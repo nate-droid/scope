@@ -153,36 +153,13 @@ The 25 integration tests exercise actual parser/routing plus a focused direct-br
 
 Existing inspection tests additionally cover wrong-effect results, source-text/version/language/identity mismatches and no mutation. Existing shell tests cover parser/completion and session lifecycle; no new terminal input behavior was introduced. Scope Script's existing PTY suite remains a regression check for shared terminal history/editing, not proof of manual IDE-shell terminal interaction.
 
-All walkthrough interactions and validations below were **automated**. No manual real-terminal session was performed.
-
-## Validation record
-
-Commands were run from the repository root. `CARGO_INCREMENTAL=0` was used on later build commands after an environmental disk-space interruption; it is not a required runtime setting.
-
-Passed:
-
-- `cargo fmt --all -- --check`.
-- `git --no-pager diff --check` and direct whitespace checks of the new source/test/document files.
-- `CARGO_INCREMENTAL=0 cargo test --offline -p scope-ide` — full default-feature suite, including shell parser/completion, semantic bridge and the 25 new interaction tests.
-- `CARGO_INCREMENTAL=0 cargo test --offline -p scope-ide --no-default-features` — legacy minimal shell build/suite; inspection integration tests are feature-gated out.
-- `CARGO_INCREMENTAL=0 cargo test --offline -p scope-ide --test shell_semantic_inspection --test embedded_shell --test source_edit_controller --features agent,tui --test interactive_semantic_inspection` — 25 new shell, 15 embedded-shell, 10 source-controller and 4 TUI semantic tests.
-- The named `shell_inspection_walkthrough -- --nocapture` command above.
-- `CARGO_INCREMENTAL=0 cargo test --offline -p scope-language -p scope-terminal`.
-- `CARGO_INCREMENTAL=0 cargo test --offline -p scope-script` — includes existing CLI/PTY and workspace-semantic suites.
-- `CARGO_INCREMENTAL=0 cargo clippy --offline -p scope-ide --lib --test shell_semantic_inspection --test embedded_shell -- -D warnings` — targeted default-feature library and interaction tests.
-
-Blocked by existing issues, not reported passing:
-
-- `cargo test --offline -p scope-ide --features agent,tui` — existing 8 library-test compilation errors involving evaluator/edit `SourceId` ambiguity, incompatible `SourceTarget::source_id` and nonexistent `scope_language::SourceId::Scratch` in `intent_tests.rs` / `edit_lifecycle.rs`. No unrelated test rewrites were made. The default-feature suite does pass; these failures require the combined agent configuration.
-- `CARGO_INCREMENTAL=0 cargo clippy --offline -p scope-ide --features agent,tui --lib --test shell_semantic_inspection --test embedded_shell --test interactive_semantic_inspection -- -D warnings` — 6 existing findings: argument counts at `edit_lifecycle.rs:597,1234,1256` and unchanged `run_shell_owned` signature, plus nested-if findings at `edit_lifecycle.rs:724,1075`. T1 adds no arguments to that shell function.
-- `CARGO_INCREMENTAL=0 cargo clippy --offline -p scope-language -p scope-terminal --all-targets -- -D warnings` — existing reversed test range `5..2` in `scope-terminal/tests.rs:556`.
-
-An earlier combined terminal/language/Script run and first combined-feature Clippy attempt encountered `No space left on device`; the failing Script tests were unable to create temporary directories. Once space was available, the separate language/terminal and full Script reruns passed, and Clippy reached the existing findings above. No cache cleanup or unrelated source modification was performed to obtain those results.
-
-## Remaining limitations and recommended T2
+## Remaining limitations
 
 T1 is synchronous, read-only, document-only and argument-free. It retains just one pending capture and last result. Full output is not paged. Discovery does not install new languages. Source and semantic output are not validation certificates or agent permissions. History/completion use the existing infrastructure; language-specific operation-ID completion is not added.
 
 The principal usability limitation remains the separate App and shell-buffer owners: `:scope open` does not select inspection source, and a language session must be cleared to use legacy bare App `open`. T1 exposes that distinction instead of silently unifying sources.
 
-The smallest recommended T2 is an explicit, visible source-selection adapter over the existing owners/versions, with mismatch/freshness tests and no new source store or revision counter. Opt-in semantic agent composition remains a separate later capability decision. Do not add panes, agent tools, proposal operations, or automatic source changes merely because this human inspection command now exists.
+[Explicit source context](T2A_EXPLICIT_SOURCE_CONTEXT.md) reports the separate
+owners without unifying them. [Opt-in terminal agent semantics](T2B_TERMINAL_AGENT_SEMANTICS.md)
+requires its own host composition and authorization; human inspection grants do
+not transfer to that API.

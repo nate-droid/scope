@@ -4,7 +4,7 @@ Run commands from the repository root. Offline runs require cached dependencies;
 see [setup](../docs/getting-started.md) and [Cell build details](../BUILDING_WITH_CELL.md).
 “Supported demo” here means a checked-in entry point illustrating a current API,
 not a production service or an automatically installed IDE capability. Fixture
-and historical hosts remain useful regression evidence; no code/tests were removed.
+and historical hosts with contract/safety coverage remain useful regression evidence.
 
 ## Supported entry-point demos
 
@@ -30,20 +30,21 @@ or the default Scope IDE by naming them in a script.
 | `workspace.rs`, `workspace_semantic.rs`, `exploration.rs` in that directory | Explicit workspace-host demos, not standalone filesystem privileges. Inputs: `workspace.scope`, `workspace_semantic.scope`, `capability-inspector.scope`, `semantic-explorer.scope`, `markdown-inventory.scope`, `pending-review.scope`. `semantic-workspace/example.decl` and `handoff-workspace/` are fixture data. See the [workspace semantic walkthrough](../docs/SCOPE_SCRIPT_WORKSPACE_SEMANTIC.md). |
 | `scratch_runner.rs` | Opt-in shell embedding demo: `cargo run -p scope-script --example scratch_runner`. Separate Script source and host target, not a default shell evaluator. |
 | `execution_transcript.rs` | Execution-record/output API demo; not replay or proof of semantic acceptance. |
-| `trial_runner.rs`, `trial-comparison.scope` | Experimental bounded comparison fixture, not a generally installed trial runtime; [completed trial-runner record](../docs/archive/SCOPE_SCRIPT_SS4_TRIAL_RUNNER.md). |
+| `trial_runner.rs`, `trial-comparison.scope` | Bounded comparison fixture with safety regression tests, not a generally installed trial runtime. |
 | `support/mod.rs`, `workspace_support/mod.rs` | Shared example-host implementation, not independent runnable examples. |
 | [`scope-ide/examples/`](../crates/scope-ide/examples/) `embedded_shell.rs`, `native_logging.rs` | Native host embedding demos. |
 | `selection_description.rs`, `cross_provider_discovery.rs`, `focused_agent_discovery.rs`, `interactive_semantic_inspection.rs` in that directory | Deterministic semantic discovery/inspection fixture hosts; use tools; `interactive_semantic_inspection` additionally requires `--features tui`. `selection_description_support/` and `state_description_support/` are shared fixture providers, not real language servers. |
 | `meta_tools.rs`, `meta_providers.rs`, `read_only_trace.rs` | Tool/provider and deterministic trace fixture demos; require `--features tools`. Trace evidence is not a live-model result. |
 
-## Historical live-experiment hosts
+## Research hosts with regression coverage
 
-Under [`crates/scope-ide/examples/`](../crates/scope-ide/examples/), `m2b_live.rs`,
-`m2b_live.py`, `m2c_live.py`, `q2_live.rs`, `q3_live.rs`, and `q3_capture.py` are
-experiment/capture hosts, not onboarding commands or supported generic agent
-launchers. They require explicit model/backend configuration; live invocation can
-send prompts/source to a backend, incur cost, and retain sensitive transcripts.
-Do not run them just to validate documentation. The [Q2](../docs/archive/Q2_LIVE_QWEN_PROTOCOL.md)
-and [Q3](../docs/archive/Q3_SEQUENTIAL_TOOL_SERVING.md) reports retain their full
-original capture directories and limitations. Older capture scripts' default
-output directories are unchanged; archived evidence is not a new run destination.
+Under [`crates/scope-ide/examples/`](../crates/scope-ide/examples/), `q3_live.rs`
+is retained because it includes seven deterministic sequence, authorization,
+and malformed-decision regression tests. Run those without a backend:
+`cargo test -p scope-ide --features agent --example q3_live --offline`.
+`trial_runner.rs` likewise retains bounded comparison and safety regression tests.
+
+The Q3 live host and `q3_capture.py` are experiment/capture tools, not generic
+agent launchers. Live invocation requires explicit opt-in and backend configuration;
+it can send prompts to a backend, incur cost, and retain sensitive transcripts.
+Do not run live captures just to validate documentation.

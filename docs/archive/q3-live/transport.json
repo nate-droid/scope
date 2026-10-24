@@ -1,4 +1,0 @@
-{
-  "adapter_endpoint": "http://127.0.0.1:56909/v1",
-  "upstream_endpoint": "http://127.0.0.1:1234/v1"
-}

@@ -2,7 +2,7 @@
 
 ## Scope and public API
 
-S2 implements the terminal-only projection proposed in [S1](S1_HOST_OWNED_SEMANTIC_CONTEXT.md). The host binds the invocation source; the model supplies only registered language arguments. The general semantic provider envelope is not changed.
+This API supplies an explicitly selected terminal-only projection. The host binds the invocation source; the model supplies only registered language arguments. The raw semantic provider envelope is unchanged; the provider also offers a separate [projected-argument opt-in](../AI2_PROTOCOL_ROBUSTNESS.md).
 
 With `scope-ide/agent` enabled, `scope_ide::cli` exports:
 
@@ -134,13 +134,3 @@ The regression coverage now lives in `crates/scope-ide/src/cli/agent_semantics_t
 - `projected_language_arguments_preserve_host_authority_and_source` uses the production public runner with an `App`, registered fixture service, unsaved document and deterministic decision model. It covers language-only discovery, argument-free calls, candidate outcomes, host denial, malformed/missing/extra arguments, forged envelope-looking fields, hidden operations, callback inputs, and unchanged document/disk contents. This is a production-path fixture, not a live model/backend test.
 - `projected_language_arguments_stale_identity_revision_text_and_language_fail_closed` uses a synthetic interior-mutable `SourceTarget` and the private projection/provider composition to induce stale identity, revision, text and language. It exercises stale-target checks without claiming those mutations are possible through the public runner's exclusive `App` borrow.
 - Existing filtering and hidden-dispatch tests remain relevant to the unchanged authority boundary.
-
-Validation completed offline:
-
-- `cargo fmt --all -- --check` — passed.
-- `cargo test --offline -p scope-ide --features agent` — passed, including 484 library tests and all integration/doc-test targets.
-- Focused runs with filters `semantic`, `source_context`, and `agent` — passed. These include semantic-provider, T1 inspection, T2b terminal-agent, and source-context regressions.
-- `cargo clippy --offline -p scope-ide --features agent --lib -- -D warnings` — passed.
-- `cargo clippy --offline -p scope-ide --features agent --all-targets -- -D warnings` — blocked by existing lints in untouched `src/edit_lifecycle_tests.rs` (three `field_reassign_with_default`, one `collapsible_if`) and `examples/state_description_support/mod.rs` (`collapsible_if`, also compiled by integration tests). No unrelated lint cleanup was made.
-
-Cargo also reports duplicate-package warnings from cached Cell packages. The production fixture covers exact UTF-8/final-newline preservation and unchanged App/disk state. A separate synthetic post-execution change test verifies stale results are discarded. Existing native-provider regressions verify lossless native observations and no proposal registration for reads; the adapter never mutates that native result. No remote model, downstream live experiment, source edit capability, or automatic retry was introduced.

@@ -1,6 +1,6 @@
 # Read-only semantic investigations
 
-## Contract inventory and root cause
+## Choosing the runner
 
 `run_semantic_edit_with_discovery` requires nonempty proposal capabilities. Removing
 that guard is insufficient: inspection completion and exhausted inspection budgets
@@ -101,7 +101,7 @@ failure, not successful evidence. Native provider observations are not added as 
 second model protocol. Synchronous model/provider calls have no new preemptive
 timeout guarantee. Authorized source/results may reach the configured model.
 
-## Minimum downstream migration (including FW5)
+## Downstream migration
 
 1. Replace `run_semantic_edit_with_discovery` with
    `run_semantic_investigation_with_discovery`.
@@ -119,7 +119,7 @@ timeout guarantee. Authorized source/results may reach the configured model.
 No downstream semantic dispatcher, operation changes, planner, Forth dependency,
 or live-model experiment is required.
 
-## Deterministic demonstration and validation
+## Deterministic demonstration
 
 `crates/scope-ide/src/investigation_tests.rs` contains a scripted model and
 language-neutral fixture: discover `inspect` and `evaluate_example`, inspect the
@@ -129,11 +129,3 @@ assert actual model/provider invocation, zero proposals, unchanged target,
 independent authorization, hidden/write denial, invalid-argument recovery,
 malformed/repeated decisions, budgets, missing evidence, host uncertainty,
 pre-dispatch provenance, and retained evidence after a later source mutation.
-
-`cargo check -p scope-ide --features agent --offline` passes. The direct lib-test
-command is blocked by an existing missing seventh argument in
-`cli/source_proposals/configured_tests.rs`'s `run_shell_configured` call. In a
-temporary source copy, supplying only that missing `None` permits
-`cargo test -p scope-ide --features agent --offline --lib` to pass **529 tests**,
-including existing editing, discovery, semantic authorization and snapshot tests.
-The unrelated working-tree test file was not modified.

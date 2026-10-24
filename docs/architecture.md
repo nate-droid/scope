@@ -4,7 +4,8 @@
 
 | Layer | Implemented responsibility |
 | --- | --- |
-| `scope-ide` | Default executable, CLI/shell, document and buffer state, workspace access, proposals, default tools, optional agent/TUI integration |
+| `scope-workbench` | Default `scope` executable; composes the IDE shell with the unprivileged Script scratch runner |
+| `scope-ide` | Embeddable host library and separate CLI, document and buffer state, workspace access, proposals, default tools, optional agent/TUI integration |
 | `scope-language` | Language-service and semantic-operation contracts; downstream registration |
 | `scope-meta` | Structural workspace snapshots, revisions, source references, read-only queries |
 | `scope-types` | Versioned types, ports, transformation graphs, compatibility and composition validation |
@@ -14,8 +15,10 @@
 | `xtask` | Developer tooling, including downstream language scaffolding |
 | Cell | WASM execution, capability interfaces and runtime resource policies |
 
-The root Cargo workspace selects `scope-ide` as its default member: `cargo run`
-is the IDE shell, not Script. See [getting started](getting-started.md).
+The root Cargo workspace selects `scope-workbench` as its default member:
+`cargo run` opens its shell. `cargo run -p scope-script -- FILE` runs a saved
+Script file; `cargo run -p scope-ide` runs the host CLI without the workbench's
+Script runner. See [getting started](getting-started.md).
 
 ## Discovery is not execution authority
 
@@ -45,7 +48,9 @@ session are distinct state owners. Bare `open` selects the App document;
 `:scope open` selects a shell buffer. `context` exposes identities, revisions,
 and command targets. Changing source or target can invalidate captured requests.
 
-No evaluator is registered by the stock IDE shell. Downstream hosts can register
+No downstream interactive evaluator is registered by the stock IDE shell.
+The default workbench separately installs `:scope script run` for pure Script
+scratch execution; this does not install a language session or semantic authority. Downstream hosts can register
 one and explicitly select a session. Script's standalone CLI instead uses
 `NoHost`; its semantic adapters and shell runner require explicit installation
 and authorization. See [Scope Script](scope-script.md).
@@ -62,6 +67,28 @@ Agent/model integration and the browsing TUI are optional. Agent execution uses
 a bounded decision loop; the stock CLI/shell agent policy denies writes. There
 is no dynamic language-plugin loader or complete autonomous compile/test/review
 workflow. The TUI is not a full editor.
+
+## Extension points and repository map
+
+Production implementations live in `crates/*/src` (the terminal library uses
+`crates/scope-terminal/lib.rs`). Public library exports and their Rustdoc are the
+API reference; integration tests live in each crate's `tests/` directory. Shared
+example providers are fixtures, not installed languages. The standalone
+`examples/downstream` and `examples/harness` workspaces validate embedding through
+public interfaces; see the [example catalog](../examples/README.md).
+
+Register language services and operation schemas through `scope-language` and the
+IDE's `LanguageRegistry`. Compose a launcher with
+`scope_ide::cli::run_with_registry_and_command`; Script hosts implement explicit
+adapters rather than receiving implicit access to the workspace. Source targets
+and snapshots carry ownership and revision identities: changing targets is not
+permission to inspect them, and stale evidence must not authorize a new revision.
+Candidate evaluation reports evidence separately from proposal acceptance.
+
+Keep Cell-facing capability execution in the host/execution layers; languages
+remain responsible for domain semantics, not Scope's approval policy. The
+[interoperability guide](design/INTEROPERABILITY.md) explains the limits of
+structural compatibility.
 
 For integration details, see the [Downstream Guide](../DOWNSTREAM_GUIDE.md),
 [Harness Guide](../HARNESS_GUIDE.md), and [Security Policy](../SECURITY.md).

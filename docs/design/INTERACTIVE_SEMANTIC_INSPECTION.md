@@ -64,29 +64,6 @@ Assertions check current/stale/current display, dispatch counts, preservation of
 
 The `tui` feature implies `tools`, not `agent`; it does not enable the optional agent/model dependencies. The example's Cargo entry requires `tui` without changing that feature definition.
 
-## Validation record
-
-Run during this change:
-
-- `cargo run -p scope-ide --features tui --example interactive_semantic_inspection --offline` — passed; printed initial, stale, and refreshed frames and completed its assertions.
-- `cargo test -p scope-ide --features tui --offline semantic_inspection` — passed (filtered test run).
-- `cargo test -p scope-ide --features tui --offline --lib semantic_inspection` — 10 passed, 0 failed, 334 filtered out.
-
-The inspection unit tests cover unsaved source and no mutation, native JSON preservation, denial without dispatch, stale identity/text/revision/language, eligibility, invalid IDs, catalog changes, blocked feedback, invalid contracts, wrong-effect results, and language errors. The shipped TUI integration tests additionally drive real `Tui::handle_key` events and `TestBackend` rendering: F8/Ctrl-I, navigation, confirmation/cancellation, document/language switching, unsaved source, full native JSON, blocked/error views, stale pending authorization, and fresh reinvocation. These are not a manual real-terminal interaction test.
-
-Full validation for SIO1:
-
-- `cargo fmt --all -- --check` — passed.
-- `cargo test -p scope-language` — passed.
-- `cargo test -p scope-ide` — passed (default features).
-- `cargo test -p scope-ide --features tui` — passed, including existing TUI tests and the new interaction target.
-- `cargo clippy --workspace --all-targets -- -D warnings` — blocked by the pre-existing reversed `5..2` range in `crates/scope-terminal/tests.rs:556`.
-- Focused all-target TUI Clippy also encounters a pre-existing nested-if warning in `examples/state_description_support/mod.rs:28` (compiled by existing examples/tests).
-- `cargo clippy -p scope-ide --features tui --lib --test interactive_semantic_inspection --example interactive_semantic_inspection -- -D warnings` — passed for the changed library, new interaction target, and example.
-- `git diff --check` — passed.
-
-There are four new end-to-end interaction tests and eleven bridge unit tests. Existing TUI tests run in the `--features tui` suite. No existing Scope IDE PTY test target was found; unrelated Scope Script PTY tests were not used as evidence for this modal.
-
 ## Remaining limitations and narrow follow-ups
 
 This intentionally synchronous document-only workflow has no argument forms, selection invention, scheduling, editing authority, diagnostics, or highlights. The stock TUI remains a document browser; embedding hosts can supply unsaved editor changes, as exercised in tests and the example. Built-in languages need not advertise any operations; an empty list is normal. Native services must be trusted; no new capabilities are granted or external services configured by this command. Opaque constraints cannot serve as a generic enforceable external-capability declaration.

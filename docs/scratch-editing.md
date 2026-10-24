@@ -24,6 +24,21 @@ source, including colon-leading text, without executing shell or editor commands
 Ctrl-S accepts, not saves or evaluates. An accepted changed draft creates one
 revision regardless of keystroke count; an unchanged draft creates none.
 
+## Replace one line without opening the editor
+
+`:scope line N JSON_STRING` replaces one complete line in the selected shell
+buffer. `N` is one-based; the replacement uses JSON quoting, not shell quoting.
+For example, `:scope line 1 "  let n = 8;"` preserves the two leading spaces;
+`""` leaves an empty line. Escaped tabs, quotes, and backslashes are supported,
+but decoded CR/LF, invalid numbers, nonexistent lines, and extra arguments fail
+without editing.
+
+Existing LF/CRLF terminators and all bytes outside the line are preserved. A
+trailing LF includes a final empty line; empty source has one empty line. Each
+successful replacement advances the buffer version once, even for identical
+text, without changing identity or saving. This command targets the shell buffer,
+not an App document with the same path.
+
 ## Explicit command mode
 
 Use `:scope edit --commands` for the legacy Enter-submitted editor. Non-TTY

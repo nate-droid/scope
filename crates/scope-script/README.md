@@ -53,5 +53,5 @@ remain supported.
 cargo test -p scope-script --all-targets --locked --offline
 ```
 
-Completed experiment reports and original evidence are indexed in the
-[archive](../../docs/archive/README.md), not maintained as duplicate user guides.
+For contract inspection, nominal identity, explicit adapters, and authority
+boundaries, see [interoperability](../../docs/design/INTEROPERABILITY.md).

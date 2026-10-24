@@ -1,61 +1,51 @@
 # Scope
 
-Scope is an experimental, capability-oriented development environment. Projects
-supply language semantics and typed operations; Scope provides discovery,
-composition, workspace inspection, and human/agent orchestration. [Cell](https://github.com/nate-droid/cell)
-provides WebAssembly execution and capability enforcement.
+Scope is a language-neutral semantic workbench for working with structured programs
+and tools. A language integration supplies the meaning of its source code and the
+operations it supports. Scope supplies discovery, workspace and scratch buffers,
+interactive editing, and controlled human and agent workflows.
 
-## Five minutes: Script workbench
+The goal is to let people and tools ask useful questions about programs without
+forcing every language into one runtime or treating every interaction as a text
+edit. Agents can discover operations and propose changes, while the host retains
+authority over invocation, approval, and persistence.
 
-From this checkout's root, with the [development prerequisites](docs/development.md):
+Today you can edit and run Scope Script in memory, inspect registered language
+services, embed semantic operations in a Rust host, and review revision-aware
+proposals. Scope is experimental: these are usable building blocks, not a complete
+autonomous development environment.
+
+## Try it
+
+Clone this repository and run these commands from its root. You need the Rust
+toolchain selected by `rust-toolchain.toml`; the first build downloads dependencies,
+including [Cell](https://github.com/nate-droid/cell) at `v0.0.2`.
+No model server, API key, or Wasm target is needed.
 
 ```sh
-cargo run
+cargo run --locked
 ```
 
-DX4 uses the `scope-workbench` package (binary `scope`), which depends on
-`scope-ide` and `scope-script`. This starts the Script workbench shell in the current directory. The workspace must
-already exist; startup does not create it. Workspace access is read-only by
-default. To enable saves, opt in with `cargo run -- --writable shell`.
-At the prompt:
+At the prompt, paste:
 
 ```text
 :scope scratch new script
 :scope edit --commands
-let experiment = {name: "daily", samples: [2, 4, 6]}
-let total = experiment.samples[0] + experiment.samples[1] + experiment.samples[2]
-if total == 12 {
-    print({name: experiment.name, total: total, status: "ok"})
-} else {
-    print({name: experiment.name, total: total, status: "unexpected"})
-}
+print(2 + 3)
 :done
 :scope script run
 :scope quit
 ```
 
-The transcript uses `:scope edit --commands` for explicit cooked lines; `:done`
-commits the draft to memory, not disk. On a TTY, plain `:scope edit` opens the
-multiline keyboard editor: arrows/Home/End move, Enter inserts a newline,
-Backspace/Delete remove text, Tab inserts a tab, and bracketed paste inserts source.
-Ctrl-S accepts; Ctrl-C or Escape cancels. Non-TTY input defaults to commands.
-Use `:at LINE COLUMN`, `:delete COUNT`, and `:insert TEXT` inside the editor.
-`:complete` lists source completions from fresh Script metadata, without live
-bindings; `:complete INDEX` applies a listed completion in command mode. See the
-[short editing tutorial](docs/scratch-editing.md) and [getting started](docs/getting-started.md).
+The run reports `print: 5` and `status: interpreter success`. Editing commits a
+revision to memory, not disk. Each Script run uses a fresh interpreter with no host
+providers or filesystem authority. Workspace access is read-only by default;
+explicitly opt into saves with `cargo run --locked -- --writable shell`.
 
-`:scope script run` evaluates selected scratch source with a fresh interpreter
-and `NoHost` on every invocation. It neither saves source nor writes results.
-`:scope run` remains a separate, configured downstream semantic runner; Scope
-Simple (`scope.simple`) is analysis, not Script execution or semantic acceptance.
-Optional agent/model and TUI integrations are not needed for this path. The
-`tools` feature does not grant write authority.
-
-The same runnable source is [examples/workbench.scope](examples/workbench.scope).
-Run it separately with the standalone CLI:
+For a saved-file example:
 
 ```sh
-cargo run -p scope-script -- examples/workbench.scope
+cargo run --locked -p scope-script -- examples/workbench.scope
 ```
 
 Expected output:
@@ -64,25 +54,59 @@ Expected output:
 {"name": "daily", "status": "ok", "total": 12}
 ```
 
-Edit the file in your editor, save, and rerun. Each file execution uses a fresh
-interpreter with **no host providers or authority**. A `.scope` suffix does not
-install a language, select a host, or grant workspace access.
+On a terminal, `:scope edit` opens the multiline keyboard editor: Ctrl-S accepts;
+Ctrl-C or Escape cancels. The explicit `--commands` mode above also works with
+piped input. See [getting started](docs/getting-started.md) and
+[scratch editing](docs/scratch-editing.md) for the full workflow.
 
-## Where to go next
+## How it fits together
 
-- [Getting started](docs/getting-started.md): exact CLI forms and shell workflow.
-- [Scope Script](docs/scope-script.md): file execution, REPL, output, explicit hosts.
-- [Architecture](docs/architecture.md): responsibilities and authority boundaries.
-- [Development](docs/development.md): Rust, Cell `v0.0.2`, build and validation commands.
-- [Downstream Guide](DOWNSTREAM_GUIDE.md): Rust embedding and language registration.
-- [Harness Guide](HARNESS_GUIDE.md): tool dispatch, authorization, and agent loops.
-- [Security](SECURITY.md) and [Contributing](CONTRIBUTING.md).
+```text
+Human / agent / Scope Script
+             |
+Scope host: discovery, authorization, buffers, proposals
+             |
+Registered language services: domain semantics and operations
+             |
+Cell: capability-oriented execution and filesystem boundaries
+```
 
-Scope supports typed composition, bounded metadata snapshots, registered semantic
-reads, and reviewable text proposals. These are building blocks, not a complete
-autonomous compile/test/review workflow. Native language services are trusted host
-code, not automatically sandboxed WASM. See [architecture](docs/architecture.md)
-for current limits.
+- **Scope's interfaces** describe languages, source snapshots, semantic operations,
+  and tools. Hosts register implementations and decide what may run.
+- **Scope Script** is lightweight automation and composition. Its standalone CLI
+  has no host providers; embedded hosts explicitly install and authorize them.
+- **Languages** own their semantics. The stock shell includes Scope Simple analysis
+  and a language-neutral fallback, not a general collection of language runtimes.
+- **Agents** discover and propose through host-owned workflows. Evaluation evidence
+  is not approval; accepting a proposal is not the same as saving it.
+- **Cell** provides capability and sandbox boundaries for Cell execution. Native
+  Rust extensions remain trusted host code, not automatically sandboxed components.
+
+The default binary is `scope`, in `scope-workbench`; it composes `scope-ide` and
+`scope-script`. The [architecture guide](docs/architecture.md) maps all crates and
+explains state ownership, revision safety, and extension points.
+
+## Extend Scope
+
+Language integration is compile-time Rust composition, not dynamic plugin loading.
+Start with the [downstream example](examples/downstream/README.md) and
+[Downstream Guide](DOWNSTREAM_GUIDE.md) to register language-specific semantic
+operations and compose a launcher. The [example catalog](examples/README.md)
+distinguishes runnable demonstrations from explicit fixture hosts.
+
+For tool authorization and proposal workflows, see the
+[Harness Guide](HARNESS_GUIDE.md) and [interactive sessions](INTERACTIVE_SESSIONS.md).
+
+## Status and development
+
+Public interfaces are developing. Agent/model integration, the browsing TUI, and
+research fixture hosts are optional; the TUI is not a full editor. Discovery and
+type compatibility do not establish semantic correctness or grant authority.
+There is no complete autonomous compile/test/review loop.
+
+- [Development](docs/development.md): prerequisites, features, builds, and tests.
+- [Scope Script](docs/scope-script.md): language, output, and explicit host adapters.
+- [Contributing](CONTRIBUTING.md) and [Security](SECURITY.md).
 
 ## License
 
