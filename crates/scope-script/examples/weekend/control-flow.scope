@@ -1,0 +1,13 @@
+let secret = 17
+let guess = 12
+if guess == secret {
+    print("Found it!")
+} else {
+    if guess < secret {
+        let distance = secret - guess
+        print({hint: "higher", distance: distance})
+    } else {
+        print({hint: "lower", distance: guess - secret})
+    }
+}
+print(false && missing)

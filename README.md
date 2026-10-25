@@ -59,6 +59,10 @@ Ctrl-C or Escape cancels. The explicit `--commands` mode above also works with
 piped input. See [getting started](docs/getting-started.md) and
 [scratch editing](docs/scratch-editing.md) for the full workflow.
 
+Want a longer, hands-on introduction? Try [Scope Script: A Weekend of Little
+Programs](docs/tutorials/SCOPE_SCRIPT_TUTORIAL.md), with runnable examples and a
+[field notebook](docs/tutorials/SCOPE_SCRIPT_FIELD_NOTES.md).
+
 ## How it fits together
 
 ```text

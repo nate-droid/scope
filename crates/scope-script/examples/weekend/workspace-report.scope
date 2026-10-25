@@ -1,0 +1,6 @@
+let operations = scope.operations()
+let discovered = scope.invoke(operations[0].provider, operations[0].action, {})
+let batch = scope.invoke(operations[1].provider, operations[1].action, {})
+print({documents: batch.document_count, pending: batch.todo_count, needs_attention: batch.todo_count > 0})
+print(batch.documents[1].path)
+print(batch.documents[1].pending)

@@ -1,0 +1,6 @@
+let operation = scope.operations()[0]
+print({provider: operation.provider, action: operation.action})
+let result = scope.invoke(operation.provider, operation.action, {})
+print({status: result.status, name: result.value.name, kind: result.value.kind, partial: result.value.partial})
+print({type_analysis: result.value.inferred_type.status, references: result.value.references.status})
+result

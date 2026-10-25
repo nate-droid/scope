@@ -1,0 +1,6 @@
+let samples = [7, 11, 18]
+let total = samples[0] + samples[1] + samples[2]
+let mean = total / 3
+let report = {samples: samples, total: total, mean: mean, remainder: total % 3, exact: total % 3 == 0}
+print(report)
+report

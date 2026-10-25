@@ -1,0 +1,14 @@
+let input = {left: 29, right: 6, operation: "divide"}
+if input.operation == "add" {
+    print({answer: input.left + input.right})
+} else {
+    if input.operation == "divide" {
+        if input.right == 0 {
+            print({error: "Choose a nonzero divisor"})
+        } else {
+            print({quotient: input.left / input.right, remainder: input.left % input.right})
+        }
+    } else {
+        print({error: "Try add or divide"})
+    }
+}
