@@ -11,7 +11,9 @@ pub use agent_semantics::{
 };
 mod buffer_editor;
 mod context;
+mod downstream;
 use context::{print_app_target, print_buffer_target, print_source_context};
+pub use downstream::{DownstreamError, DownstreamOutcome};
 #[cfg(feature = "tools")]
 mod inspection;
 mod source_proposals;
@@ -390,6 +392,28 @@ fn run_shell_inner(
 /// concrete operation authorization and for the purity of their native code.
 /// Errors are displayed by the shell; they do not alter runtime lifecycle.
 pub trait ReadOnlyCommand {
+    /// Explicit namespaces exposed by `:scope downstream`. At most 64 names,
+    /// each 1–64 ASCII bytes matching `[a-z][a-z0-9_-]*`; duplicates are errors.
+    /// Metadata is snapshotted and validated once before the shell starts.
+    fn downstream_namespaces(&self) -> &[&str] {
+        &[]
+    }
+
+    /// Dispatches whitespace-delimited arguments without quoting or expansion.
+    /// The independently bound semantic target is an invocation-local,
+    /// immutable live-memory borrow. No binding is `None`;
+    /// a closed explicit target errors before invocation. Native hosts remain
+    /// trusted and responsible for authorization and any external effects.
+    fn invoke_downstream(
+        &mut self,
+        _namespace: &str,
+        _command: &str,
+        _args: &[&str],
+        _semantic_target: Option<&crate::scratch::ScratchBuffer>,
+        _output: &mut dyn Write,
+    ) -> Result<DownstreamOutcome, DownstreamError> {
+        Ok(DownstreamOutcome::Unhandled)
+    }
     /// Runs selected scratch source without an App document or active session.
     /// The source borrow is invocation-local. Hosts must explicitly authorize
     /// execution and remain responsible for all native effects.
@@ -581,6 +605,7 @@ fn run_shell_owned(
     #[cfg(feature = "agent")] editing: Option<InteractiveEditConfig>,
     mut host_command: Option<&mut dyn ReadOnlyCommand>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let downstream_namespaces = downstream::registrations(host_command.as_deref())?;
     let max_history = if interactive {
         std::env::var("SCOPE_HISTORY_LIMIT")
             .ok()
@@ -690,6 +715,18 @@ fn run_shell_owned(
         if line == ":scope" || line.starts_with(":scope ") {
             let mut parts = command.split_whitespace();
             match parts.next() {
+                Some("downstream") => {
+                    if let Err(error) = downstream::dispatch(
+                        command.trim_start().strip_prefix("downstream").unwrap(),
+                        &downstream_namespaces,
+                        &mut host_command,
+                        &scratches,
+                        &mut output,
+                    ) {
+                        writeln!(output, "error: {error}")?;
+                    }
+                    continue;
+                }
                 Some("line") => {
                     if let Err(error) = replace_scratch_line(
                         command.trim_start().strip_prefix("line").unwrap(),
@@ -1963,6 +2000,10 @@ fn print_shell_help(output: &mut impl Write) -> std::io::Result<()> {
     writeln!(
         output,
         "Discovery: languages (or :scope languages) lists analysis services, installed semantic operations, evaluators and current session. Use :scope context for source owners; :scope inspect for eligible document reads. Scratch edits stay in memory; :scope script run executes the selected scratch in the default workbench. Standalone: cargo run -p scope-script -- --help."
+    )?;
+    writeln!(
+        output,
+        "Downstream host commands (explicit namespace only):\n  :scope downstream                    List registered namespaces\n  :scope downstream NAME COMMAND ARGS   Dispatch optional immutable live semantic target\nArguments are whitespace-delimited only; quotes and backslashes are rejected. No expansion is performed."
     )?;
     writeln!(
         output,

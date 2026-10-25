@@ -34,6 +34,85 @@ See the [SI6 contract and Path DX2 handoff](crates/scope-script/docs/SI6.md) and
 for exact signatures, a verified invocation sequence, revision semantics,
 authorization constraints, and realistic unsaved-source regression coverage.
 
+## Namespaced downstream shell commands (SC1)
+
+Install a retained `cli::ReadOnlyCommand` through the existing
+`cli::run_with_registry_and_command` launcher (or `run_with_session_and_command`
+for supplied input/output). Override these two default methods:
+
+```rust,ignore
+fn downstream_namespaces(&self) -> &[&str] { &["demo"] }
+
+fn invoke_downstream(
+    &mut self,
+    namespace: &str,
+    command: &str,
+    args: &[&str],
+    semantic_target: Option<&scope_ide::scratch::ScratchBuffer>,
+    output: &mut dyn std::io::Write,
+) -> Result<scope_ide::cli::DownstreamOutcome, scope_ide::cli::DownstreamError>;
+```
+
+Use `:scope downstream` to discover registered namespaces and
+`:scope downstream demo echo first second` to dispatch. `:scope help` advertises
+this boundary. Namespace metadata is validated and copied once at shell startup:
+no duplicates, at most 64 names, each matching `[a-z][a-z0-9_-]*` and at most
+64 bytes. Invalid registration fails startup. Built-in names are safe namespace
+names because they live below `downstream`, never in the built-in command table.
+There is no interception of bare input or unknown Scope commands.
+
+Arguments are borrowed whitespace-delimited tokens, preserving Unicode and
+literal `$` characters. Quotes and backslashes are rejected with
+`invalid_arguments`; there is no quoting, escaping, expansion, or expression
+syntax. Commands needing structured values should validate their own small token
+vocabulary or continue to use Scope Script. Return `Handled` after processing,
+`Unhandled` for an unknown command, or `DownstreamError::new(code, message)` for a
+failure. The shell displays errors and continues. Unknown namespaces never invoke
+the callback; unhandled commands become `unknown_command`. Callback output uses
+the normal shell writer; hosts should render untrusted text safely for terminals.
+
+The supplied target is **only the independently bound semantic scratch**, never
+the selected Script scratch or App document. Its immutable invocation-local
+borrow supplies consistent `evaluation_source_id()`, `version()` (convert with
+`scope_language::RevisionId::from_version`), and exact unsaved `text()`. The
+existing `SourceTarget::snapshot()` is also available. `None` means unbound; a
+closed explicit binding produces `target_unavailable` before dispatch. No disk
+or alternate document fallback occurs. Rebinding affects the next invocation.
+Hosts requiring a target should return an explicit error on `None`.
+
+**Registration is not authorization.** The callback receives no source mutation,
+workspace, runtime, shell, or filesystem interface. It remains trusted native
+host code, not a sandbox. Keep the same authorization path as existing operations:
+for example, translate a fixed command to a fixed trusted Script and call the
+same `ScriptRunner::invoke_script_with_target` with the same operation bindings.
+Never grant permission merely because a target is bound, interpolate untrusted
+arguments into executable Script, or call a language service directly to evade
+its authorized provider. A `ScriptRunner` interpreter failure is reported in its
+record/output, not necessarily as a setup error; semantic envelopes also need
+checking. No additional invocation authority is created by SC1.
+
+The complete runnable integration is
+[`crates/scope-script/examples/downstream_shell.rs`](crates/scope-script/examples/downstream_shell.rs):
+
+```sh
+cargo run -p scope-script --example downstream_shell
+cargo test -p scope-script --test downstream_shell
+```
+
+It uses the public buffered shell, an artificial language, a retained runner and
+selection counter, argument capture, live source snapshots, output, and an
+explicitly denied operation. Its regression test compares alias and original
+Script permissions, outcomes, and source provenance. Local fixed Script buffers
+are invocation-local controllers, not authoritative semantic sources. Keep
+navigation/run selection in the downstream object or its shared language handle;
+Scope retains the installed callback and does not recreate it per command.
+
+Dispatch is synchronous and borrows end before the next shell submission. No
+cancellation of native callbacks, per-command completion catalog, dynamic
+registration, or shared source/session registry is introduced. Existing terminal
+history, editing, paste, and completion plumbing is unchanged. A future TUI
+source-view/session-transfer contract is separate.
+
 ## Model-independent harness discovery
 
 With `features = ["tools"]`, use `scope_ide::tool::AgentSession` to register
