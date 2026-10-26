@@ -527,6 +527,56 @@ fn compact_catalog(
     }).collect::<Vec<_>>()})
 }
 
+/// Level A is derived only from the canonical session inventory, never a second registry.
+fn discovery_summary(catalog: &crate::tool::SessionCatalog, names: &[String]) -> serde_json::Value {
+    let canonical = to_json(catalog.to_value());
+    let mut tools: Vec<_> = canonical["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| {
+            names
+                .iter()
+                .any(|name| entry["definition"]["name"] == *name)
+        })
+        .map(|entry| {
+            let metadata = &entry["metadata"];
+            let description = metadata["description"]
+                .as_str()
+                .or_else(|| entry["definition"]["description"].as_str())
+                .unwrap_or("");
+            let truncated = description.chars().count() > 160;
+            let mut short: String = description.chars().take(160).collect();
+            if truncated {
+                short.push('…');
+            }
+            json!({"name":entry["definition"]["name"], "effect":entry["definition"]["effect"],
+                "target":metadata["target"], "purpose":metadata["purpose"],
+                "produces_evaluation":metadata["produces_evaluation"],
+                "description":short, "description_truncated":truncated})
+        })
+        .collect();
+    tools.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+    json!({"tools":tools})
+}
+
+fn discovery_detail(
+    catalog: &crate::tool::SessionCatalog,
+    allowed: &[String],
+    name: &str,
+) -> serde_json::Value {
+    let canonical = to_json(catalog.to_value());
+    let entry = canonical["tools"].as_array().unwrap().iter().find(|entry| {
+        allowed.iter().any(|allowed| allowed == name) && entry["definition"]["name"] == name
+    });
+    match entry {
+        Some(entry) => json!({"kind":"tool_result", "ok":true, "value":{"tools":[entry]}}),
+        None => {
+            json!({"kind":"tool_result", "ok":false, "error":"unknown_or_ineligible_operation"})
+        }
+    }
+}
+
 fn reveal_operations(eligible: &[String], visible: &mut Vec<String>, page_size: usize) -> usize {
     let mut hidden: Vec<_> = eligible
         .iter()
@@ -656,6 +706,7 @@ fn run_edit_session_inventory(
         discovery,
         None,
         false,
+        false,
     )
 }
 
@@ -670,6 +721,7 @@ fn run_objective_session_inventory(
     discovery: Option<&SemanticDiscoveryOptions>,
     mut completion: Option<&mut CompletionPolicy<'_>>,
     projected_arguments: bool,
+    compact_discovery: bool,
 ) -> EditRun {
     use EditOutcome::*;
     let mut run = EditRun::default();
@@ -811,7 +863,7 @@ fn run_objective_session_inventory(
         {
             return run.finish(OperationBudgetExhausted);
         }
-        let context = json!({"kind":"edit_phase", "phase":format!("{:?}",run.state.phase()), "catalog":compact_catalog(&catalog, &phase_visible, projected_arguments), "remaining_budgets":{"inspections":budgets.inspections.saturating_sub(run.inspections),"evaluations":budgets.refinements.saturating_add(1).saturating_sub(run.evaluations),"refinements":budgets.refinements.saturating_sub(run.refinements),"model_invocations":budgets.model_invocations.min(budgets.transport.max_decisions).saturating_sub(run.model_invocations)}, "discovery":discovery.map(|options| json!({"name":DISCOVER_SEMANTIC_OPERATIONS,"arguments":{},"page_size":options.page_size,"description":"Reveal the next sorted page of eligible operations for this phase; no authorization granted. Accepts exactly an empty JSON object: arguments must be {}. page_size is host-owned metadata, not an accepted argument; do not supply page_size inside arguments. No other argument keys are accepted."}))}).to_string();
+        let context = json!({"kind":"edit_phase", "phase":format!("{:?}",run.state.phase()), "catalog":if compact_discovery { discovery_summary(&catalog, &phase_visible) } else { compact_catalog(&catalog, &phase_visible, projected_arguments) }, "remaining_budgets":{"inspections":budgets.inspections.saturating_sub(run.inspections),"evaluations":budgets.refinements.saturating_add(1).saturating_sub(run.evaluations),"refinements":budgets.refinements.saturating_sub(run.refinements),"model_invocations":budgets.model_invocations.min(budgets.transport.max_decisions).saturating_sub(run.model_invocations)}, "discovery":discovery.map(|options| json!({"name":DISCOVER_SEMANTIC_OPERATIONS,"arguments":if compact_discovery { json!({"name":"optional fully qualified operation name for canonical detail"}) } else { json!({}) },"page_size":options.page_size,"description":if compact_discovery { "Use {} to reveal the next summary page, or {\"name\":\"fully.qualified.operation\"} for full canonical metadata and schema. Detail does not reveal or authorize invocation. Both consume normal model and tool-call budgets." } else { "Reveal the next sorted page of eligible operations for this phase; no authorization granted. Accepts exactly an empty JSON object: arguments must be {}. page_size is host-owned metadata, not an accepted argument; do not supply page_size inside arguments. No other argument keys are accepted." }}))}).to_string();
         if push_message(&mut messages, "user", context, budgets.transport).is_err() {
             return run.finish(OperationBudgetExhausted);
         }
@@ -905,7 +957,15 @@ fn run_objective_session_inventory(
             let Some(options) = discovery else {
                 return run.finish(AuthorizationFailure);
             };
-            if !call.arguments.is_empty() {
+            let detail_name = if compact_discovery && call.arguments.len() == 1 {
+                call.arguments.get("name").and_then(|value| match value {
+                    ToolValue::String(name) => Some(name.as_str()),
+                    _ => None,
+                })
+            } else {
+                None
+            };
+            if !call.arguments.is_empty() && detail_name.is_none() {
                 run.trace.push(EditEvent::NoProgressReason {
                     reason: "invalid_discovery_arguments".into(),
                 });
@@ -923,6 +983,10 @@ fn run_objective_session_inventory(
                 name: DISCOVER_SEMANTIC_OPERATIONS.into(),
                 phase: run.state.phase(),
             });
+            if let Some(name) = detail_name {
+                continuation.feedback = Some(discovery_detail(&catalog, allowed, name).to_string());
+                continue;
+            }
             let revealed = reveal_operations(allowed, &mut visible, options.page_size);
             run.discovered_operations = visible.clone();
             run.trace.push(EditEvent::Discovery { revealed });
@@ -938,7 +1002,7 @@ fn run_objective_session_inventory(
                 .cloned()
                 .collect();
             let feedback =
-                json!({"kind":"tool_result","ok":true,"value":compact_catalog(&catalog, &names, projected_arguments)})
+                json!({"kind":"tool_result","ok":true,"value":if compact_discovery { discovery_summary(&catalog, &names) } else { compact_catalog(&catalog, &names, projected_arguments) }})
                     .to_string();
             continuation.feedback = Some(feedback);
             continue;
@@ -1374,6 +1438,42 @@ pub fn run_semantic_investigation_with_discovery<T: SourceTarget>(
         policy,
         Some(discovery),
         Some(&mut completion),
+        false,
+    )
+}
+
+/// Opt-in two-level discovery; otherwise identical to the investigation runner.
+#[allow(clippy::too_many_arguments)]
+pub fn run_semantic_investigation_with_compact_discovery<T: SourceTarget>(
+    model: &mut (impl DecisionModel + ?Sized),
+    controller: &mut SourceEditController,
+    target: &T,
+    service: &dyn scope_language::LanguageService,
+    request: AgentEditRequest<'_>,
+    options: &SemanticInvestigationOptions,
+    discovery: &SemanticDiscoveryOptions,
+    policy: impl for<'a> FnMut(crate::tool::semantic::SemanticAuthorization<'a>) -> bool,
+    mut completion: impl FnMut(&str, &[InvestigationEvidence]) -> InvestigationCompletion,
+) -> EditRun {
+    let options = SemanticEditOptions {
+        capabilities: EditCapabilities {
+            inspect: options.operations.clone(),
+            propose: Vec::new(),
+            inspect_first: true,
+        },
+        budgets: options.budgets,
+    };
+    run_semantic_objective_inventory(
+        model,
+        controller,
+        target,
+        service,
+        request,
+        &options,
+        policy,
+        Some(discovery),
+        Some(&mut completion),
+        true,
     )
 }
 
@@ -1445,7 +1545,7 @@ fn run_semantic_edit_inventory<T: SourceTarget>(
     discovery: Option<&SemanticDiscoveryOptions>,
 ) -> EditRun {
     run_semantic_objective_inventory(
-        model, controller, target, service, request, options, policy, discovery, None,
+        model, controller, target, service, request, options, policy, discovery, None, false,
     )
 }
 
@@ -1459,6 +1559,7 @@ fn run_semantic_objective_inventory<T: SourceTarget>(
     policy: impl for<'a> FnMut(crate::tool::semantic::SemanticAuthorization<'a>) -> bool,
     discovery: Option<&SemanticDiscoveryOptions>,
     completion: Option<&mut CompletionPolicy<'_>>,
+    compact_discovery: bool,
 ) -> EditRun {
     let snapshot = ToolValue::object([
         ("source_id", format!("{:?}", target.source_id()).into()),
@@ -1550,6 +1651,7 @@ fn run_semantic_objective_inventory<T: SourceTarget>(
             discovery,
             completion,
             true,
+            compact_discovery,
         )
     })();
     EditRun {
@@ -1899,6 +2001,87 @@ mod inventory_tests {
             }),
         )
     }
+    #[test]
+    fn compact_summary_and_detail_are_canonical_and_bounded() {
+        let session = AgentSession::builder()
+            .provider(Provider(vec![ToolDefinition::new(
+                "language.test.read",
+                "é".repeat(200),
+            )]))
+            .build()
+            .unwrap();
+        let catalog = session.catalog();
+        let names = vec!["language.test.read".into()];
+        let summary = discovery_summary(&catalog, &names);
+        assert_eq!(summary["tools"][0]["description_truncated"], true);
+        assert_eq!(
+            summary["tools"][0]["description"]
+                .as_str()
+                .unwrap()
+                .chars()
+                .count(),
+            161
+        );
+        assert!(summary["tools"][0].get("inputs").is_none());
+        for key in ["target", "purpose", "produces_evaluation"] {
+            assert_eq!(summary["tools"][0].get(key), Some(&serde_json::Value::Null));
+        }
+        let detail = discovery_detail(&catalog, &names, "language.test.read");
+        assert_eq!(
+            detail["value"]["tools"][0],
+            to_json(catalog.to_value())["tools"][0]
+        );
+        assert_eq!(discovery_detail(&catalog, &names, "missing")["ok"], false);
+        assert_eq!(
+            discovery_detail(&catalog, &[], "language.test.read")["ok"],
+            false
+        );
+    }
+
+    #[test]
+    fn compact_detail_never_reveals_or_dispatches_and_consumes_budget() {
+        let detail = json!({"type":"tool", "name":DISCOVER_SEMANTIC_OPERATIONS,
+            "arguments":{"name":"language.test.replace"}})
+        .to_string();
+        for budget in [0, 1] {
+            let mut session = AgentSession::builder()
+                .provider(Provider(vec![
+                    ToolDefinition::new("language.test.replace", "replace")
+                        .effect(ToolEffect::Write),
+                ]))
+                .build()
+                .unwrap();
+            let mut budgets = EditBudgets::default();
+            budgets.transport.max_tool_calls = budget;
+            let run = run_objective_session_inventory(
+                &mut Model(vec![detail.clone(), detail.clone()]),
+                &mut session,
+                Ok(SourceId::Scratch(1)),
+                "replace",
+                &EditCapabilities {
+                    propose: vec!["language.test.replace".into()],
+                    ..Default::default()
+                },
+                budgets,
+                EditDispatch {
+                    policy: &mut |_, _| panic!("detail must not authorize"),
+                    relevant_state: &mut |_| panic!("detail must not inspect"),
+                },
+                Some(&SemanticDiscoveryOptions {
+                    initial_operations: vec![],
+                    page_size: 1,
+                }),
+                None,
+                false,
+                true,
+            );
+            assert_eq!(run.outcome, EditOutcome::OperationBudgetExhausted);
+            assert!(run.discovered_operations.is_empty());
+            assert_eq!(run.inspections, 0);
+            assert_eq!(run.model_invocations, budget + 1);
+        }
+    }
+
     fn discover() -> String {
         json!({"type":"tool","name":DISCOVER_SEMANTIC_OPERATIONS,"arguments":{}}).to_string()
     }

@@ -1,0 +1,3 @@
+# Earlier prints survive a runtime failure. This file intentionally exits nonzero.
+print("Checking task names")
+join(["build", 42], ", ")

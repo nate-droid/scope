@@ -32,10 +32,38 @@ fn is_envelope(ty: &wasmtime::component::types::Type) -> bool {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExecutionError {
     Validation(Diagnostic),
-    Binding { node: String, message: String },
-    Input { name: String, message: String },
-    Runtime { node: String, message: String },
-    Output { node: String, message: String },
+    Binding {
+        node: String,
+        message: String,
+    },
+    Input {
+        name: String,
+        message: String,
+    },
+    Runtime {
+        node: String,
+        message: String,
+    },
+    Output {
+        node: String,
+        message: String,
+    },
+    Managed {
+        node: String,
+        phase: ExecutionPhase,
+        kind: cell::ExecutionErrorKind,
+        message: String,
+    },
+}
+
+/// Stage at which a policy-aware execution failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExecutionPhase {
+    Compile,
+    Link,
+    Binding,
+    Instantiate,
+    Invoke,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -67,6 +95,31 @@ pub fn execute(
     bindings: &Bindings,
     inputs: BTreeMap<String, Value>,
     granted: &Capabilities,
+) -> ExecutionResult {
+    execute_inner(cell, pipeline, bindings, inputs, granted, None)
+}
+
+/// Execute with Cell-managed limits. Budgets apply separately to each node's
+/// instantiation and call, not cumulatively to the pipeline. Capabilities are
+/// supplied exclusively by the caller's Cell; planning grants install nothing.
+pub fn execute_with_policy(
+    cell: &cell::Cell,
+    pipeline: &Pipeline,
+    bindings: &Bindings,
+    inputs: BTreeMap<String, Value>,
+    granted: &Capabilities,
+    policy: &cell::ExecutionPolicy,
+) -> ExecutionResult {
+    execute_inner(cell, pipeline, bindings, inputs, granted, Some(policy))
+}
+
+fn execute_inner(
+    cell: &cell::Cell,
+    pipeline: &Pipeline,
+    bindings: &Bindings,
+    inputs: BTreeMap<String, Value>,
+    granted: &Capabilities,
+    policy: Option<&cell::ExecutionPolicy>,
 ) -> ExecutionResult {
     let mut result = ExecutionResult::default();
     let graph = &pipeline.graph;
@@ -119,9 +172,12 @@ pub fn execute(
         };
         // Link preflight has no guest execution. Instantiation is deferred because
         // component start functions can execute and must follow dependency order.
+        let mut phase = ExecutionPhase::Compile;
         let preparation = (|| {
             let component = cell.component_from_bytes(&binding.component)?;
+            phase = ExecutionPhase::Link;
             let pre = cell.linker().instantiate_pre(&component)?;
+            phase = ExecutionPhase::Binding;
             let (_, export) = component
                 .get_export(None, &binding.export)
                 .ok_or_else(|| format!("missing export {}", binding.export))
@@ -145,15 +201,24 @@ pub fn execute(
                 )
                 .into());
             }
-            Ok::<_, Box<dyn std::error::Error + Send + Sync>>((pre, export))
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>((component, pre, export))
         })();
         match preparation {
-            Ok((pre, export)) => {
-                prepared.insert(name.clone(), (pre, export));
+            Ok((component, pre, export)) => {
+                prepared.insert(name.clone(), (component, pre, export));
             }
-            Err(error) => result.errors.push(ExecutionError::Binding {
-                node: name.clone(),
-                message: format!("{error:#}"),
+            Err(error) => result.errors.push(if policy.is_some() {
+                ExecutionError::Managed {
+                    node: name.clone(),
+                    phase,
+                    kind: cell::ExecutionErrorKind::Invalid,
+                    message: format!("{error:#}"),
+                }
+            } else {
+                ExecutionError::Binding {
+                    node: name.clone(),
+                    message: format!("{error:#}"),
+                }
             }),
         }
     }
@@ -194,16 +259,53 @@ pub fn execute(
                 )
             })
             .collect();
-        let (pre, export) = prepared.remove(&name).unwrap();
-        let call = (|| {
-            let mut store = cell.store(());
-            let instance = pre.instantiate(&mut store)?;
-            let function =
-                instance.get_typed_func::<(Envelope,), (Envelope,)>(&mut store, &export)?;
-            let (outputs,) = function.call(&mut store, (arguments,))?;
+        let (component, pre, export) = prepared.remove(&name).unwrap();
+        let call = if let Some(policy) = policy {
+            let mut store = cell.managed_store((), policy.clone());
+            let managed = cell
+                .instantiate_managed(&mut store, &component)
+                .map_err(|error| (ExecutionPhase::Instantiate, error))
+                .and_then(|instance| {
+                    store
+                        .call(
+                            &instance,
+                            &bindings[&node.id].export,
+                            &[encode_envelope(arguments)],
+                        )
+                        .map_err(|error| (ExecutionPhase::Invoke, error))
+                });
+            match managed {
+                Ok(values) => match decode_envelope(values) {
+                    Some(outputs) => Ok(outputs),
+                    None => {
+                        result.errors.push(ExecutionError::Output {
+                            node: name,
+                            message: "invalid managed result envelope".into(),
+                        });
+                        return result;
+                    }
+                },
+                Err((phase, error)) => {
+                    result.errors.push(ExecutionError::Managed {
+                        node: name,
+                        phase,
+                        kind: error.kind,
+                        message: error.to_string(),
+                    });
+                    return result;
+                }
+            }
+        } else {
+            (|| {
+                let mut store = cell.store(());
+                let instance = pre.instantiate(&mut store)?;
+                let function =
+                    instance.get_typed_func::<(Envelope,), (Envelope,)>(&mut store, &export)?;
+                let (outputs,) = function.call(&mut store, (arguments,))?;
 
-            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(outputs)
-        })();
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(outputs)
+            })()
+        };
         let outputs = match call {
             Ok(outputs) => outputs,
             Err(error) => {
@@ -250,4 +352,60 @@ pub fn execute(
     }
     result.output = resolve(&pipeline.output, &inputs, &result.artifacts).cloned();
     result
+}
+
+fn encode_envelope(values: Envelope) -> wasmtime::component::Val {
+    use wasmtime::component::Val;
+    Val::List(
+        values
+            .into_iter()
+            .map(|(port, name, version, bytes)| {
+                Val::Tuple(vec![
+                    Val::String(port),
+                    Val::String(name),
+                    Val::String(version),
+                    Val::List(bytes.into_iter().map(Val::U8).collect()),
+                ])
+            })
+            .collect(),
+    )
+}
+
+fn decode_envelope(mut results: Vec<wasmtime::component::Val>) -> Option<Envelope> {
+    use wasmtime::component::Val;
+    if results.len() != 1 {
+        return None;
+    }
+    let Val::List(values) = results.pop()? else {
+        return None;
+    };
+    values
+        .into_iter()
+        .map(|value| {
+            let Val::Tuple(fields) = value else {
+                return None;
+            };
+            let mut fields = fields.into_iter();
+            let Val::String(port) = fields.next()? else {
+                return None;
+            };
+            let Val::String(name) = fields.next()? else {
+                return None;
+            };
+            let Val::String(version) = fields.next()? else {
+                return None;
+            };
+            let Val::List(bytes) = fields.next()? else {
+                return None;
+            };
+            if fields.next().is_some() {
+                return None;
+            }
+            let bytes = bytes
+                .into_iter()
+                .map(|v| if let Val::U8(b) = v { Some(b) } else { None })
+                .collect::<Option<Vec<_>>>()?;
+            Some((port, name, version, bytes))
+        })
+        .collect()
 }

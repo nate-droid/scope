@@ -119,4 +119,4 @@ Node lookup is binary search; scans, traversal, and descriptions are linear and
 currently unbounded. There is no graph database, inheritance, cardinality checking,
 provider discovery, automatic invalidation, or agent tool in this core.
 The capability-backed workspace adapter lives in `scope_ide::workspace::meta`;
-see [Structural workspace snapshots](../../DOWNSTREAM_GUIDE.md#structural-workspace-snapshots).
+see [Structural workspace snapshots](../../docs/integration.md).

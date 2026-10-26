@@ -148,7 +148,7 @@ fn missing_authorization_metadata_fails_without_mutation() {
     let error = run("scope.operations()[0].metadata.authorization").unwrap_err();
     let error = error.downcast_ref::<scope_script::Error>().unwrap();
     assert!(
-        matches!(&error.kind, scope_script::ErrorKind::Runtime(message) if message == "missing object field"),
+        matches!(&error.kind, scope_script::ErrorKind::Runtime(message) if message.starts_with("missing object field ")),
         "{error:?}"
     );
 }

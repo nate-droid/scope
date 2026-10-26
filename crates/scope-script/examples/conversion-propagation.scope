@@ -1,0 +1,18 @@
+# Transform a successful conversion and propagate its failure unchanged.
+fn increment_text(text) {
+    let parsed = parse_int(text)
+    let mut result = parsed
+    if parsed.ok {
+        result = {ok: true, value: parsed.value + 1}
+    }
+    result
+}
+
+for text in ["41", "not-an-integer"] {
+    let result = increment_text(text)
+    if result.ok {
+        print({input: text, value: result.value})
+    } else {
+        print({input: text, error: result.error})
+    }
+}

@@ -1,0 +1,16 @@
+# Invoice arithmetic uses integer cents, never floating-point money.
+fn line_total(line) {
+    line.quantity * line.unit_cents
+}
+fn invoice_total(lines) {
+    let mut cents = 0
+    for entry in lines {
+        cents = cents + line_total(entry)
+    }
+    {subtotal_cents: cents, tax_cents: cents * 8 / 100, total_cents: cents + cents * 8 / 100}
+}
+let invoice = [
+    {quantity: 3, unit_cents: 1250},
+    {quantity: 2, unit_cents: 450}
+]
+print(invoice_total(invoice))

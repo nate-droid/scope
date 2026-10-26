@@ -1,0 +1,27 @@
+# Analyze daily deviations from a target; keep the original observations intact.
+fn magnitude(value) {
+    min(abs(value), 10)
+}
+fn analyze(samples) {
+    let mut total = 0
+    let mut peak = 0
+    let mut magnitudes = []
+    for sample in samples {
+        let distance = magnitude(sample)
+        total = total + distance
+        peak = max(peak, distance)
+        magnitudes = append(magnitudes, distance)
+    }
+    {total: total, peak: peak, magnitudes: magnitudes}
+}
+let observations = [-3, 2, -12, 0]
+let report = analyze(observations)
+let recent = slice(report.magnitudes, 1, 4)
+if recent.ok {
+    print({recent_first: reverse(recent.value), peak: report.peak, total: report.total})
+}
+let mut days = []
+for index in range(1, 5) {
+    days = append(days, index)
+}
+print({days: days, original: observations})

@@ -1,5 +1,33 @@
 # Development
 
+Build, features, crate inventory and validation live here. See
+[Integration](integration.md) for language/session/component contracts and
+[Agents and harnesses](agents.md) for model loops, tool policy and proposals.
+Contribution expectations are in [CONTRIBUTING.md](../CONTRIBUTING.md).
+The [consolidation report](CLEANUP.md) records cleanup decisions, validation results,
+and deferred work; it is not an additional setup guide.
+
+## Workspace inventory
+
+All nine workspace packages are version `0.1.0`, edition 2024, MIT licensed.
+The root default member is `scope-workbench`, not the entire workspace.
+
+| Crate | Role / boundary |
+| --- | --- |
+| `scope-workbench` | Default `scope` binary; composes the CLI with pure Script `WorkbenchRunner`; defaults to `tui` |
+| `scope-ide` | App, Cell-backed workspace, document/scratch editing, CLI, optional tools/model/TUI/logging |
+| `scope-language` | Language-neutral analysis, semantic and interactive/source contracts; Serde/JSON, no Cell runtime |
+| `scope-types` | Nominal types, graph validation/discovery and portable composition manifests; no runtime |
+| `scope-meta` | Immutable validated metadata graphs/providers over `scope-types` |
+| `scope-execution` | Typed component binding/preflight/execution via Cell/Wasmtime; legacy and managed-policy entry points |
+| `scope-script` | Separate interpreter/CLI and explicit host adapters; `scope-ide` tools enabled; pure execution uses `NoHost` |
+| `scope-terminal` | Reusable UTF-8 editing/completion and terminal input over Crossterm |
+| `xtask` | Language scaffolding and standalone downstream checks; no runtime dependency |
+
+`examples/downstream` and `examples/harness` are independent Cargo workspaces,
+not additional members. Other experiment workspaces may depend on local siblings;
+root workspace tests do not validate them or those siblings.
+
 ## Toolchain and Cell
 
 Run commands from the Scope repository root. `rust-toolchain.toml` selects Rust
@@ -26,7 +54,10 @@ and component-encoding requirements; consult the matching Cell tag.
 ## Runtime defaults
 
 Bare `cargo run` starts the shell in the current existing directory, mounts the
-workspace read-only, and registers no language evaluator. Startup does not create
+workspace read-only, and registers no language evaluator. The workbench does
+install a separate pure Script callback (`:scope script run` / direct workspace
+Script action): fresh interpreter, `NoHost`, no semantic or filesystem authority.
+Startup does not create
 directories. Enable workspace writes explicitly with
 `cargo run -- --writable shell`; place `--writable` before the command. `meta`
 always uses a read-only mount, even with `--writable`.
@@ -46,13 +77,16 @@ cargo run --locked -p scope-script -- crates/scope-script/examples/daily.scope
 
 The root default member is `scope-workbench` (binary `scope`). No arguments opens the shell in the
 current existing directory; it does not create a workspace. Script is a separate
-binary. See [getting started](getting-started.md) for argument placement and
+binary. See [getting started](../TUTORIAL.md) for argument placement and
 read-only authority boundaries.
 
-The lightweight shell does not require optional model, TUI, logging, or language
-evaluation support. Feature declarations live in `crates/scope-ide/Cargo.toml`:
+The shell can run without optional model, TUI, logging, or language evaluation
+support, but the default **workbench** build enables TUI. To omit its TUI use
+`cargo run --locked -p scope-workbench --no-default-features -- --help`.
+That does not disable `scope-ide` tools pulled in through its dependencies.
+For the minimal IDE configuration use `-p scope-ide --no-default-features`. Feature declarations live in `crates/scope-ide/Cargo.toml`:
 `tools` is enabled by default and gates tool integration; `agent` includes tools and the OpenAI-compatible
-capability, `tui` includes tools and the experimental browser, and `logging`
+capability, `tui` includes tools and the browser/composable workspace, and `logging`
 adds native logging. Use `--no-default-features` when explicitly checking the
 minimal feature configuration.
 
@@ -63,12 +97,14 @@ cargo run --locked -p scope-ide --features agent -- --workspace . agent --open R
 ```
 
 The agent command sends selected context and tool feedback to the configured
-endpoint. Its defaults are `http://localhost:11434/v1` and model
-`apple-foundationmodel`; the server must be running. Global options go before
+endpoint. Its defaults are `http://localhost:1234/v1` and model
+`qwen3-30b-a3b`; the server must be running. Global options go before
 `agent`: `--agent-model NAME`, `--agent-base-url URL`, `--agent-openai`, and
 `--agent-api-key-env NAME`. The last reads a secret from an environment variable;
-never put credentials in source or documentation. CLI/shell agent writes remain
-denied. Native extensions are trusted host code, not automatically sandboxed.
+never put credentials in source or documentation. Ordinary CLI/shell agent
+investigations deny writes. Explicit proposal/edit workflows have their own
+approval boundaries; see [Agents](agents.md). Native extensions are trusted host
+code, not automatically sandboxed.
 
 ## Validation commands
 
@@ -105,6 +141,24 @@ python3 .github/scripts/check_markdown_links.py
 The link checker checks inline local file/directory targets in non-ignored
 working-tree Markdown, including new docs and excluding deleted paths. It does
 not check heading anchors or remote URLs.
+
+## Contribution and compatibility discipline
+
+Keep changes narrow, add regression tests including stale-revision and rejection
+paths, and explain breaking API/format changes. Do not weaken authorization tests,
+add blanket lint suppression, or use ambient host APIs to bypass Cell confinement.
+Native services/providers are trusted code, not automatically sandboxed guests.
+Keep language semantics in downstream engines and credentials/private traces out
+of source control. Use synthetic fixtures and deterministic model adapters;
+contributions must not require paid/live model calls. Retain applicable MIT and
+dependency license notices. Report vulnerabilities through
+[SECURITY.md](../SECURITY.md), not a public exploit report.
+
+Use `cargo run --locked -p xtask -- check-downstream --offline` for the separate
+consumer/harness plus freshly scaffolded language checks when caches are populated.
+Its offline switch follows `check-downstream`; Cargo's own `--offline` may also
+precede `-p`. Scaffolding a real language is documented in
+[Integration](integration.md#2-scaffold-a-language).
 
 ## Maintainer notes
 

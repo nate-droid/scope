@@ -282,7 +282,31 @@ pub struct ScratchBuffers {
     next_id: u64,
 }
 
+/// Read-only semantic binding state. Available snapshots own immutable historical
+/// text; observing them grants neither execution nor filesystem authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BoundSource {
+    Unbound,
+    Unavailable { scratch_id: u64 },
+    Available(scope_language::SourceSnapshot),
+}
+
 impl ScratchBuffers {
+    /// Captures identity, revision and exact text under one immutable owner borrow.
+    /// Selection is deliberately independent from this binding.
+    pub fn bound_source(&self) -> BoundSource {
+        match self.semantic_target {
+            None => BoundSource::Unbound,
+            Some(id) => match self.get(id) {
+                Err(_) => BoundSource::Unavailable { scratch_id: id },
+                Ok(source) => BoundSource::Available(scope_language::SourceSnapshot {
+                    source_id: source.evaluation_source_id().clone(),
+                    revision_id: scope_language::RevisionId::from_version(source.version()),
+                    text: source.text().into(),
+                }),
+            },
+        }
+    }
     /// Explicitly binds a live scratch for semantic inspection, independently of
     /// editor selection. This grants no operation or mutation authority.
     /// Closing the scratch retains the binding so resolution fails rather than

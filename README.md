@@ -1,9 +1,13 @@
 # Scope
 
-Scope is a language-neutral semantic workbench for working with structured programs
-and tools. A language integration supplies the meaning of its source code and the
-operations it supports. Scope supplies discovery, workspace and scratch buffers,
-interactive editing, and controlled human and agent workflows.
+Scope is a developer workbench for editing small programs, running scripts, and
+exploring language-specific tools in one place. You can start with an in-memory
+scratch program—no model server or project setup required—and add a language's
+own analysis and execution services through Rust integrations.
+
+Scope supplies the workspace, editor, operation discovery, and review controls.
+Languages supply the meaning of their programs. Cell supplies capability-oriented
+execution and filesystem boundaries where those capabilities are installed.
 
 The goal is to let people and tools ask useful questions about programs without
 forcing every language into one runtime or treating every interaction as a text
@@ -42,6 +46,13 @@ revision to memory, not disk. Each Script run uses a fresh interpreter with no h
 providers or filesystem authority. Workspace access is read-only by default;
 explicitly opt into saves with `cargo run --locked -- --writable shell`.
 
+In continuous Script context (`:scope script enter`), successful evaluations show
+only printed values and the final value. Failures retain detailed diagnostics.
+`:scope script evidence` inspects the host's latest retained evaluation, including
+its source snapshot, without executing again; semantic hosts also show their target,
+catalog, and returned envelopes. Evidence describes that recorded run, not the
+current scratch. `:scope script leave` restores the usual detailed run output.
+
 For a saved-file example:
 
 ```sh
@@ -56,8 +67,14 @@ Expected output:
 
 On a terminal, `:scope edit` opens the multiline keyboard editor: Ctrl-S accepts;
 Ctrl-C or Escape cancels. The explicit `--commands` mode above also works with
-piped input. See [getting started](docs/getting-started.md) and
-[scratch editing](docs/scratch-editing.md) for the full workflow.
+piped input. Follow the [Scope tutorial](TUTORIAL.md) for editing, rerunning,
+cancelling a draft, and inspecting source ownership.
+
+For retained editing with an inspector and output pane, run
+`cargo run --locked -- workspace .` in an interactive terminal. Follow the
+[workspace tutorial](TUTORIAL.md#interactive-workspace) for F1 actions, F5 execution,
+result history, F4 commands, and scratch switching. Ctrl-S commits in memory, never to disk.
+This is not a full IDE or an automatically authorized downstream runner.
 
 Want a longer, hands-on introduction? Try [Scope Script: A Weekend of Little
 Programs](docs/tutorials/SCOPE_SCRIPT_TUTORIAL.md), with runnable examples and a
@@ -94,17 +111,18 @@ explains state ownership, revision safety, and extension points.
 
 Language integration is compile-time Rust composition, not dynamic plugin loading.
 Start with the [downstream example](examples/downstream/README.md) and
-[Downstream Guide](DOWNSTREAM_GUIDE.md) to register language-specific semantic
+[Integration guide](docs/integration.md) to register language-specific semantic
 operations and compose a launcher. The [example catalog](examples/README.md)
 distinguishes runnable demonstrations from explicit fixture hosts.
 
 For tool authorization and proposal workflows, see the
-[Harness Guide](HARNESS_GUIDE.md) and [interactive sessions](INTERACTIVE_SESSIONS.md).
+[Agents guide](docs/agents.md) and [interactive sessions](docs/integration.md#interactive-language-sessions).
 
 ## Status and development
 
 Public interfaces are developing. Agent/model integration, the browsing TUI, and
-research fixture hosts are optional; the TUI is not a full editor. Discovery and
+research fixture hosts are optional. The retained `workspace` editor and the
+legacy browsing TUI are separate interfaces; neither is a full IDE. Discovery and
 type compatibility do not establish semantic correctness or grant authority.
 There is no complete autonomous compile/test/review loop.
 

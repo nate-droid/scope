@@ -175,7 +175,8 @@ try:
                 result(b'23\x01' + b'1+\x05+4', 28)
                 finish()
             elif scenario == 'completion':
-                result(b'le\t answer = 42', 42)
+                # `le` is now ambiguous between `len` and `let`.
+                result(b'let\t answer = 42', 42)
                 result(b'ans\t', 42)
                 send(b'pri\t(answer)\r')
                 expect(b'42\r\n')

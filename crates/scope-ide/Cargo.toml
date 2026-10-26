@@ -17,6 +17,10 @@ name = "native_logging"
 required-features = ["logging"]
 
 [[example]]
+name = "contracted_workspace"
+required-features = ["agent", "tui"]
+
+[[example]]
 name = "q3_live"
 required-features = ["agent"]
 
@@ -40,4 +44,16 @@ scope-types = { path = "../scope-types" }
 
 [[example]]
 name = "interactive_semantic_inspection"
+required-features = ["tui"]
+
+[[example]]
+name = "composable_workspace"
+required-features = ["tui"]
+
+[[example]]
+name = "retained_workspace"
+required-features = ["tui"]
+
+[[example]]
+name = "editable_workspace"
 required-features = ["tui"]

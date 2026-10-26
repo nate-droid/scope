@@ -1,0 +1,15 @@
+[package]
+name = "ce4-composition"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+scope-forth = { path = "../../../scope-forth" }
+path-scope = { path = "../../../path/crates/path-scope" }
+scope-ide = { path = "../../crates/scope-ide", features = ["agent"] }
+scope-script = { path = "../../crates/scope-script" }
+serde_json = "1"
+scope-language = { path = "../../crates/scope-language" }

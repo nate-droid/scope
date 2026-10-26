@@ -17,6 +17,9 @@ pub enum Guest {
     DuplicateOutput,
     Trap,
     StartTrap,
+    Loop,
+    StartLoop,
+    GrowMemory,
     UninstalledImport,
 }
 
@@ -58,6 +61,8 @@ pub fn component(guest: Guest) -> Vec<u8> {
           (local.set $payload (i32.const 320)) (local.set $len (i32.const 8))
         "#
         }
+        Guest::Loop => "(loop $forever (br $forever))",
+        Guest::GrowMemory => "(drop (memory.grow (i32.const 1)))",
         Guest::Trap => "unreachable",
         Guest::UninstalledImport => "(call $call)",
         _ => "",
@@ -82,10 +87,10 @@ pub fn component(guest: Guest) -> Vec<u8> {
         Guest::DuplicateOutput => 2,
         _ => 1,
     };
-    let start = if matches!(guest, Guest::StartTrap) {
-        "(func $start unreachable) (start $start)"
-    } else {
-        ""
+    let start = match guest {
+        Guest::StartTrap => "(func $start unreachable) (start $start)",
+        Guest::StartLoop => "(func $start (loop $forever (br $forever))) (start $start)",
+        _ => "",
     };
     let wat = format!(
         r#"(component

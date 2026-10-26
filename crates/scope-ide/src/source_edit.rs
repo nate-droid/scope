@@ -873,6 +873,16 @@ impl SourceEditController {
             .accept(target)
             .map_err(ControllerError::Validation)
     }
+    /// Make a pending proposal inert when its owning source is no longer available.
+    /// Terminal proposal states are preserved; this never mutates the source.
+    pub fn discard(&mut self, id: ProposalId) -> Result<(), ControllerError> {
+        self.proposals
+            .get_mut(&id)
+            .ok_or(ControllerError::UnknownProposal(id))?
+            .discard();
+        Ok(())
+    }
+
     pub fn reject(&mut self, id: ProposalId) -> Result<(), ControllerError> {
         self.proposals
             .get_mut(&id)

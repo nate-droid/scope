@@ -98,6 +98,6 @@ App/shell source ownership remain deferred. Existing command-mode completion is
 metadata-only and remains available explicitly; no language/runtime or agent
 protocol redesign is implied.
 
-See the [short tutorial](../scratch-editing.md),
-[session reference](../../INTERACTIVE_SESSIONS.md#workspace-editing), and
+See the [short tutorial](../../TUTORIAL.md),
+[session reference](../integration.md#workspace-editing), and
 [explicit source-context design](T2A_EXPLICIT_SOURCE_CONTEXT.md).

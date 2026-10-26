@@ -1,0 +1,12 @@
+# Flag unusually long checklist items, preserving input order.
+let tasks = split("build,test,review release notes,ship", ",")
+let mut flagged = 0
+for task in tasks {
+    if len(task) > 10 {
+        flagged = flagged + 1
+        print({task: task, review: true})
+    } else {
+        print({task: task, review: false})
+    }
+}
+print({tasks: len(tasks), flagged: flagged})

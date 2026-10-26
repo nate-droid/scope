@@ -57,6 +57,24 @@ fn investigate(
     authorize: bool,
     assessment: InvestigationCompletion,
 ) -> InvestigationResult {
+    investigate_mode(
+        decisions,
+        options,
+        initial_operations,
+        authorize,
+        assessment,
+        false,
+    )
+}
+
+fn investigate_mode(
+    decisions: Vec<String>,
+    options: SemanticInvestigationOptions,
+    initial_operations: Vec<String>,
+    authorize: bool,
+    assessment: InvestigationCompletion,
+    compact: bool,
+) -> InvestigationResult {
     let target = Target;
     let service = Service {
         language: "mock",
@@ -69,7 +87,12 @@ fn investigate(
     };
     let policies = Cell::new(0);
     let completions = Cell::new(0);
-    let run = run_semantic_investigation_with_discovery(
+    let runner = if compact {
+        run_semantic_investigation_with_compact_discovery
+    } else {
+        run_semantic_investigation_with_discovery
+    };
+    let run = runner(
         &mut model,
         &mut controller,
         &target,
@@ -80,11 +103,11 @@ fn investigate(
             initial_operations,
             page_size: 8,
         },
-        |_| {
+        |_: crate::tool::semantic::SemanticAuthorization<'_>| {
             policies.set(policies.get() + 1);
             authorize
         },
-        |content, evidence| {
+        |content: &str, evidence: &[InvestigationEvidence]| {
             completions.set(completions.get() + 1);
             assert_eq!(content, "done");
             for item in evidence {
@@ -961,4 +984,126 @@ fn invalid_read_arguments_can_be_corrected_without_losing_rejection_evidence() {
     assert!(run.proposal.is_none());
     assert_eq!(controller.list().count(), 0);
     assert_eq!(target.text(), "old");
+}
+
+fn compact_detail_call(name: &str) -> String {
+    json!({"type":"tool", "name":DISCOVER_SEMANTIC_OPERATIONS, "arguments":{"name":name}})
+        .to_string()
+}
+
+fn compact_investigate(
+    decisions: Vec<String>,
+    options: SemanticInvestigationOptions,
+) -> InvestigationResult {
+    investigate_mode(
+        decisions,
+        options,
+        vec![],
+        true,
+        InvestigationCompletion::Inconclusive,
+        true,
+    )
+}
+
+#[test]
+fn compact_investigation_detail_feedback_contains_full_canonical_schema() {
+    let result = compact_investigate(
+        vec![compact_detail_call(READ), complete()],
+        investigation_options(),
+    );
+    let feedback = result.conversations[1]
+        .iter()
+        .find(|value| value["kind"] == "tool_result")
+        .unwrap();
+    assert_eq!(feedback["ok"], true);
+    let target = Target;
+    let service = Service {
+        language: "mock",
+        dispatches: AtomicUsize::new(0),
+    };
+    let mut controller = SourceEditController::default();
+    let provider = crate::tool::semantic::SemanticToolProvider::new(
+        &service,
+        &target,
+        &mut controller,
+        PermittedEditScope::Document(target.source_id()),
+        None,
+        |_| true,
+    )
+    .unwrap()
+    .with_projected_arguments()
+    .unwrap();
+    let session = AgentSession::builder().provider(provider).build().unwrap();
+    let canonical = to_json(session.catalog().to_value());
+    let expected = canonical["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["definition"]["name"] == READ)
+        .unwrap();
+    assert_eq!(&feedback["value"]["tools"][0], expected);
+    assert!(expected["metadata"]["invocation_schema"].is_object());
+    assert!(expected["definition"]["inputs"].is_array());
+    assert!(names(&result.contexts[1]).is_empty());
+    assert!(
+        result.contexts[0]["discovery"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("does not reveal or authorize invocation")
+    );
+    assert_eq!(result.dispatches, 0);
+    assert_eq!(result.policies, 0);
+    assert_eq!(result.run.inspections, 0);
+}
+
+#[test]
+fn compact_investigation_unknown_detail_returns_feedback_without_authority() {
+    for name in ["language.mock.missing", "language.mock.replace"] {
+        let result = compact_investigate(
+            vec![compact_detail_call(name), complete()],
+            investigation_options(),
+        );
+        let feedback = result.conversations[1]
+            .iter()
+            .find(|value| value["kind"] == "tool_result")
+            .unwrap();
+        assert_eq!(feedback["ok"], false);
+        assert_eq!(feedback["error"], "unknown_or_ineligible_operation");
+        assert!(result.run.discovered_operations.is_empty());
+        assert_eq!((result.dispatches, result.policies), (0, 0));
+    }
+}
+
+#[test]
+fn compact_investigation_detail_does_not_make_hidden_read_invocable() {
+    let result = compact_investigate(
+        vec![compact_detail_call(READ), tool(READ)],
+        investigation_options(),
+    );
+    assert_eq!(result.run.outcome, EditOutcome::AuthorizationFailure);
+    assert!(result.run.discovered_operations.is_empty());
+    assert_eq!((result.dispatches, result.policies), (0, 0));
+}
+
+#[test]
+fn compact_investigation_detail_obeys_tool_and_model_budgets() {
+    for model_budget in [false, true] {
+        let mut options = investigation_options();
+        if model_budget {
+            options.budgets.model_invocations = 1;
+        } else {
+            options.budgets.transport.max_tool_calls = 1;
+        }
+        let result = compact_investigate(
+            vec![compact_detail_call(READ), compact_detail_call(READ)],
+            options,
+        );
+        assert_eq!(result.run.outcome, EditOutcome::OperationBudgetExhausted);
+        assert_eq!(
+            result.run.model_invocations,
+            if model_budget { 1 } else { 2 }
+        );
+        assert_eq!((result.dispatches, result.policies), (0, 0));
+        assert!(result.run.discovered_operations.is_empty());
+    }
 }

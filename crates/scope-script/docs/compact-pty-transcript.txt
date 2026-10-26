@@ -1,0 +1,388 @@
+test_compact_proposal_lifecycle_without_eval_or_save (__main__.ContinuousShell.test_compact_proposal_lifecycle_without_eval_or_save) ... ok
+test_editor_leave_reenter_effects_and_evidence (__main__.ContinuousShell.test_editor_leave_reenter_effects_and_evidence) ... ok
+test_explicit_null (__main__.ContinuousShell.test_explicit_null) ... ok
+test_navigation_history_completion_and_paste (__main__.ContinuousShell.test_navigation_history_completion_and_paste) ... ok
+test_pending_commands_invalid_and_ctrl_c (__main__.ContinuousShell.test_pending_commands_invalid_and_ctrl_c) ... ok
+test_readable_growth_binding_edits_and_pending_inspection (__main__.ContinuousShell.test_readable_growth_binding_edits_and_pending_inspection) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 29.359s
+
+OK
+
+--- __main__.ContinuousShell.test_compact_proposal_lifecycle_without_eval_or_save ---
+Workspace access: read-only (restart with --writable to enable saves)
+Scope — /private/var/folders/vh/gd5fylmn5b14yh5jrhwd39180000gp/T/zed-agent-terminal-eWVSub/continuous-script-pty-o4r9ts67
+Type `help` for commands, `quit` to exit. Workspace files change only on explicit commands.
+Discover: :scope languages | :scope session | :scope context | :scope inspect
+Scratch edits: :scope scratch new <language-id>, then :scope edit (in memory; not evaluation).
+Script: :scope script enter / leave selects continuous context; :scope script run evaluates selected scratch. Standalone: cargo run -p scope-script -- --help
+scope> scope> scope> :scope> :sscope> :scscope> :scoscope> :scopscope> :scopescope> :scope scope> :scope sscope> :scope scscope> :scope scrscope> :scope scriscope> :scope scripscope> :scope scriptscope> :scope script scope> :scope script escope> :scope script enscope> :scope script entscope> :scope script entescope> :scope script enterscope> :scope script enter
+Script context: source appends to selected scratch; :run evaluates the full snapshot; :cancel clears pending; :scope script leave exits. Effects require :run. Use :edit for the existing editor.
+script> script> script> :script> :escript> :edscript> :ediscript> :editscript> :edit script> :edit -script> :edit --script> :edit --cscript> :edit --coscript> :edit --comscript> :edit --commscript> :edit --commascript> :edit --commanscript> :edit --commandscript> :edit --commandsscript> :edit --commands
+Editing draft; :help for commands, :done to keep, :cancel to cancel. Nothing is executed or saved.
+buffer 0 (scope-script) * 1:1> # λ😀
+buffer 0 (scope-script) * 2:1> let mut n = 6; n = 12; n
+buffer 0 (scope-script) * 3:1> :done
+Returned to REPL (no save or evaluation).
+script> script> script> :script> :cscript> :coscript> :comscript> :compscript> :compascript> :compacscript> :compactscript> :compact
+target: owner=shell-buffer source=Scratch(0) version=1 (proposal baseline; path is destination context only)
+Rule: consecutive decimal-integer assignment folding
+Checked preconditions: [\"whole fresh program: one mutable binding, consecutive assignments, final read\", \"all initializers are decimal integer literals of the same runtime kind\", \"no intermediate reads, calls, branches, loops, functions, or output\", \"at most 4096 source bytes and 64 statements: below runtime budgets\", \"candidate reparses as two statements; unaffected bytes retained\"]
+Evaluation snapshot: SourceSnapshot { source_id: SourceId(0), revision_id: RevisionId(1), text: \"# λ😀\\nlet mut n = 6; n = 12; n\\n\" }
+Assurance: unevaluated; local rule only, not validation evidence; fresh whole-snapshot execution only
+--- before
++++ after
+@@ -1,2 +1,2 @@
+ # λ😀
+-let mut n = 6; n = 12; n
++let mut n = 12;  n
+
+source proposal 1 pending; not saved or evaluated; :source-accept 1, :source-reject 1
+script> script> script> :script> :sscript> :soscript> :souscript> :sourscript> :sourcscript> :sourcescript> :source-script> :source-rscript> :source-rescript> :source-rejscript> :source-rejescript> :source-rejecscript> :source-rejectscript> :source-reject script> :source-reject 1script> :source-reject 1
+target: owner=shell-buffer source=Scratch(0) version=1 (proposal baseline; path is destination context only)
+source proposal 1: Rejected
+script> script> script> :script> :sscript> :scscript> :scoscript> :scopscript> :scopescript> :scope script> :scope sscript> :scope scscript> :scope scrscript> :scope scrascript> :scope scratscript> :scope scratcscript> :scope scratchscript> :scope scratch script> :scope scratch sscript> :scope scratch shscript> :scope scratch shoscript> :scope scratch showscript> :scope scratch show
+Shell buffer target: Scratch(0) @1 name=scratch-0 destination=[unbound]
+# λ😀
+let mut n = 6; n = 12; n
+script> script> script> :script> :cscript> :coscript> :comscript> :compscript> :compascript> :compacscript> :compactscript> :compact
+target: owner=shell-buffer source=Scratch(0) version=1 (proposal baseline; path is destination context only)
+Rule: consecutive decimal-integer assignment folding
+Checked preconditions: [\"whole fresh program: one mutable binding, consecutive assignments, final read\", \"all initializers are decimal integer literals of the same runtime kind\", \"no intermediate reads, calls, branches, loops, functions, or output\", \"at most 4096 source bytes and 64 statements: below runtime budgets\", \"candidate reparses as two statements; unaffected bytes retained\"]
+Evaluation snapshot: SourceSnapshot { source_id: SourceId(0), revision_id: RevisionId(1), text: \"# λ😀\\nlet mut n = 6; n = 12; n\\n\" }
+Assurance: unevaluated; local rule only, not validation evidence; fresh whole-snapshot execution only
+--- before
++++ after
+@@ -1,2 +1,2 @@
+ # λ😀
+-let mut n = 6; n = 12; n
++let mut n = 12;  n
+
+source proposal 2 pending; not saved or evaluated; :source-accept 2, :source-reject 2
+script> script> script> :script> :sscript> :scscript> :scoscript> :scopscript> :scopescript> :scope script> :scope sscript> :scope scscript> :scope scrscript> :scope scrascript> :scope scratscript> :scope scratcscript> :scope scratchscript> :scope scratch script> :scope scratch nscript> :scope scratch nescript> :scope scratch newscript> :scope scratch new script> :scope scratch new sscript> :scope scratch new scscript> :scope scratch new scoscript> :scope scratch new scopscript> :scope scratch new scopescript> :scope scratch new scope-script> :scope scratch new scope-sscript> :scope scratch new scope-scscript> :scope scratch new scope-scrscript> :scope scratch new scope-scriscript> :scope scratch new scope-scripscript> :scope scratch new scope-scriptscript> :scope scratch new scope-script
+scratch 1 created (scope-script)
+script> script> script> :script> :sscript> :soscript> :souscript> :sourscript> :sourcscript> :sourcescript> :source-script> :source-ascript> :source-acscript> :source-accscript> :source-accescript> :source-accepscript> :source-acceptscript> :source-accept script> :source-accept 2script> :source-accept 2
+target: owner=shell-buffer source=Scratch(0) version=1 (proposal baseline; path is destination context only)
+applied target: owner=shell-buffer source=Scratch(0) version=2
+source proposal 2 applied to buffer 0; not saved or evaluated
+script> script> script> :script> :sscript> :scscript> :scoscript> :scopscript> :scopescript> :scope script> :scope sscript> :scope scscript> :scope scrscript> :scope scrascript> :scope scratscript> :scope scratcscript> :scope scratchscript> :scope scratch script> :scope scratch sscript> :scope scratch shscript> :scope scratch shoscript> :scope scratch showscript> :scope scratch show
+Shell buffer target: Scratch(1) @0 name=scratch-1 destination=[unbound]
+script> script> script> :script> :sscript> :scscript> :scoscript> :scopscript> :scopescript> :scope script> :scope sscript> :scope scscript> :scope scrscript> :scope scrascript> :scope scratscript> :scope scratcscript> :scope scratchscript> :scope scratch script> :scope scratch sscript> :scope scratch sescript> :scope scratch selscript> :scope scratch selescript> :scope scratch selecscript> :scope scratch selectscript> :scope scratch select script> :scope scratch select 0script> :scope scratch select 0
+scratch 0 selected
+script> script> script> :script> :sscript> :scscript> :scoscript> :scopscript> :scopescript> :scope script> :scope sscript> :scope scscript> :scope scrscript> :scope scrascript> :scope scratscript> :scope scratcscript> :scope scratchscript> :scope scratch script> :scope scratch sscript> :scope scratch shscript> :scope scratch shoscript> :scope scratch showscript> :scope scratch show
+Shell buffer target: Scratch(0) @2 name=scratch-0 destination=[unbound]
+# λ😀
+let mut n = 12;  n
+script> script> script> :script> :cscript> :coscript> :comscript> :compscript> :compascript> :compacscript> :compactscript> :compact
+error: Script reduction refused: unsupported source
+script> script> script> :script> :escript> :edscript> :ediscript> :editscript> :edit script> :edit -script> :edit --script> :edit --cscript> :edit --coscript> :edit --comscript> :edit --commscript> :edit --commascript> :edit --commanscript> :edit --commandscript> :edit --commandsscript> :edit --commands
+Editing draft; :help for commands, :done to keep, :cancel to cancel. Nothing is executed or saved.
+buffer 0 (scope-script) * 1:1> :at 2 1
+buffer 0 (scope-script) * 2:1> :delete 18
+buffer 0 (scope-script) * 2:1> :insert let mut n = 6; n = 12; n
+buffer 0 (scope-script) * 2:25> :done
+Returned to REPL (no save or evaluation).
+script> script> script> :script> :cscript> :coscript> :comscript> :compscript> :compascript> :compacscript> :compactscript> :compact
+target: owner=shell-buffer source=Scratch(0) version=3 (proposal baseline; path is destination context only)
+Rule: consecutive decimal-integer assignment folding
+Checked preconditions: [\"whole fresh program: one mutable binding, consecutive assignments, final read\", \"all initializers are decimal integer literals of the same runtime kind\", \"no intermediate reads, calls, branches, loops, functions, or output\", \"at most 4096 source bytes and 64 statements: below runtime budgets\", \"candidate reparses as two statements; unaffected bytes retained\"]
+Evaluation snapshot: SourceSnapshot { source_id: SourceId(0), revision_id: RevisionId(3), text: \"# λ😀\\nlet mut n = 6; n = 12; n\\n\" }
+Assurance: unevaluated; local rule only, not validation evidence; fresh whole-snapshot execution only
+--- before
++++ after
+@@ -1,2 +1,2 @@
+ # λ😀
+-let mut n = 6; n = 12; n
++let mut n = 12;  n
+
+source proposal 3 pending; not saved or evaluated; :source-accept 3, :source-reject 3
+script> script> script> :script> :escript> :edscript> :ediscript> :editscript> :edit script> :edit -script> :edit --script> :edit --cscript> :edit --coscript> :edit --comscript> :edit --commscript> :edit --commascript> :edit --commanscript> :edit --commandscript> :edit --commandsscript> :edit --commands
+Editing draft; :help for commands, :done to keep, :cancel to cancel. Nothing is executed or saved.
+buffer 0 (scope-script) * 1:1> :at 2 13
+buffer 0 (scope-script) * 2:13> :insert 0
+buffer 0 (scope-script) * 2:14> :done
+Returned to REPL (no save or evaluation).
+script> script> script> :script> :sscript> :soscript> :souscript> :sourscript> :sourcscript> :sourcescript> :source-script> :source-ascript> :source-acscript> :source-accscript> :source-accescript> :source-accepscript> :source-acceptscript> :source-accept script> :source-accept 3script> :source-accept 3
+target: owner=shell-buffer source=Scratch(0) version=3 (proposal baseline; path is destination context only)
+error: source proposal error: RevisionConflict { expected: 3, actual: 4 }; source proposal error: SourceConflict
+script> script> script> :script> :sscript> :scscript> :scrscript> :scriscript> :scripscript> :scriptscript> :script script> :script escript> :script evscript> :script eviscript> :script evidscript> :script evidescript> :script evidenscript> :script evidencscript> :script evidencescript> :script evidence
+error: no retained Script evaluation
+script> script> 
+
+--- __main__.ContinuousShell.test_editor_leave_reenter_effects_and_evidence ---
+Workspace access: read-only (restart with --writable to enable saves)
+Scope — /private/var/folders/vh/gd5fylmn5b14yh5jrhwd39180000gp/T/zed-agent-terminal-eWVSub/continuous-script-pty-r57k_3ed
+Type `help` for commands, `quit` to exit. Workspace files change only on explicit commands.
+Discover: :scope languages | :scope session | :scope context | :scope inspect
+Scratch edits: :scope scratch new <language-id>, then :scope edit (in memory; not evaluation).
+Script: :scope script enter / leave selects continuous context; :scope script run evaluates selected scratch. Standalone: cargo run -p scope-script -- --help
+scope> scope> scope> :scope> :sscope> :scscope> :scoscope> :scopscope> :scopescope> :scope scope> :scope sscope> :scope scscope> :scope scrscope> :scope scriscope> :scope scripscope> :scope scriptscope> :scope script scope> :scope script escope> :scope script enscope> :scope script entscope> :scope script entescope> :scope script enterscope> :scope script enter
+Script context: source appends to selected scratch; :run evaluates the full snapshot; :cancel clears pending; :scope script leave exits. Effects require :run. Use :edit for the existing editor.
+script> script> script> lscript> lescript> letscript> let script> let nscript> let n script> let n =script> let n = script> let n = 6script> let n = 6;script> let n = 6;
+6
+script> script> script> nscript> n script> n *script> n * script> n * 7script> n * 7
+42
+script> script> script> :script> :escript> :edscript> :ediscript> :editscript> :edit script> :edit -script> :edit --script> :edit --cscript> :edit --coscript> :edit --comscript> :edit --commscript> :edit --commascript> :edit --commanscript> :edit --commandscript> :edit --commandsscript> :edit --commands
+Editing draft; :help for commands, :done to keep, :cancel to cancel. Nothing is executed or saved.
+buffer 0 (scope-script) * 1:1> :at 1 9
+buffer 0 (scope-script) * 1:9> :delete 1
+buffer 0 (scope-script) * 1:9> :insert 8
+buffer 0 (scope-script) * 1:10> :done
+Returned to REPL (no save or evaluation).
+script> script> script> :script> :rscript> :ruscript> :runscript> :run
+56
+script> script> script> :script> :sscript> :scscript> :scrscript> :scriscript> :scripscript> :scriptscript> :script script> :script lscript> :script lescript> :script leascript> :script leavscript> :script leavescript> :script leave
+Left Script context (scratch retained).
+scope> scope> scope> :scope> :sscope> :scscope> :scoscope> :scopscope> :scopescope> :scope scope> :scope sscope> :scope scscope> :scope scrscope> :scope scriscope> :scope scripscope> :scope scriptscope> :scope script scope> :scope script escope> :scope script enscope> :scope script entscope> :scope script entescope> :scope script enterscope> :scope script enter
+Script context: source appends to selected scratch; :run evaluates the full snapshot; :cancel clears pending; :scope script leave exits. Effects require :run. Use :edit for the existing editor.
+script> script> script> nscript> n script> n +script> n + script> n + 1script> n + 1
+9
+script> script> script> pscript> prscript> priscript> prinscript> printscript> print(script> print(nscript> print(n)script> print(n);script> print(n);
+Source updated. Run required (:run, full snapshot).
+script> script> script> :script> :rscript> :ruscript> :runscript> :run
+8
+null
+script> script> script> :script> :sscript> :scscript> :scrscript> :scriscript> :scripscript> :scriptscript> :script script> :script escript> :script evscript> :script eviscript> :script evidscript> :script evidescript> :script evidenscript> :script evidencscript> :script evidencescript> :script evidence
+script: SourceId(0) revision RevisionId(5)
+print: 8
+final: null
+status: interpreter success
+source snapshot:
+let n = 8;
+n * 7;
+n + 1;
+print(n);
+script> script> 
+
+--- __main__.ContinuousShell.test_explicit_null ---
+Workspace access: read-only (restart with --writable to enable saves)
+Scope — /private/var/folders/vh/gd5fylmn5b14yh5jrhwd39180000gp/T/zed-agent-terminal-eWVSub/continuous-script-pty-vkobv3xi
+Type `help` for commands, `quit` to exit. Workspace files change only on explicit commands.
+Discover: :scope languages | :scope session | :scope context | :scope inspect
+Scratch edits: :scope scratch new <language-id>, then :scope edit (in memory; not evaluation).
+Script: :scope script enter / leave selects continuous context; :scope script run evaluates selected scratch. Standalone: cargo run -p scope-script -- --help
+scope> scope> scope> :scope> :sscope> :scscope> :scoscope> :scopscope> :scopescope> :scope scope> :scope sscope> :scope scscope> :scope scrscope> :scope scriscope> :scope scripscope> :scope scriptscope> :scope script scope> :scope script escope> :scope script enscope> :scope script entscope> :scope script entescope> :scope script enterscope> :scope script enter
+Script context: source appends to selected scratch; :run evaluates the full snapshot; :cancel clears pending; :scope script leave exits. Effects require :run. Use :edit for the existing editor.
+script> script> script> nscript> nuscript> nulscript> nullscript> null
+null
+script> script> 
+
+--- __main__.ContinuousShell.test_navigation_history_completion_and_paste ---
+Workspace access: read-only (restart with --writable to enable saves)
+Scope — /private/var/folders/vh/gd5fylmn5b14yh5jrhwd39180000gp/T/zed-agent-terminal-eWVSub/continuous-script-pty-00e0yxae
+Type `help` for commands, `quit` to exit. Workspace files change only on explicit commands.
+Discover: :scope languages | :scope session | :scope context | :scope inspect
+Scratch edits: :scope scratch new <language-id>, then :scope edit (in memory; not evaluation).
+Script: :scope script enter / leave selects continuous context; :scope script run evaluates selected scratch. Standalone: cargo run -p scope-script -- --help
+scope> scope> scope> :scope> :sscope> :scscope> :scoscope> :scopscope> :scopescope> :scope scope> :scope sscope> :scope scscope> :scope scrscope> :scope scriscope> :scope scripscope> :scope scriptscope> :scope script scope> :scope script escope> :scope script enscope> :scope script entscope> :scope script entescope> :scope script enterscope> :scope script enter
+Script context: source appends to selected scratch; :run evaluates the full snapshot; :cancel clears pending; :scope script leave exits. Effects require :run. Use :edit for the existing editor.
+script> script> script> lscript> lescript> letscript> let script> let ascript> let anscript> let ansscript> let answscript> let answescript> let answerscript> let answer script> let answer =script> let answer = script> let answer = 4script> let answer = 40script> let answer = 40
+40
+script> script> script> Xscript> Xascript> Xanscript> Xansscript> Xanswscript> Xanswescript> Xanswerscript> Xanswer script> Xanswer +script> Xanswer + script> Xanswer + 2script> Xanswer + 2xscript> Xanswer + 2xscript> Xanswer + 2xscript> Xanswer + 2xscript> answer + 2xscript> answer + 2xscript> answer + 2script> answer + 2
+42
+script> script> script> answer + 2script> answer + 2
+42
+script> script> script> ascript> anscript> ansscript> answscript> answescript> answerscript> answer script> answer +script> answer + script> answer + 2script> answer + script> answer + 3script> answer + 3
+43
+script> script> script> lscript> lescript> lenscript> lenscript> len(script> len([script> len([1script> len([1,script> len([1, script> len([1, 2script> len([1, 2]script> len([1, 2])script> len([1, 2])
+2
+script> script> script> (answer +     > 5)script> (answer +
+     > 5)
+45
+script> script> script> :script> :sscript> :shscript> :shoscript> :showscript> :show
+Shell buffer target: Scratch(0) @6 name=scratch-0 destination=[unbound]
+buffer 0 [scratch] dirty
+    1 | let answer = 40;
+    2 | answer + 2;
+    3 | answer + 2;
+    4 | answer + 3;
+    5 | len([1, 2]);
+    6 | (answer +
+    7 | 5)
+Preview limited to 40 lines / 160 characters; :scope edit --commands then :show START for more.
+script> script> 
+
+--- __main__.ContinuousShell.test_pending_commands_invalid_and_ctrl_c ---
+Workspace access: read-only (restart with --writable to enable saves)
+Scope — /private/var/folders/vh/gd5fylmn5b14yh5jrhwd39180000gp/T/zed-agent-terminal-eWVSub/continuous-script-pty-om9z_zat
+Type `help` for commands, `quit` to exit. Workspace files change only on explicit commands.
+Discover: :scope languages | :scope session | :scope context | :scope inspect
+Scratch edits: :scope scratch new <language-id>, then :scope edit (in memory; not evaluation).
+Script: :scope script enter / leave selects continuous context; :scope script run evaluates selected scratch. Standalone: cargo run -p scope-script -- --help
+scope> scope> scope> :scope> :sscope> :scscope> :scoscope> :scopscope> :scopescope> :scope scope> :scope sscope> :scope scscope> :scope scrscope> :scope scriscope> :scope scripscope> :scope scriptscope> :scope script scope> :scope script escope> :scope script enscope> :scope script entscope> :scope script entescope> :scope script enterscope> :scope script enter
+Script context: source appends to selected scratch; :run evaluates the full snapshot; :cancel clears pending; :scope script leave exits. Effects require :run. Use :edit for the existing editor.
+script> script> script> (script> (
+Script input incomplete; continue or :cancel.
+...> ...> ...> :...> :s...> :sh...> :sho...> :show...> :show
+Committed Script source:
+
+Pending Script snapshot (not committed; not evaluated):
+(
+...> ...> ...> :...> :r...> :ru...> :run...> :run
+error: incomplete Script input pending; finish it or :cancel before :run
+...> ...> ...> 4...> 42...> 42)...> 42)
+42
+script> script> script> (script> (
+Script input incomplete; continue or :cancel.
+...> ...> ...> l...> le...> let...> let ...> let =...> let = ...> let = ;...> let = ;
+error: 4:5: syntax error: expected Symbol(')') at byte 13
+script> script> script> 4script> 43script> 43
+43
+script> script> script> (script> (
+Script input incomplete; continue or :cancel.
+...> ...> ...> ^C
+Pending Script input canceled.
+script> script> script> 4script> 44script> 44
+44
+script> script> script> (script> (
+Script input incomplete; continue or :cancel.
+...> ...> ...> :...> :c...> :ca...> :can...> :canc...> :cance...> :cancel...> :cancel
+Pending Script input canceled.
+script> script> script> 4script> 45script> 45
+45
+script> script> 
+
+--- __main__.ContinuousShell.test_readable_growth_binding_edits_and_pending_inspection ---
+Workspace access: read-only (restart with --writable to enable saves)
+Scope — /private/var/folders/vh/gd5fylmn5b14yh5jrhwd39180000gp/T/zed-agent-terminal-eWVSub/continuous-script-pty-zccou9kf
+Type `help` for commands, `quit` to exit. Workspace files change only on explicit commands.
+Discover: :scope languages | :scope session | :scope context | :scope inspect
+Scratch edits: :scope scratch new <language-id>, then :scope edit (in memory; not evaluation).
+Script: :scope script enter / leave selects continuous context; :scope script run evaluates selected scratch. Standalone: cargo run -p scope-script -- --help
+scope> scope> scope> :scope> :sscope> :scscope> :scoscope> :scopscope> :scopescope> :scope scope> :scope sscope> :scope scscope> :scope scrscope> :scope scriscope> :scope scripscope> :scope scriptscope> :scope script scope> :scope script escope> :scope script enscope> :scope script entscope> :scope script entescope> :scope script enterscope> :scope script enter
+Script context: source appends to selected scratch; :run evaluates the full snapshot; :cancel clears pending; :scope script leave exits. Effects require :run. Use :edit for the existing editor.
+script> script> script> lscript> lescript> letscript> let script> let rscript> let rascript> let radscript> let radiscript> let radiuscript> let radiusscript> let radius script> let radius =script> let radius = script> let radius = 5script> let radius = 5;script> let radius = 5;
+5
+script> script> script> rscript> rascript> radscript> radiusscript> radius script> radius +script> radius + script> radius + 1script> radius + 1
+6
+script> script> script> rscript> rascript> radscript> radiscript> radiuscript> radiusscript> radius script> radius +script> radius + script> radius + 0script> radius + 0
+5
+script> script> script> rscript> rascript> radscript> radiscript> radiuscript> radiusscript> radius script> radius +script> radius + script> radius + 1script> radius + 1
+6
+script> script> script> rscript> rascript> radscript> radiscript> radiuscript> radiusscript> radius script> radius +script> radius + script> radius + 2script> radius + 2
+7
+script> script> script> rscript> rascript> radscript> radiscript> radiuscript> radiusscript> radius script> radius +script> radius + script> radius + 3script> radius + 3
+8
+script> script> script> rscript> rascript> radscript> radiscript> radiuscript> radiusscript> radius script> radius +script> radius + script> radius + 4script> radius + 4
+9
+script> script> script> rscript> rascript> radscript> radiscript> radiuscript> radiusscript> radius script> radius +script> radius + script> radius + 5script> radius + 5
+10
+script> script> script> rscript> rascript> radscript> radiscript> radiuscript> radiusscript> radius script> radius +script> radius + script> radius + 6script> radius + 6
+11
+script> script> script> rscript> rascript> radscript> radiscript> radiuscript> radiusscript> radius script> radius +script> radius + script> radius + 7script> radius + 7
+12
+script> script> script> rscript> rascript> radscript> radiscript> radiuscript> radiusscript> radius script> radius +script> radius + script> radius + 8script> radius + 8
+13
+script> script> script> rscript> rascript> radscript> radiscript> radiuscript> radiusscript> radius script> radius +script> radius + script> radius + 9script> radius + 9
+14
+script> script> script> rscript> rascript> radscript> radiscript> radiuscript> radiusscript> radius script> radius +script> radius + script> radius + 1script> radius + 10script> radius + 10
+15
+script> script> script> rscript> rascript> radscript> radiscript> radiuscript> radiusscript> radius script> radius +script> radius + script> radius + 1script> radius + 11script> radius + 11
+16
+script> script> script> rscript> rascript> radscript> radiscript> radiuscript> radiusscript> radius script> radius +script> radius + script> radius + 1script> radius + 12script> radius + 12
+17
+script> script> script> rscript> rascript> radscript> radiscript> radiuscript> radiusscript> radius script> radius +script> radius + script> radius + 1script> radius + 13script> radius + 13
+18
+script> script> script> rscript> rascript> radscript> radiscript> radiuscript> radiusscript> radius script> radius +script> radius + script> radius + 1script> radius + 14script> radius + 14
+19
+script> script> script> rscript> rascript> radscript> radiscript> radiuscript> radiusscript> radius script> radius +script> radius + script> radius + 1script> radius + 15script> radius + 15
+20
+script> script> script> rscript> rascript> radscript> radiscript> radiuscript> radiusscript> radius script> radius +script> radius + script> radius + 1script> radius + 16script> radius + 16
+21
+script> script> script> rscript> rascript> radscript> radiscript> radiuscript> radiusscript> radius script> radius +script> radius + script> radius + 1script> radius + 17script> radius + 17
+22
+script> script> script> rscript> rascript> radscript> radiscript> radiuscript> radiusscript> radius script> radius +script> radius + script> radius + 1script> radius + 18script> radius + 18
+23
+script> script> script> rscript> rascript> radscript> radiscript> radiuscript> radiusscript> radius script> radius +script> radius + script> radius + 1script> radius + 19script> radius + 19
+24
+script> script> script> :script> :sscript> :shscript> :shoscript> :showscript> :show
+Shell buffer target: Scratch(0) @22 name=scratch-0 destination=[unbound]
+buffer 0 [scratch] dirty
+    1 | let radius = 5;
+    2 | radius + 1;
+    3 | radius + 0;
+    4 | radius + 1;
+    5 | radius + 2;
+    6 | radius + 3;
+    7 | radius + 4;
+    8 | radius + 5;
+    9 | radius + 6;
+   10 | radius + 7;
+   11 | radius + 8;
+   12 | radius + 9;
+   13 | radius + 10;
+   14 | radius + 11;
+   15 | radius + 12;
+   16 | radius + 13;
+   17 | radius + 14;
+   18 | radius + 15;
+   19 | radius + 16;
+   20 | radius + 17;
+   21 | radius + 18;
+   22 | radius + 19
+Preview limited to 40 lines / 160 characters; :scope edit --commands then :show START for more.
+script> script> script> iscript> ifscript> if script> if tscript> if trscript> if truscript> if truescript> if true script> if true {script> if true {
+Script input incomplete; continue or :cancel.
+...> ...> ...> :...> :s...> :sh...> :sho...> :show...> :show
+Committed Script source:
+let radius = 5;
+radius + 1;
+radius + 0;
+radius + 1;
+radius + 2;
+radius + 3;
+radius + 4;
+radius + 5;
+radius + 6;
+radius + 7;
+radius + 8;
+radius + 9;
+radius + 10;
+radius + 11;
+radius + 12;
+radius + 13;
+radius + 14;
+radius + 15;
+radius + 16;
+radius + 17;
+radius + 18;
+radius + 19
+Pending Script snapshot (not committed; not evaluated):
+let radius = 5;
+radius + 1;
+radius + 0;
+radius + 1;
+radius + 2;
+radius + 3;
+radius + 4;
+radius + 5;
+radius + 6;
+radius + 7;
+radius + 8;
+radius + 9;
+radius + 10;
+radius + 11;
+radius + 12;
+radius + 13;
+radius + 14;
+radius + 15;
+radius + 16;
+radius + 17;
+radius + 18;
+radius + 19;
+if true {
+...> ...> ...> :...> :c...> :ca...> :can...> :canc...> :cance...> :cancel...> :cancel
+Pending Script input canceled.
+script> script> script> rscript> rascript> radscript> radiusscript> radius
+5
+script> script> script> :script> :escript> :edscript> :ediscript> :editscript> :edit script> :edit -script> :edit --script> :edit --cscript> :edit --coscript> :edit --comscript> :edit --commscript> :edit --commascript> :edit --commanscript> :edit --commandscript> :edit --commandsscript> :edit --commands
+Editing draft; :help for commands, :done to keep, :cancel to cancel. Nothing is executed or saved.
+buffer 0 (scope-script) * 1:1> :at 1 5
+buffer 0 (scope-script) * 1:5> :delete 6
+buffer 0 (scope-script) * 1:5> :insert diameter
+buffer 0 (scope-script) * 1:13> :done
+Returned to REPL (no save or evaluation).
+script> script> script> dscript> discript> diascript> diamscript> diameterscript> ^C
+Pending Script input canceled.
+script> script> 

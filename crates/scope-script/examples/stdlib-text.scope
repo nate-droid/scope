@@ -1,0 +1,15 @@
+# Normalize an incoming release checklist without filesystem or host access.
+let incoming = "  DOC: Install Guide.md , doc: API Notes.md , draft: roadmap.txt  "
+let mut published = []
+for entry in split(incoming, ",") {
+    let normalized = lower(trim(entry))
+    if starts_with(normalized, "doc:") {
+        if ends_with(normalized, ".md") {
+            let title = trim(replace(normalized, "doc:", ""))
+            published = append(published, replace(title, " ", "-"))
+        }
+    }
+}
+print(upper("publication checklist"))
+print(join(published, ", "))
+print({accepted: len(published), documents: published})

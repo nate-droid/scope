@@ -415,6 +415,7 @@ fn configured_shell_reports_incompatibility_without_connecting_to_model_or_savin
         &mut output,
         false,
         Some(config()),
+        None,
     )
     .unwrap();
     let output = String::from_utf8(output).unwrap();

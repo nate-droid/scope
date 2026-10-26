@@ -1,0 +1,1916 @@
+{
+  "agent_workflow": {
+    "projection": {
+      "adapter_contract": "host.ce4.church-adapter.v1",
+      "compatibility": {
+        "compatible": true,
+        "contract": "host.ce4.church-adapter.v1",
+        "integer": 4,
+        "range": {
+          "max": 8,
+          "min": 0,
+          "within": true
+        }
+      },
+      "limitations": [
+        "Finite concrete Forth observation only",
+        "Host adapter contract is not a provider version or a proved compiler",
+        "Missing or unknown provider outcomes are not success",
+        "References are local to this arm's report",
+        "Agent metrics, when exercised, are in the full report; token usage unavailable"
+      ],
+      "metrics": {
+        "argument_and_return_json_bytes": 5805,
+        "checks": 1,
+        "decisions": 2,
+        "dispatched_calls": 3,
+        "elapsed_us": 2949,
+        "semantic_operations": 2,
+        "tokens": null
+      },
+      "requested_check": "fixed Church add two two equals encoded observed integer, by reflexivity",
+      "steps": [
+        {
+          "attempt_ref": "attempt:0",
+          "error": null,
+          "evidence_index": 0,
+          "kernel": null,
+          "operation": "language.example.forth.evaluate_candidate",
+          "outcome": null,
+          "predecessor": null,
+          "provider": "forth",
+          "semantic_classification": {
+            "envelope_status": "read_only",
+            "tests": [
+              "passed"
+            ]
+          },
+          "source_ref": "source:0",
+          "state": "completed",
+          "transport_status": "completed"
+        },
+        {
+          "attempt_ref": "attempt:1",
+          "error": null,
+          "evidence_index": 1,
+          "kernel": null,
+          "operation": "host.ce4.church-adapter.v1",
+          "outcome": null,
+          "predecessor": "attempt:0",
+          "provider": "adapter",
+          "semantic_classification": "adapter_compatible",
+          "source_ref": null,
+          "state": "completed",
+          "transport_status": "completed"
+        },
+        {
+          "attempt_ref": "attempt:2",
+          "error": null,
+          "evidence_index": 2,
+          "kernel": {
+            "checked": true,
+            "inferred_sort": {
+              "kind": "Universe",
+              "level": "1"
+            },
+            "limits": {
+              "depth": "128",
+              "ticks_per_call": "100000"
+            },
+            "provenance": "P5b in-process path-kernel judgments"
+          },
+          "operation": "language.language.path.check_source",
+          "outcome": "Checked",
+          "predecessor": "attempt:1",
+          "provider": "path",
+          "semantic_classification": "Checked",
+          "source_ref": "source:1",
+          "state": "completed",
+          "transport_status": "completed"
+        }
+      ],
+      "success": true,
+      "transferred_integer": 4,
+      "workflow_status": "succeeded"
+    },
+    "projection_bytes": 1899,
+    "report": {
+      "adapter_contract": "host.ce4.church-adapter.v1",
+      "agent": {
+        "authorized_calls": [
+          {
+            "allowed": true,
+            "arguments": {},
+            "name": "host.ce4.compose"
+          },
+          {
+            "allowed": true,
+            "arguments": {
+              "source": ": result 2 2 + ;"
+            },
+            "name": "host.ce4.evaluate_candidate"
+          },
+          {
+            "allowed": true,
+            "arguments": {
+              "evidence": {
+                "evaluation": {
+                  "contract_id": null,
+                  "diagnostics": {
+                    "analysis": {
+                      "diagnostics": [],
+                      "effect": "( ρ -- ρ n )",
+                      "effect_origin": "Inferred",
+                      "status": "Known"
+                    },
+                    "passed": true,
+                    "tests": [
+                      {
+                        "actual": [
+                          4
+                        ],
+                        "error": null,
+                        "expected": [
+                          4
+                        ],
+                        "input": [],
+                        "outcome": "passed",
+                        "output": []
+                      }
+                    ],
+                    "valid": true,
+                    "word": "result"
+                  },
+                  "failed_criteria": [],
+                  "outcome": "Satisfied",
+                  "summary": "Candidate passed all 1 requested behavioral checks."
+                },
+                "operation_id": "evaluate_candidate",
+                "rationale": "Disposable host-free evaluation; document and persistent interpreter unchanged",
+                "status": "read_only",
+                "value": {
+                  "analysis": {
+                    "diagnostics": [],
+                    "effect": "( ρ -- ρ n )",
+                    "effect_origin": "Inferred",
+                    "status": "Known"
+                  },
+                  "passed": true,
+                  "tests": [
+                    {
+                      "actual": [
+                        4
+                      ],
+                      "error": null,
+                      "expected": [
+                        4
+                      ],
+                      "input": [],
+                      "outcome": "passed",
+                      "output": []
+                    }
+                  ],
+                  "valid": true,
+                  "word": "result"
+                }
+              }
+            },
+            "name": "host.ce4.church"
+          },
+          {
+            "allowed": true,
+            "arguments": {
+              "source": "def two (A : Type 0) (f : Pi (a : A). A) (x : A) : A := f (f x)\ndef add (m : Pi (A : Type 0). Pi (f : Pi (a : A). A). Pi (x : A). A) (n : Pi (B : Type 0). Pi (g : Pi (b : B). B). Pi (y : B). B) (C : Type 0) (h : Pi (c : C). C) (z : C) : C := m C h (n C h z)\ntheorem result (A : Type 0) (f : Pi (a : A). A) (x : A) : Id A (add two two A f x) (f (f (f (f (x))))) := refl (add two two A f x)"
+            },
+            "name": "host.ce4.check_source"
+          }
+        ],
+        "cumulative_message_content_utf8_bytes": 4944,
+        "decision_message_content_utf8_bytes": [
+          1965,
+          2979
+        ],
+        "decisions": 2,
+        "error": null,
+        "exercised": true,
+        "run": {
+          "stop": "Completed",
+          "tool_calls": 4
+        },
+        "tokens": null,
+        "workflow_projection": {
+          "adapter_contract": "host.ce4.church-adapter.v1",
+          "error": null,
+          "kernel_checked": true,
+          "limitations": [
+            "Finite concrete Forth observation only",
+            "Host adapter is not a proved compiler",
+            "Attempt references are local to this report",
+            "Missing, denied, or unknown outcomes are not success"
+          ],
+          "outcome": "Checked",
+          "requested_check": "fixed Church add two two equals encoded observed integer, by reflexivity",
+          "steps": [
+            {
+              "attempt_ref": "attempt:0",
+              "error": null,
+              "kernel_checked": null,
+              "operation": "evaluate_candidate",
+              "outcome": null,
+              "provider": "forth",
+              "state": "completed"
+            },
+            {
+              "attempt_ref": "attempt:1",
+              "error": null,
+              "kernel_checked": null,
+              "operation": "church",
+              "outcome": null,
+              "provider": "adapter",
+              "state": "completed"
+            },
+            {
+              "attempt_ref": "attempt:2",
+              "error": null,
+              "kernel_checked": true,
+              "operation": "check_source",
+              "outcome": "Checked",
+              "provider": "path",
+              "state": "completed"
+            }
+          ],
+          "success": true,
+          "transferred_integer": 4
+        }
+      },
+      "arm": "agent_workflow",
+      "grants": [
+        true,
+        true,
+        true
+      ],
+      "limits": {
+        "bytes": 1000000,
+        "calls": 3
+      },
+      "metrics": {
+        "argument_and_return_json_bytes": 5805,
+        "checks": 1,
+        "decisions": 2,
+        "dispatched_calls": 3,
+        "elapsed_us": 2949,
+        "semantic_operations": 2,
+        "tokens": null
+      },
+      "requested_check": "fixed Church add two two equals encoded observed integer, by reflexivity",
+      "script": "\nlet produced = scope.invoke(\"forth\", \"evaluate_candidate\", {});\nlet adapted = scope.invoke(\"adapter\", \"church\", {evidence: produced});\nlet checked = scope.invoke(\"path\", \"check_source\", {source: adapted});\nchecked\n",
+      "script_error": null,
+      "simulated_faults": {
+        "authorization_denial": false,
+        "incomplete": false
+      },
+      "snapshots": [
+        {
+          "bound_attempt": "attempt:0",
+          "identity": "Scratch(0)",
+          "language": "example.forth",
+          "qualified_identity": "source:0/Scratch(0)",
+          "revision": "0",
+          "source_ref": "source:0",
+          "text": ""
+        },
+        {
+          "bound_attempt": "attempt:2",
+          "identity": "Scratch(0)",
+          "language": "language.path",
+          "qualified_identity": "source:1/Scratch(0)",
+          "revision": "0",
+          "source_ref": "source:1",
+          "text": "def two (A : Type 0) (f : Pi (a : A). A) (x : A) : A := f (f x)\ndef add (m : Pi (A : Type 0). Pi (f : Pi (a : A). A). Pi (x : A). A) (n : Pi (B : Type 0). Pi (g : Pi (b : B). B). Pi (y : B). B) (C : Type 0) (h : Pi (c : C). C) (z : C) : C := m C h (n C h z)\ntheorem result (A : Type 0) (f : Pi (a : A). A) (x : A) : Id A (add two two A f x) (f (f (f (f (x))))) := refl (add two two A f x)"
+        }
+      ],
+      "steps": [
+        {
+          "arguments": {},
+          "error": null,
+          "full_operation": "language.example.forth.evaluate_candidate",
+          "id": "attempt:0",
+          "operation": "evaluate_candidate",
+          "predecessor": null,
+          "provider": "forth",
+          "returned": {
+            "evaluation": {
+              "contract_id": null,
+              "diagnostics": {
+                "analysis": {
+                  "diagnostics": [],
+                  "effect": "( ρ -- ρ n )",
+                  "effect_origin": "Inferred",
+                  "status": "Known"
+                },
+                "passed": true,
+                "tests": [
+                  {
+                    "actual": [
+                      4
+                    ],
+                    "error": null,
+                    "expected": [
+                      4
+                    ],
+                    "input": [],
+                    "outcome": "passed",
+                    "output": []
+                  }
+                ],
+                "valid": true,
+                "word": "result"
+              },
+              "failed_criteria": [],
+              "outcome": "Satisfied",
+              "summary": "Candidate passed all 1 requested behavioral checks."
+            },
+            "operation_id": "evaluate_candidate",
+            "rationale": "Disposable host-free evaluation; document and persistent interpreter unchanged",
+            "status": "read_only",
+            "value": {
+              "analysis": {
+                "diagnostics": [],
+                "effect": "( ρ -- ρ n )",
+                "effect_origin": "Inferred",
+                "status": "Known"
+              },
+              "passed": true,
+              "tests": [
+                {
+                  "actual": [
+                    4
+                  ],
+                  "error": null,
+                  "expected": [
+                    4
+                  ],
+                  "input": [],
+                  "outcome": "passed",
+                  "output": []
+                }
+              ],
+              "valid": true,
+              "word": "result"
+            }
+          },
+          "semantic_arguments": {
+            "source": ": result 2 2 + ;",
+            "tests": [
+              {
+                "expected": [
+                  4
+                ],
+                "input": []
+              }
+            ]
+          },
+          "semantic_classification": {
+            "envelope_status": "read_only",
+            "tests": [
+              "passed"
+            ]
+          },
+          "source_binding": {
+            "actual_revision": "0",
+            "authorization_policy": "exact operation, source identity, actual revision, and text; optional simulated denial",
+            "operation_bound": true,
+            "source_ref": "source:0"
+          },
+          "source_ref": "source:0",
+          "state": "completed",
+          "transport_status": "completed"
+        },
+        {
+          "arguments": {
+            "evidence": {
+              "evaluation": {
+                "contract_id": null,
+                "diagnostics": {
+                  "analysis": {
+                    "diagnostics": [],
+                    "effect": "( ρ -- ρ n )",
+                    "effect_origin": "Inferred",
+                    "status": "Known"
+                  },
+                  "passed": true,
+                  "tests": [
+                    {
+                      "actual": [
+                        4
+                      ],
+                      "error": null,
+                      "expected": [
+                        4
+                      ],
+                      "input": [],
+                      "outcome": "passed",
+                      "output": []
+                    }
+                  ],
+                  "valid": true,
+                  "word": "result"
+                },
+                "failed_criteria": [],
+                "outcome": "Satisfied",
+                "summary": "Candidate passed all 1 requested behavioral checks."
+              },
+              "operation_id": "evaluate_candidate",
+              "rationale": "Disposable host-free evaluation; document and persistent interpreter unchanged",
+              "status": "read_only",
+              "value": {
+                "analysis": {
+                  "diagnostics": [],
+                  "effect": "( ρ -- ρ n )",
+                  "effect_origin": "Inferred",
+                  "status": "Known"
+                },
+                "passed": true,
+                "tests": [
+                  {
+                    "actual": [
+                      4
+                    ],
+                    "error": null,
+                    "expected": [
+                      4
+                    ],
+                    "input": [],
+                    "outcome": "passed",
+                    "output": []
+                  }
+                ],
+                "valid": true,
+                "word": "result"
+              }
+            }
+          },
+          "compatibility": {
+            "compatible": true,
+            "contract": "host.ce4.church-adapter.v1",
+            "integer": 4,
+            "range": {
+              "max": 8,
+              "min": 0,
+              "within": true
+            }
+          },
+          "error": null,
+          "full_operation": "host.ce4.church-adapter.v1",
+          "id": "attempt:1",
+          "operation": "church",
+          "predecessor": "attempt:0",
+          "provider": "adapter",
+          "returned": "def two (A : Type 0) (f : Pi (a : A). A) (x : A) : A := f (f x)\ndef add (m : Pi (A : Type 0). Pi (f : Pi (a : A). A). Pi (x : A). A) (n : Pi (B : Type 0). Pi (g : Pi (b : B). B). Pi (y : B). B) (C : Type 0) (h : Pi (c : C). C) (z : C) : C := m C h (n C h z)\ntheorem result (A : Type 0) (f : Pi (a : A). A) (x : A) : Id A (add two two A f x) (f (f (f (f (x))))) := refl (add two two A f x)",
+          "semantic_classification": "adapter_compatible",
+          "state": "completed",
+          "transport_status": "completed"
+        },
+        {
+          "arguments": {
+            "source": "def two (A : Type 0) (f : Pi (a : A). A) (x : A) : A := f (f x)\ndef add (m : Pi (A : Type 0). Pi (f : Pi (a : A). A). Pi (x : A). A) (n : Pi (B : Type 0). Pi (g : Pi (b : B). B). Pi (y : B). B) (C : Type 0) (h : Pi (c : C). C) (z : C) : C := m C h (n C h z)\ntheorem result (A : Type 0) (f : Pi (a : A). A) (x : A) : Id A (add two two A f x) (f (f (f (f (x))))) := refl (add two two A f x)"
+          },
+          "error": null,
+          "full_operation": "language.language.path.check_source",
+          "id": "attempt:2",
+          "operation": "check_source",
+          "predecessor": "attempt:1",
+          "provider": "path",
+          "returned": {
+            "operation_id": "check_source",
+            "rationale": "Complete results carry closed kernel judgments; incomplete results expose validated local obligations without a proof or closed proof check. Names and presentation are authored metadata. Rejection concerns the submitted proof, not nonexistence of proofs.",
+            "status": "read_only",
+            "value": {
+              "core": {
+                "binders": {
+                  "J": "only motive binds: endpoint then path; path is index zero",
+                  "Lam": "body binds one variable",
+                  "Pi": "codomain binds one variable; domain binds none",
+                  "variables": "de Bruijn: zero is nearest binder"
+                },
+                "context": [],
+                "proof": {
+                  "body": {
+                    "body": {
+                      "body": {
+                        "kind": "Refl",
+                        "term": {
+                          "argument": {
+                            "argument": {
+                              "argument": {
+                                "argument": {
+                                  "index": "0",
+                                  "kind": "Var"
+                                },
+                                "function": {
+                                  "index": "1",
+                                  "kind": "Var"
+                                },
+                                "kind": "App"
+                              },
+                              "function": {
+                                "index": "1",
+                                "kind": "Var"
+                              },
+                              "kind": "App"
+                            },
+                            "function": {
+                              "index": "1",
+                              "kind": "Var"
+                            },
+                            "kind": "App"
+                          },
+                          "function": {
+                            "index": "1",
+                            "kind": "Var"
+                          },
+                          "kind": "App"
+                        },
+                        "ty": {
+                          "index": "2",
+                          "kind": "Var"
+                        }
+                      },
+                      "kind": "Lam"
+                    },
+                    "kind": "Lam"
+                  },
+                  "kind": "Lam"
+                },
+                "theorem_type": {
+                  "codomain": {
+                    "codomain": {
+                      "codomain": {
+                        "kind": "Id",
+                        "left": {
+                          "argument": {
+                            "argument": {
+                              "argument": {
+                                "argument": {
+                                  "index": "0",
+                                  "kind": "Var"
+                                },
+                                "function": {
+                                  "index": "1",
+                                  "kind": "Var"
+                                },
+                                "kind": "App"
+                              },
+                              "function": {
+                                "index": "1",
+                                "kind": "Var"
+                              },
+                              "kind": "App"
+                            },
+                            "function": {
+                              "index": "1",
+                              "kind": "Var"
+                            },
+                            "kind": "App"
+                          },
+                          "function": {
+                            "index": "1",
+                            "kind": "Var"
+                          },
+                          "kind": "App"
+                        },
+                        "right": {
+                          "argument": {
+                            "argument": {
+                              "argument": {
+                                "argument": {
+                                  "index": "0",
+                                  "kind": "Var"
+                                },
+                                "function": {
+                                  "index": "1",
+                                  "kind": "Var"
+                                },
+                                "kind": "App"
+                              },
+                              "function": {
+                                "index": "1",
+                                "kind": "Var"
+                              },
+                              "kind": "App"
+                            },
+                            "function": {
+                              "index": "1",
+                              "kind": "Var"
+                            },
+                            "kind": "App"
+                          },
+                          "function": {
+                            "index": "1",
+                            "kind": "Var"
+                          },
+                          "kind": "App"
+                        },
+                        "ty": {
+                          "index": "2",
+                          "kind": "Var"
+                        }
+                      },
+                      "domain": {
+                        "index": "1",
+                        "kind": "Var"
+                      },
+                      "kind": "Pi"
+                    },
+                    "domain": {
+                      "codomain": {
+                        "index": "1",
+                        "kind": "Var"
+                      },
+                      "domain": {
+                        "index": "0",
+                        "kind": "Var"
+                      },
+                      "kind": "Pi"
+                    },
+                    "kind": "Pi"
+                  },
+                  "domain": {
+                    "kind": "Universe",
+                    "level": "0"
+                  },
+                  "kind": "Pi"
+                }
+              },
+              "declaration": {
+                "name": "result",
+                "provenance": "authored_metadata"
+              },
+              "diagnostics": [],
+              "explanation": {
+                "application_authorized": null,
+                "candidate_kernel_checked": null,
+                "candidate_outcome": null,
+                "classification": "Checked",
+                "context": [],
+                "diagnostic": null,
+                "expected": "Id A (add two two A f x) (f (f (f (f (x)))))",
+                "goals": [],
+                "hint": null,
+                "mismatch_expected": null,
+                "mismatch_inferred": null,
+                "original_goal_count": null,
+                "original_outcome": null,
+                "provided": "refl (add two two A f x)",
+                "remaining_candidate_goal_count": null,
+                "rendered": "Proof accepted. The submitted term satisfies the theorem's required type; the complete theorem was checked by the kernel.\nLocation: bytes 364..388\nGoal / required type:\n  Id A (add two two A f x) (f (f (f (f (x)))))\nProvided term / inferred type:\n  refl (add two two A f x)",
+                "selected_goal": null,
+                "selected_goal_role": null,
+                "source_unchanged": null,
+                "span": {
+                  "end": 388,
+                  "start": 364
+                },
+                "summary": "Proof accepted. The submitted term satisfies the theorem's required type; the complete theorem was checked by the kernel."
+              },
+              "input": {
+                "document_version": "0",
+                "path": null
+              },
+              "kernel": {
+                "checked": true,
+                "inferred_sort": {
+                  "kind": "Universe",
+                  "level": "1"
+                },
+                "limits": {
+                  "depth": "128",
+                  "ticks_per_call": "100000"
+                },
+                "provenance": "P5b in-process path-kernel judgments"
+              },
+              "outcome": "Checked",
+              "presentation": {
+                "binder_names": [
+                  "A",
+                  "f",
+                  "x"
+                ],
+                "provenance": "authored_metadata"
+              },
+              "schema_version": "1",
+              "stages": [
+                {
+                  "outcome": "Succeeded",
+                  "stage": "Parsing"
+                },
+                {
+                  "outcome": "Succeeded",
+                  "stage": "LoweringAndClosedCheck"
+                },
+                {
+                  "outcome": "Succeeded",
+                  "stage": "CompleteTypeSortInference"
+                }
+              ]
+            }
+          },
+          "semantic_arguments": {},
+          "semantic_classification": "Checked",
+          "source_binding": {
+            "actual_revision": "0",
+            "authorization_policy": "exact operation, source identity, actual revision, and text; optional simulated denial",
+            "operation_bound": true,
+            "source_ref": "source:1"
+          },
+          "source_ref": "source:1",
+          "state": "completed",
+          "transport_status": "completed"
+        }
+      ],
+      "success": true,
+      "workflow_status": "succeeded"
+    },
+    "report_bytes": 11479
+  },
+  "comparison": {
+    "elapsed_note": "Observed wall time, nondeterministic; not a model efficiency claim",
+    "same_evidence_and_actual_outputs": true
+  },
+  "composed": {
+    "projection": {
+      "adapter_contract": "host.ce4.church-adapter.v1",
+      "compatibility": {
+        "compatible": true,
+        "contract": "host.ce4.church-adapter.v1",
+        "integer": 4,
+        "range": {
+          "max": 8,
+          "min": 0,
+          "within": true
+        }
+      },
+      "limitations": [
+        "Finite concrete Forth observation only",
+        "Host adapter contract is not a provider version or a proved compiler",
+        "Missing or unknown provider outcomes are not success",
+        "References are local to this arm's report",
+        "Agent metrics, when exercised, are in the full report; token usage unavailable"
+      ],
+      "metrics": {
+        "argument_and_return_json_bytes": 5805,
+        "checks": 1,
+        "decisions": null,
+        "dispatched_calls": 3,
+        "elapsed_us": 4249,
+        "semantic_operations": 2,
+        "tokens": null
+      },
+      "requested_check": "fixed Church add two two equals encoded observed integer, by reflexivity",
+      "steps": [
+        {
+          "attempt_ref": "attempt:0",
+          "error": null,
+          "evidence_index": 0,
+          "kernel": null,
+          "operation": "language.example.forth.evaluate_candidate",
+          "outcome": null,
+          "predecessor": null,
+          "provider": "forth",
+          "semantic_classification": {
+            "envelope_status": "read_only",
+            "tests": [
+              "passed"
+            ]
+          },
+          "source_ref": "source:0",
+          "state": "completed",
+          "transport_status": "completed"
+        },
+        {
+          "attempt_ref": "attempt:1",
+          "error": null,
+          "evidence_index": 1,
+          "kernel": null,
+          "operation": "host.ce4.church-adapter.v1",
+          "outcome": null,
+          "predecessor": "attempt:0",
+          "provider": "adapter",
+          "semantic_classification": "adapter_compatible",
+          "source_ref": null,
+          "state": "completed",
+          "transport_status": "completed"
+        },
+        {
+          "attempt_ref": "attempt:2",
+          "error": null,
+          "evidence_index": 2,
+          "kernel": {
+            "checked": true,
+            "inferred_sort": {
+              "kind": "Universe",
+              "level": "1"
+            },
+            "limits": {
+              "depth": "128",
+              "ticks_per_call": "100000"
+            },
+            "provenance": "P5b in-process path-kernel judgments"
+          },
+          "operation": "language.language.path.check_source",
+          "outcome": "Checked",
+          "predecessor": "attempt:1",
+          "provider": "path",
+          "semantic_classification": "Checked",
+          "source_ref": "source:1",
+          "state": "completed",
+          "transport_status": "completed"
+        }
+      ],
+      "success": true,
+      "transferred_integer": 4,
+      "workflow_status": "succeeded"
+    },
+    "projection_bytes": 1902,
+    "report": {
+      "adapter_contract": "host.ce4.church-adapter.v1",
+      "agent": null,
+      "arm": "script_composed",
+      "grants": [
+        true,
+        true,
+        true
+      ],
+      "limits": {
+        "bytes": 1000000,
+        "calls": 3
+      },
+      "metrics": {
+        "argument_and_return_json_bytes": 5805,
+        "checks": 1,
+        "decisions": null,
+        "dispatched_calls": 3,
+        "elapsed_us": 4249,
+        "semantic_operations": 2,
+        "tokens": null
+      },
+      "requested_check": "fixed Church add two two equals encoded observed integer, by reflexivity",
+      "script": "\nlet produced = scope.invoke(\"forth\", \"evaluate_candidate\", {});\nlet adapted = scope.invoke(\"adapter\", \"church\", {evidence: produced});\nlet checked = scope.invoke(\"path\", \"check_source\", {source: adapted});\nchecked\n",
+      "script_error": null,
+      "simulated_faults": {
+        "authorization_denial": false,
+        "incomplete": false
+      },
+      "snapshots": [
+        {
+          "bound_attempt": "attempt:0",
+          "identity": "Scratch(0)",
+          "language": "example.forth",
+          "qualified_identity": "source:0/Scratch(0)",
+          "revision": "0",
+          "source_ref": "source:0",
+          "text": ""
+        },
+        {
+          "bound_attempt": "attempt:2",
+          "identity": "Scratch(0)",
+          "language": "language.path",
+          "qualified_identity": "source:1/Scratch(0)",
+          "revision": "0",
+          "source_ref": "source:1",
+          "text": "def two (A : Type 0) (f : Pi (a : A). A) (x : A) : A := f (f x)\ndef add (m : Pi (A : Type 0). Pi (f : Pi (a : A). A). Pi (x : A). A) (n : Pi (B : Type 0). Pi (g : Pi (b : B). B). Pi (y : B). B) (C : Type 0) (h : Pi (c : C). C) (z : C) : C := m C h (n C h z)\ntheorem result (A : Type 0) (f : Pi (a : A). A) (x : A) : Id A (add two two A f x) (f (f (f (f (x))))) := refl (add two two A f x)"
+        }
+      ],
+      "steps": [
+        {
+          "arguments": {},
+          "error": null,
+          "full_operation": "language.example.forth.evaluate_candidate",
+          "id": "attempt:0",
+          "operation": "evaluate_candidate",
+          "predecessor": null,
+          "provider": "forth",
+          "returned": {
+            "evaluation": {
+              "contract_id": null,
+              "diagnostics": {
+                "analysis": {
+                  "diagnostics": [],
+                  "effect": "( ρ -- ρ n )",
+                  "effect_origin": "Inferred",
+                  "status": "Known"
+                },
+                "passed": true,
+                "tests": [
+                  {
+                    "actual": [
+                      4
+                    ],
+                    "error": null,
+                    "expected": [
+                      4
+                    ],
+                    "input": [],
+                    "outcome": "passed",
+                    "output": []
+                  }
+                ],
+                "valid": true,
+                "word": "result"
+              },
+              "failed_criteria": [],
+              "outcome": "Satisfied",
+              "summary": "Candidate passed all 1 requested behavioral checks."
+            },
+            "operation_id": "evaluate_candidate",
+            "rationale": "Disposable host-free evaluation; document and persistent interpreter unchanged",
+            "status": "read_only",
+            "value": {
+              "analysis": {
+                "diagnostics": [],
+                "effect": "( ρ -- ρ n )",
+                "effect_origin": "Inferred",
+                "status": "Known"
+              },
+              "passed": true,
+              "tests": [
+                {
+                  "actual": [
+                    4
+                  ],
+                  "error": null,
+                  "expected": [
+                    4
+                  ],
+                  "input": [],
+                  "outcome": "passed",
+                  "output": []
+                }
+              ],
+              "valid": true,
+              "word": "result"
+            }
+          },
+          "semantic_arguments": {
+            "source": ": result 2 2 + ;",
+            "tests": [
+              {
+                "expected": [
+                  4
+                ],
+                "input": []
+              }
+            ]
+          },
+          "semantic_classification": {
+            "envelope_status": "read_only",
+            "tests": [
+              "passed"
+            ]
+          },
+          "source_binding": {
+            "actual_revision": "0",
+            "authorization_policy": "exact operation, source identity, actual revision, and text; optional simulated denial",
+            "operation_bound": true,
+            "source_ref": "source:0"
+          },
+          "source_ref": "source:0",
+          "state": "completed",
+          "transport_status": "completed"
+        },
+        {
+          "arguments": {
+            "evidence": {
+              "evaluation": {
+                "contract_id": null,
+                "diagnostics": {
+                  "analysis": {
+                    "diagnostics": [],
+                    "effect": "( ρ -- ρ n )",
+                    "effect_origin": "Inferred",
+                    "status": "Known"
+                  },
+                  "passed": true,
+                  "tests": [
+                    {
+                      "actual": [
+                        4
+                      ],
+                      "error": null,
+                      "expected": [
+                        4
+                      ],
+                      "input": [],
+                      "outcome": "passed",
+                      "output": []
+                    }
+                  ],
+                  "valid": true,
+                  "word": "result"
+                },
+                "failed_criteria": [],
+                "outcome": "Satisfied",
+                "summary": "Candidate passed all 1 requested behavioral checks."
+              },
+              "operation_id": "evaluate_candidate",
+              "rationale": "Disposable host-free evaluation; document and persistent interpreter unchanged",
+              "status": "read_only",
+              "value": {
+                "analysis": {
+                  "diagnostics": [],
+                  "effect": "( ρ -- ρ n )",
+                  "effect_origin": "Inferred",
+                  "status": "Known"
+                },
+                "passed": true,
+                "tests": [
+                  {
+                    "actual": [
+                      4
+                    ],
+                    "error": null,
+                    "expected": [
+                      4
+                    ],
+                    "input": [],
+                    "outcome": "passed",
+                    "output": []
+                  }
+                ],
+                "valid": true,
+                "word": "result"
+              }
+            }
+          },
+          "compatibility": {
+            "compatible": true,
+            "contract": "host.ce4.church-adapter.v1",
+            "integer": 4,
+            "range": {
+              "max": 8,
+              "min": 0,
+              "within": true
+            }
+          },
+          "error": null,
+          "full_operation": "host.ce4.church-adapter.v1",
+          "id": "attempt:1",
+          "operation": "church",
+          "predecessor": "attempt:0",
+          "provider": "adapter",
+          "returned": "def two (A : Type 0) (f : Pi (a : A). A) (x : A) : A := f (f x)\ndef add (m : Pi (A : Type 0). Pi (f : Pi (a : A). A). Pi (x : A). A) (n : Pi (B : Type 0). Pi (g : Pi (b : B). B). Pi (y : B). B) (C : Type 0) (h : Pi (c : C). C) (z : C) : C := m C h (n C h z)\ntheorem result (A : Type 0) (f : Pi (a : A). A) (x : A) : Id A (add two two A f x) (f (f (f (f (x))))) := refl (add two two A f x)",
+          "semantic_classification": "adapter_compatible",
+          "state": "completed",
+          "transport_status": "completed"
+        },
+        {
+          "arguments": {
+            "source": "def two (A : Type 0) (f : Pi (a : A). A) (x : A) : A := f (f x)\ndef add (m : Pi (A : Type 0). Pi (f : Pi (a : A). A). Pi (x : A). A) (n : Pi (B : Type 0). Pi (g : Pi (b : B). B). Pi (y : B). B) (C : Type 0) (h : Pi (c : C). C) (z : C) : C := m C h (n C h z)\ntheorem result (A : Type 0) (f : Pi (a : A). A) (x : A) : Id A (add two two A f x) (f (f (f (f (x))))) := refl (add two two A f x)"
+          },
+          "error": null,
+          "full_operation": "language.language.path.check_source",
+          "id": "attempt:2",
+          "operation": "check_source",
+          "predecessor": "attempt:1",
+          "provider": "path",
+          "returned": {
+            "operation_id": "check_source",
+            "rationale": "Complete results carry closed kernel judgments; incomplete results expose validated local obligations without a proof or closed proof check. Names and presentation are authored metadata. Rejection concerns the submitted proof, not nonexistence of proofs.",
+            "status": "read_only",
+            "value": {
+              "core": {
+                "binders": {
+                  "J": "only motive binds: endpoint then path; path is index zero",
+                  "Lam": "body binds one variable",
+                  "Pi": "codomain binds one variable; domain binds none",
+                  "variables": "de Bruijn: zero is nearest binder"
+                },
+                "context": [],
+                "proof": {
+                  "body": {
+                    "body": {
+                      "body": {
+                        "kind": "Refl",
+                        "term": {
+                          "argument": {
+                            "argument": {
+                              "argument": {
+                                "argument": {
+                                  "index": "0",
+                                  "kind": "Var"
+                                },
+                                "function": {
+                                  "index": "1",
+                                  "kind": "Var"
+                                },
+                                "kind": "App"
+                              },
+                              "function": {
+                                "index": "1",
+                                "kind": "Var"
+                              },
+                              "kind": "App"
+                            },
+                            "function": {
+                              "index": "1",
+                              "kind": "Var"
+                            },
+                            "kind": "App"
+                          },
+                          "function": {
+                            "index": "1",
+                            "kind": "Var"
+                          },
+                          "kind": "App"
+                        },
+                        "ty": {
+                          "index": "2",
+                          "kind": "Var"
+                        }
+                      },
+                      "kind": "Lam"
+                    },
+                    "kind": "Lam"
+                  },
+                  "kind": "Lam"
+                },
+                "theorem_type": {
+                  "codomain": {
+                    "codomain": {
+                      "codomain": {
+                        "kind": "Id",
+                        "left": {
+                          "argument": {
+                            "argument": {
+                              "argument": {
+                                "argument": {
+                                  "index": "0",
+                                  "kind": "Var"
+                                },
+                                "function": {
+                                  "index": "1",
+                                  "kind": "Var"
+                                },
+                                "kind": "App"
+                              },
+                              "function": {
+                                "index": "1",
+                                "kind": "Var"
+                              },
+                              "kind": "App"
+                            },
+                            "function": {
+                              "index": "1",
+                              "kind": "Var"
+                            },
+                            "kind": "App"
+                          },
+                          "function": {
+                            "index": "1",
+                            "kind": "Var"
+                          },
+                          "kind": "App"
+                        },
+                        "right": {
+                          "argument": {
+                            "argument": {
+                              "argument": {
+                                "argument": {
+                                  "index": "0",
+                                  "kind": "Var"
+                                },
+                                "function": {
+                                  "index": "1",
+                                  "kind": "Var"
+                                },
+                                "kind": "App"
+                              },
+                              "function": {
+                                "index": "1",
+                                "kind": "Var"
+                              },
+                              "kind": "App"
+                            },
+                            "function": {
+                              "index": "1",
+                              "kind": "Var"
+                            },
+                            "kind": "App"
+                          },
+                          "function": {
+                            "index": "1",
+                            "kind": "Var"
+                          },
+                          "kind": "App"
+                        },
+                        "ty": {
+                          "index": "2",
+                          "kind": "Var"
+                        }
+                      },
+                      "domain": {
+                        "index": "1",
+                        "kind": "Var"
+                      },
+                      "kind": "Pi"
+                    },
+                    "domain": {
+                      "codomain": {
+                        "index": "1",
+                        "kind": "Var"
+                      },
+                      "domain": {
+                        "index": "0",
+                        "kind": "Var"
+                      },
+                      "kind": "Pi"
+                    },
+                    "kind": "Pi"
+                  },
+                  "domain": {
+                    "kind": "Universe",
+                    "level": "0"
+                  },
+                  "kind": "Pi"
+                }
+              },
+              "declaration": {
+                "name": "result",
+                "provenance": "authored_metadata"
+              },
+              "diagnostics": [],
+              "explanation": {
+                "application_authorized": null,
+                "candidate_kernel_checked": null,
+                "candidate_outcome": null,
+                "classification": "Checked",
+                "context": [],
+                "diagnostic": null,
+                "expected": "Id A (add two two A f x) (f (f (f (f (x)))))",
+                "goals": [],
+                "hint": null,
+                "mismatch_expected": null,
+                "mismatch_inferred": null,
+                "original_goal_count": null,
+                "original_outcome": null,
+                "provided": "refl (add two two A f x)",
+                "remaining_candidate_goal_count": null,
+                "rendered": "Proof accepted. The submitted term satisfies the theorem's required type; the complete theorem was checked by the kernel.\nLocation: bytes 364..388\nGoal / required type:\n  Id A (add two two A f x) (f (f (f (f (x)))))\nProvided term / inferred type:\n  refl (add two two A f x)",
+                "selected_goal": null,
+                "selected_goal_role": null,
+                "source_unchanged": null,
+                "span": {
+                  "end": 388,
+                  "start": 364
+                },
+                "summary": "Proof accepted. The submitted term satisfies the theorem's required type; the complete theorem was checked by the kernel."
+              },
+              "input": {
+                "document_version": "0",
+                "path": null
+              },
+              "kernel": {
+                "checked": true,
+                "inferred_sort": {
+                  "kind": "Universe",
+                  "level": "1"
+                },
+                "limits": {
+                  "depth": "128",
+                  "ticks_per_call": "100000"
+                },
+                "provenance": "P5b in-process path-kernel judgments"
+              },
+              "outcome": "Checked",
+              "presentation": {
+                "binder_names": [
+                  "A",
+                  "f",
+                  "x"
+                ],
+                "provenance": "authored_metadata"
+              },
+              "schema_version": "1",
+              "stages": [
+                {
+                  "outcome": "Succeeded",
+                  "stage": "Parsing"
+                },
+                {
+                  "outcome": "Succeeded",
+                  "stage": "LoweringAndClosedCheck"
+                },
+                {
+                  "outcome": "Succeeded",
+                  "stage": "CompleteTypeSortInference"
+                }
+              ]
+            }
+          },
+          "semantic_arguments": {},
+          "semantic_classification": "Checked",
+          "source_binding": {
+            "actual_revision": "0",
+            "authorization_policy": "exact operation, source identity, actual revision, and text; optional simulated denial",
+            "operation_bound": true,
+            "source_ref": "source:1"
+          },
+          "source_ref": "source:1",
+          "state": "completed",
+          "transport_status": "completed"
+        }
+      ],
+      "success": true,
+      "workflow_status": "succeeded"
+    },
+    "report_bytes": 8885
+  },
+  "independent_direct_baseline": {
+    "projection": {
+      "adapter_contract": "host.ce4.church-adapter.v1",
+      "compatibility": {
+        "compatible": true,
+        "contract": "host.ce4.church-adapter.v1",
+        "integer": 4,
+        "range": {
+          "max": 8,
+          "min": 0,
+          "within": true
+        }
+      },
+      "limitations": [
+        "Finite concrete Forth observation only",
+        "Host adapter contract is not a provider version or a proved compiler",
+        "Missing or unknown provider outcomes are not success",
+        "References are local to this arm's report",
+        "Agent metrics, when exercised, are in the full report; token usage unavailable"
+      ],
+      "metrics": {
+        "argument_and_return_json_bytes": 5805,
+        "checks": 1,
+        "decisions": null,
+        "dispatched_calls": 3,
+        "elapsed_us": 2026,
+        "semantic_operations": 2,
+        "tokens": null
+      },
+      "requested_check": "fixed Church add two two equals encoded observed integer, by reflexivity",
+      "steps": [
+        {
+          "attempt_ref": "attempt:0",
+          "error": null,
+          "evidence_index": 0,
+          "kernel": null,
+          "operation": "language.example.forth.evaluate_candidate",
+          "outcome": null,
+          "predecessor": null,
+          "provider": "forth",
+          "semantic_classification": {
+            "envelope_status": "read_only",
+            "tests": [
+              "passed"
+            ]
+          },
+          "source_ref": "source:0",
+          "state": "completed",
+          "transport_status": "completed"
+        },
+        {
+          "attempt_ref": "attempt:1",
+          "error": null,
+          "evidence_index": 1,
+          "kernel": null,
+          "operation": "host.ce4.church-adapter.v1",
+          "outcome": null,
+          "predecessor": "attempt:0",
+          "provider": "adapter",
+          "semantic_classification": "adapter_compatible",
+          "source_ref": null,
+          "state": "completed",
+          "transport_status": "completed"
+        },
+        {
+          "attempt_ref": "attempt:2",
+          "error": null,
+          "evidence_index": 2,
+          "kernel": {
+            "checked": true,
+            "inferred_sort": {
+              "kind": "Universe",
+              "level": "1"
+            },
+            "limits": {
+              "depth": "128",
+              "ticks_per_call": "100000"
+            },
+            "provenance": "P5b in-process path-kernel judgments"
+          },
+          "operation": "language.language.path.check_source",
+          "outcome": "Checked",
+          "predecessor": "attempt:1",
+          "provider": "path",
+          "semantic_classification": "Checked",
+          "source_ref": "source:1",
+          "state": "completed",
+          "transport_status": "completed"
+        }
+      ],
+      "success": true,
+      "transferred_integer": 4,
+      "workflow_status": "succeeded"
+    },
+    "projection_bytes": 1902,
+    "report": {
+      "adapter_contract": "host.ce4.church-adapter.v1",
+      "agent": null,
+      "arm": "direct_sequential",
+      "grants": [
+        true,
+        true,
+        true
+      ],
+      "limits": {
+        "bytes": 1000000,
+        "calls": 3
+      },
+      "metrics": {
+        "argument_and_return_json_bytes": 5805,
+        "checks": 1,
+        "decisions": null,
+        "dispatched_calls": 3,
+        "elapsed_us": 2026,
+        "semantic_operations": 2,
+        "tokens": null
+      },
+      "requested_check": "fixed Church add two two equals encoded observed integer, by reflexivity",
+      "script": null,
+      "script_error": null,
+      "simulated_faults": {
+        "authorization_denial": false,
+        "incomplete": false
+      },
+      "snapshots": [
+        {
+          "bound_attempt": "attempt:0",
+          "identity": "Scratch(0)",
+          "language": "example.forth",
+          "qualified_identity": "source:0/Scratch(0)",
+          "revision": "0",
+          "source_ref": "source:0",
+          "text": ""
+        },
+        {
+          "bound_attempt": "attempt:2",
+          "identity": "Scratch(0)",
+          "language": "language.path",
+          "qualified_identity": "source:1/Scratch(0)",
+          "revision": "0",
+          "source_ref": "source:1",
+          "text": "def two (A : Type 0) (f : Pi (a : A). A) (x : A) : A := f (f x)\ndef add (m : Pi (A : Type 0). Pi (f : Pi (a : A). A). Pi (x : A). A) (n : Pi (B : Type 0). Pi (g : Pi (b : B). B). Pi (y : B). B) (C : Type 0) (h : Pi (c : C). C) (z : C) : C := m C h (n C h z)\ntheorem result (A : Type 0) (f : Pi (a : A). A) (x : A) : Id A (add two two A f x) (f (f (f (f (x))))) := refl (add two two A f x)"
+        }
+      ],
+      "steps": [
+        {
+          "arguments": {},
+          "error": null,
+          "full_operation": "language.example.forth.evaluate_candidate",
+          "id": "attempt:0",
+          "operation": "evaluate_candidate",
+          "predecessor": null,
+          "provider": "forth",
+          "returned": {
+            "evaluation": {
+              "contract_id": null,
+              "diagnostics": {
+                "analysis": {
+                  "diagnostics": [],
+                  "effect": "( ρ -- ρ n )",
+                  "effect_origin": "Inferred",
+                  "status": "Known"
+                },
+                "passed": true,
+                "tests": [
+                  {
+                    "actual": [
+                      4
+                    ],
+                    "error": null,
+                    "expected": [
+                      4
+                    ],
+                    "input": [],
+                    "outcome": "passed",
+                    "output": []
+                  }
+                ],
+                "valid": true,
+                "word": "result"
+              },
+              "failed_criteria": [],
+              "outcome": "Satisfied",
+              "summary": "Candidate passed all 1 requested behavioral checks."
+            },
+            "operation_id": "evaluate_candidate",
+            "rationale": "Disposable host-free evaluation; document and persistent interpreter unchanged",
+            "status": "read_only",
+            "value": {
+              "analysis": {
+                "diagnostics": [],
+                "effect": "( ρ -- ρ n )",
+                "effect_origin": "Inferred",
+                "status": "Known"
+              },
+              "passed": true,
+              "tests": [
+                {
+                  "actual": [
+                    4
+                  ],
+                  "error": null,
+                  "expected": [
+                    4
+                  ],
+                  "input": [],
+                  "outcome": "passed",
+                  "output": []
+                }
+              ],
+              "valid": true,
+              "word": "result"
+            }
+          },
+          "semantic_arguments": {
+            "source": ": result 2 2 + ;",
+            "tests": [
+              {
+                "expected": [
+                  4
+                ],
+                "input": []
+              }
+            ]
+          },
+          "semantic_classification": {
+            "envelope_status": "read_only",
+            "tests": [
+              "passed"
+            ]
+          },
+          "source_binding": {
+            "actual_revision": "0",
+            "authorization_policy": "exact operation, source identity, actual revision, and text; optional simulated denial",
+            "operation_bound": true,
+            "source_ref": "source:0"
+          },
+          "source_ref": "source:0",
+          "state": "completed",
+          "transport_status": "completed"
+        },
+        {
+          "arguments": {
+            "evidence": {
+              "evaluation": {
+                "contract_id": null,
+                "diagnostics": {
+                  "analysis": {
+                    "diagnostics": [],
+                    "effect": "( ρ -- ρ n )",
+                    "effect_origin": "Inferred",
+                    "status": "Known"
+                  },
+                  "passed": true,
+                  "tests": [
+                    {
+                      "actual": [
+                        4
+                      ],
+                      "error": null,
+                      "expected": [
+                        4
+                      ],
+                      "input": [],
+                      "outcome": "passed",
+                      "output": []
+                    }
+                  ],
+                  "valid": true,
+                  "word": "result"
+                },
+                "failed_criteria": [],
+                "outcome": "Satisfied",
+                "summary": "Candidate passed all 1 requested behavioral checks."
+              },
+              "operation_id": "evaluate_candidate",
+              "rationale": "Disposable host-free evaluation; document and persistent interpreter unchanged",
+              "status": "read_only",
+              "value": {
+                "analysis": {
+                  "diagnostics": [],
+                  "effect": "( ρ -- ρ n )",
+                  "effect_origin": "Inferred",
+                  "status": "Known"
+                },
+                "passed": true,
+                "tests": [
+                  {
+                    "actual": [
+                      4
+                    ],
+                    "error": null,
+                    "expected": [
+                      4
+                    ],
+                    "input": [],
+                    "outcome": "passed",
+                    "output": []
+                  }
+                ],
+                "valid": true,
+                "word": "result"
+              }
+            }
+          },
+          "compatibility": {
+            "compatible": true,
+            "contract": "host.ce4.church-adapter.v1",
+            "integer": 4,
+            "range": {
+              "max": 8,
+              "min": 0,
+              "within": true
+            }
+          },
+          "error": null,
+          "full_operation": "host.ce4.church-adapter.v1",
+          "id": "attempt:1",
+          "operation": "church",
+          "predecessor": "attempt:0",
+          "provider": "adapter",
+          "returned": "def two (A : Type 0) (f : Pi (a : A). A) (x : A) : A := f (f x)\ndef add (m : Pi (A : Type 0). Pi (f : Pi (a : A). A). Pi (x : A). A) (n : Pi (B : Type 0). Pi (g : Pi (b : B). B). Pi (y : B). B) (C : Type 0) (h : Pi (c : C). C) (z : C) : C := m C h (n C h z)\ntheorem result (A : Type 0) (f : Pi (a : A). A) (x : A) : Id A (add two two A f x) (f (f (f (f (x))))) := refl (add two two A f x)",
+          "semantic_classification": "adapter_compatible",
+          "state": "completed",
+          "transport_status": "completed"
+        },
+        {
+          "arguments": {
+            "source": "def two (A : Type 0) (f : Pi (a : A). A) (x : A) : A := f (f x)\ndef add (m : Pi (A : Type 0). Pi (f : Pi (a : A). A). Pi (x : A). A) (n : Pi (B : Type 0). Pi (g : Pi (b : B). B). Pi (y : B). B) (C : Type 0) (h : Pi (c : C). C) (z : C) : C := m C h (n C h z)\ntheorem result (A : Type 0) (f : Pi (a : A). A) (x : A) : Id A (add two two A f x) (f (f (f (f (x))))) := refl (add two two A f x)"
+          },
+          "error": null,
+          "full_operation": "language.language.path.check_source",
+          "id": "attempt:2",
+          "operation": "check_source",
+          "predecessor": "attempt:1",
+          "provider": "path",
+          "returned": {
+            "operation_id": "check_source",
+            "rationale": "Complete results carry closed kernel judgments; incomplete results expose validated local obligations without a proof or closed proof check. Names and presentation are authored metadata. Rejection concerns the submitted proof, not nonexistence of proofs.",
+            "status": "read_only",
+            "value": {
+              "core": {
+                "binders": {
+                  "J": "only motive binds: endpoint then path; path is index zero",
+                  "Lam": "body binds one variable",
+                  "Pi": "codomain binds one variable; domain binds none",
+                  "variables": "de Bruijn: zero is nearest binder"
+                },
+                "context": [],
+                "proof": {
+                  "body": {
+                    "body": {
+                      "body": {
+                        "kind": "Refl",
+                        "term": {
+                          "argument": {
+                            "argument": {
+                              "argument": {
+                                "argument": {
+                                  "index": "0",
+                                  "kind": "Var"
+                                },
+                                "function": {
+                                  "index": "1",
+                                  "kind": "Var"
+                                },
+                                "kind": "App"
+                              },
+                              "function": {
+                                "index": "1",
+                                "kind": "Var"
+                              },
+                              "kind": "App"
+                            },
+                            "function": {
+                              "index": "1",
+                              "kind": "Var"
+                            },
+                            "kind": "App"
+                          },
+                          "function": {
+                            "index": "1",
+                            "kind": "Var"
+                          },
+                          "kind": "App"
+                        },
+                        "ty": {
+                          "index": "2",
+                          "kind": "Var"
+                        }
+                      },
+                      "kind": "Lam"
+                    },
+                    "kind": "Lam"
+                  },
+                  "kind": "Lam"
+                },
+                "theorem_type": {
+                  "codomain": {
+                    "codomain": {
+                      "codomain": {
+                        "kind": "Id",
+                        "left": {
+                          "argument": {
+                            "argument": {
+                              "argument": {
+                                "argument": {
+                                  "index": "0",
+                                  "kind": "Var"
+                                },
+                                "function": {
+                                  "index": "1",
+                                  "kind": "Var"
+                                },
+                                "kind": "App"
+                              },
+                              "function": {
+                                "index": "1",
+                                "kind": "Var"
+                              },
+                              "kind": "App"
+                            },
+                            "function": {
+                              "index": "1",
+                              "kind": "Var"
+                            },
+                            "kind": "App"
+                          },
+                          "function": {
+                            "index": "1",
+                            "kind": "Var"
+                          },
+                          "kind": "App"
+                        },
+                        "right": {
+                          "argument": {
+                            "argument": {
+                              "argument": {
+                                "argument": {
+                                  "index": "0",
+                                  "kind": "Var"
+                                },
+                                "function": {
+                                  "index": "1",
+                                  "kind": "Var"
+                                },
+                                "kind": "App"
+                              },
+                              "function": {
+                                "index": "1",
+                                "kind": "Var"
+                              },
+                              "kind": "App"
+                            },
+                            "function": {
+                              "index": "1",
+                              "kind": "Var"
+                            },
+                            "kind": "App"
+                          },
+                          "function": {
+                            "index": "1",
+                            "kind": "Var"
+                          },
+                          "kind": "App"
+                        },
+                        "ty": {
+                          "index": "2",
+                          "kind": "Var"
+                        }
+                      },
+                      "domain": {
+                        "index": "1",
+                        "kind": "Var"
+                      },
+                      "kind": "Pi"
+                    },
+                    "domain": {
+                      "codomain": {
+                        "index": "1",
+                        "kind": "Var"
+                      },
+                      "domain": {
+                        "index": "0",
+                        "kind": "Var"
+                      },
+                      "kind": "Pi"
+                    },
+                    "kind": "Pi"
+                  },
+                  "domain": {
+                    "kind": "Universe",
+                    "level": "0"
+                  },
+                  "kind": "Pi"
+                }
+              },
+              "declaration": {
+                "name": "result",
+                "provenance": "authored_metadata"
+              },
+              "diagnostics": [],
+              "explanation": {
+                "application_authorized": null,
+                "candidate_kernel_checked": null,
+                "candidate_outcome": null,
+                "classification": "Checked",
+                "context": [],
+                "diagnostic": null,
+                "expected": "Id A (add two two A f x) (f (f (f (f (x)))))",
+                "goals": [],
+                "hint": null,
+                "mismatch_expected": null,
+                "mismatch_inferred": null,
+                "original_goal_count": null,
+                "original_outcome": null,
+                "provided": "refl (add two two A f x)",
+                "remaining_candidate_goal_count": null,
+                "rendered": "Proof accepted. The submitted term satisfies the theorem's required type; the complete theorem was checked by the kernel.\nLocation: bytes 364..388\nGoal / required type:\n  Id A (add two two A f x) (f (f (f (f (x)))))\nProvided term / inferred type:\n  refl (add two two A f x)",
+                "selected_goal": null,
+                "selected_goal_role": null,
+                "source_unchanged": null,
+                "span": {
+                  "end": 388,
+                  "start": 364
+                },
+                "summary": "Proof accepted. The submitted term satisfies the theorem's required type; the complete theorem was checked by the kernel."
+              },
+              "input": {
+                "document_version": "0",
+                "path": null
+              },
+              "kernel": {
+                "checked": true,
+                "inferred_sort": {
+                  "kind": "Universe",
+                  "level": "1"
+                },
+                "limits": {
+                  "depth": "128",
+                  "ticks_per_call": "100000"
+                },
+                "provenance": "P5b in-process path-kernel judgments"
+              },
+              "outcome": "Checked",
+              "presentation": {
+                "binder_names": [
+                  "A",
+                  "f",
+                  "x"
+                ],
+                "provenance": "authored_metadata"
+              },
+              "schema_version": "1",
+              "stages": [
+                {
+                  "outcome": "Succeeded",
+                  "stage": "Parsing"
+                },
+                {
+                  "outcome": "Succeeded",
+                  "stage": "LoweringAndClosedCheck"
+                },
+                {
+                  "outcome": "Succeeded",
+                  "stage": "CompleteTypeSortInference"
+                }
+              ]
+            }
+          },
+          "semantic_arguments": {},
+          "semantic_classification": "Checked",
+          "source_binding": {
+            "actual_revision": "0",
+            "authorization_policy": "exact operation, source identity, actual revision, and text; optional simulated denial",
+            "operation_bound": true,
+            "source_ref": "source:1"
+          },
+          "source_ref": "source:1",
+          "state": "completed",
+          "transport_status": "completed"
+        }
+      ],
+      "success": true,
+      "workflow_status": "succeeded"
+    },
+    "report_bytes": 8657
+  }
+}

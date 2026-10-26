@@ -1,54 +1,54 @@
 # Contributing to Scope
 
-Scope is an experimental Rust project, currently version `0.1.0`, licensed under the [MIT license](LICENSE). Its APIs, command interfaces, formats, and behavior are unstable; do not assume compatibility across 0.1 releases. Contributions should preserve explicit authority boundaries rather than promise stability that the project does not yet provide.
+Scope is experimental (`0.1.0`) and [MIT licensed](LICENSE). APIs, command
+interfaces and formats are unstable; do not assume compatibility across releases.
 
-## Set up a checkout
+## Set up and validate
 
-Read [README.md](README.md) for the architecture and [BUILDING_WITH_CELL.md](BUILDING_WITH_CELL.md) for Cell build and capability guidance. Scope's Cargo manifests currently use local path dependencies on a sibling Cell checkout:
+Use [Development](docs/development.md) for the configured toolchain, crate
+inventory, feature matrix, build commands, standalone consumer checks and CI
+expectations. Cell is fetched from Git tag `v0.0.2`; no sibling Cell checkout or
+`CELL_REPOSITORY` is required. Include the Scope revision, `Cargo.lock`, toolchain,
+platform and local changes when reporting reproducibility problems.
 
-```text
-parent/
-  scope/
-  cell/
-```
-
-Use Cell revision `ea19836fa758588ce0947aac46d1d80935e35614`, following the fresh-checkout and verification instructions in [Building with Cell](BUILDING_WITH_CELL.md#checkout-layout). Record both Scope and Cell revisions and any local changes when reporting build failures. The lockfile does not pin the contents of local path dependencies. Canonical public repository URLs and a contribution destination still need to be published; until then, obtain source locations and review instructions from the maintainer. See the [public launch prerequisites](BUILDING_WITH_CELL.md#public-launch-prerequisites).
-
-Rust edition 2024 is configured in the workspace. Install a compatible Rust toolchain; optional features and downstream WASM builds may need additional targets or tools described in the relevant guides. Dependency downloads require network access unless dependencies are already cached.
-
-## Keep changes focused
-
-- Make narrow changes with a clear purpose; avoid unrelated refactors or formatting churn.
-- Add regression tests for bug fixes and tests for new behavior, including rejection, stale-revision, and authorization cases where relevant.
-- Update affected documentation and downstream call sites when changing an interface. Explain breaking changes explicitly.
-- Keep domain semantics in downstream implementations rather than embedding language-specific behavior in Scope.
-- Never commit credentials, tokens, private source, sensitive logs, or real model-provider configuration. Use synthetic fixtures and mocked model responses; tests should not require live credentials or paid model calls.
-- Native `LanguageService`, `ToolProvider`, and interactive adapters are trusted host code, not sandboxed plugins. Do not use ambient filesystem, network, or process access to bypass host authorization or Cell capability enforcement. Capability declarations and discovery metadata are not permission grants.
-
-For vulnerabilities, follow [SECURITY.md](SECURITY.md) rather than opening a public exploit report.
-
-## Validate a change
-
-From the Scope root, run:
+Start with focused tests, then run the relevant workspace checks:
 
 ```sh
-cargo test --workspace --locked
-cargo test --workspace --locked --all-features
 cargo fmt --all -- --check
+cargo test --workspace --locked
+cargo test --workspace --all-features --locked
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 ```
 
-Formatting and strict Clippy are required CI checks on the tested toolchain documented in [BUILDING_WITH_CELL.md](BUILDING_WITH_CELL.md). Preserve meaningful rejection tests and public API contracts when fixing lint findings. Any necessary exception should be narrowly scoped, use `#[expect(..., reason = "...")]`, and explain the tradeoff; do not add blanket suppression. If another toolchain produces different findings, report its version and distinguish those differences from regressions.
+These are requested checks, not a claim they pass on every platform. Report exact
+commands/results, features and skipped checks with reasons. Separate example
+workspaces are not covered by root `--workspace`; see Development for their commands.
+Preserve meaningful tests when fixing lint findings. Necessary exceptions should
+be narrow, use `#[expect(..., reason = "...")]`, and explain the tradeoff rather
+than suppressing warnings globally.
 
-The examples are separate workspaces, so root `--workspace` commands do not cover them. Validate affected examples separately:
+## Keep changes focused and authority explicit
 
-```sh
-cargo test --manifest-path examples/downstream/Cargo.toml --locked
-cargo test --manifest-path examples/harness/Cargo.toml --locked
-```
+- Submit narrow changes with regression tests, including denial, conflict and
+  stale-source cases where relevant. Avoid unrelated refactors/formatting churn.
+- Update affected documentation and call sites, and explain breaking changes.
+- Keep domain semantics in independent downstream parsers, runtimes and kernels.
+  See [Integration](docs/integration.md) for adapter contracts and local consumer risks.
+- Native `LanguageService`, `ToolProvider` and session adapters are trusted host
+  code, not sandboxed plugins. Do not bypass host authorization or Cell policy
+  using ambient filesystem, network or process APIs. Discovery and declarations
+  grant no authority.
+- Keep invocation approval, candidate validation, proposal acceptance and saving
+  distinct. See [Agents and harnesses](docs/agents.md) for concrete boundaries.
+- Never commit credentials, private source, sensitive logs or real provider
+  configuration. Use synthetic fixtures and mocked/scripted model responses;
+  tests must not require live credentials or paid calls.
 
-Include the commands run, results, toolchain, relevant feature flags, and any skipped checks in your contribution description. Explain the reason for skipping a check. Use minimal, non-sensitive reproduction cases for failures.
+For vulnerabilities, follow [SECURITY.md](SECURITY.md), not public exploit reports.
+Confirm contribution destinations and private reporting channels with the maintainer
+if they are unavailable; this guide does not invent a canonical submission URL.
 
 ## License
 
-Submit only material you have the right to contribute, suitable for distribution under Scope's existing MIT license. Retain applicable copyright and license notices.
+Contribute only material you have the right to distribute under Scope's existing
+MIT license. Retain applicable copyright and dependency license notices.

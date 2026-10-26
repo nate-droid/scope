@@ -89,9 +89,37 @@ impl Drop for TempSymlink {
     }
 }
 
+#[test]
+fn concurrent_fixture_names_are_unique_and_cleanup_is_isolated() {
+    let fixtures: Vec<_> = std::thread::scope(|scope| {
+        let threads: Vec<_> = (0..32)
+            .map(|_| scope.spawn(|| TempWorkspace::new("same-name")))
+            .collect();
+        threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect()
+    });
+    let paths: std::collections::BTreeSet<_> =
+        fixtures.iter().map(|f| f.root().to_owned()).collect();
+    assert_eq!(paths.len(), fixtures.len());
+    for fixture in &fixtures {
+        fixture.write_file("retained.txt", "present");
+    }
+    let mut fixtures = fixtures;
+    drop(fixtures.pop());
+    for fixture in &fixtures {
+        assert_eq!(fixture.read_file("retained.txt"), "present");
+    }
+}
+
 fn unique_temp_dir(name: &str) -> PathBuf {
+    // Clock resolution alone does not isolate concurrently created fixtures.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     std::env::temp_dir().join(format!(
-        "scope-ide-{name}-{}",
+        "scope-ide-{name}-{}-{sequence}-{}",
+        std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()

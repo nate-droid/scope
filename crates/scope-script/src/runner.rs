@@ -246,6 +246,26 @@ impl Host for AuthoringHost<'_> {
     }
 }
 impl ReadOnlyCommand for ScriptRunner<'_> {
+    fn reduce_script_snapshot(
+        &self,
+        snapshot: scope_language::SourceSnapshot,
+    ) -> Result<scope_ide::cli::ScriptReduction, String> {
+        reduce_snapshot(snapshot)
+    }
+
+    fn admit_script_snapshot(&self, source: &str) -> scope_ide::cli::ScriptSnapshotAdmission {
+        use scope_ide::cli::ScriptSnapshotAdmission as Admission;
+        match crate::admit_snapshot(source) {
+            crate::SnapshotAdmission::CompletePure => Admission::CompletePure,
+            crate::SnapshotAdmission::CompleteExplicitRunRequired => Admission::ExplicitRunRequired,
+            crate::SnapshotAdmission::Incomplete(_) => Admission::Incomplete,
+            crate::SnapshotAdmission::Invalid(error) => {
+                let (line, column) = crate::presentation::source_location(source, error.offset);
+                Admission::Invalid(format!("{line}:{column}: {error}"))
+            }
+        }
+    }
+
     fn invoke_script_with_target(
         &mut self,
         source: &ScratchBuffer,
@@ -253,6 +273,51 @@ impl ReadOnlyCommand for ScriptRunner<'_> {
         output: &mut dyn Write,
     ) -> Result<(), Box<dyn std::error::Error>> {
         ScriptRunner::invoke_script_with_target(self, source, target, output)
+    }
+
+    fn invoke_script_context(
+        &mut self,
+        source: &ScratchBuffer,
+        target: Option<&ScratchBuffer>,
+        output: &mut dyn Write,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Evaluate through the same binding/authorization path exactly once.
+        let mut detailed = Vec::new();
+        self.invoke_script_with_target(source, target, &mut detailed)?;
+        let record = self.records.last().ok_or("no retained Script evaluation")?;
+        if let Ok(value) = &record.outcome {
+            for printed in &record.printed {
+                writeln!(output, "{}", crate::presentation::format_value(printed))?;
+            }
+            writeln!(output, "{}", crate::presentation::format_value(value))?;
+            Ok(())
+        } else {
+            output.write_all(&detailed)?;
+            Ok(())
+        }
+    }
+
+    fn inspect_script_evidence(
+        &self,
+        output: &mut dyn Write,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let record = self.records.last().ok_or("no retained Script evaluation")?;
+        write_record(record, output)?;
+        writeln!(output, "source snapshot:\n{}", record.source.text)?;
+        writeln!(output, "target snapshot:\n{}", record.target.text)?;
+        writeln!(
+            output,
+            "catalog: {}",
+            crate::presentation::format_value(&record.catalog)
+        )?;
+        for result in &record.results {
+            writeln!(
+                output,
+                "envelope: {}",
+                crate::presentation::format_value(result)
+            )?;
+        }
+        Ok(())
     }
 
     fn complete_source(
@@ -271,7 +336,7 @@ impl ReadOnlyCommand for ScriptRunner<'_> {
                 label: item.label.unwrap_or_else(|| item.insertion.clone()),
                 replacement: item.replacement,
                 insert_text: item.insertion,
-                detail: Some("Script authoring (no live bindings)".into()),
+                detail: Some("Script authoring (syntax-only bindings)".into()),
             })
             .collect()
     }
@@ -295,6 +360,50 @@ impl ReadOnlyCommand for ScriptRunner<'_> {
         let record = self.run(source, document, selection, operation)?;
         write_record(record, output)
     }
+}
+
+/// Bridge reducer byte offsets to IDE positions against the exact captured text.
+pub(crate) fn reduce_snapshot(
+    snapshot: scope_language::SourceSnapshot,
+) -> Result<scope_ide::cli::ScriptReduction, String> {
+    let candidate = crate::reduction::reduce(&Snapshot {
+        identity: snapshot.source_id.clone(),
+        revision: snapshot.revision_id.clone(),
+        text: snapshot.text.to_string(),
+    })
+    .map_err(|refusal| {
+        match refusal {
+            crate::reduction::Refusal::InvalidSource => "Script reduction refused: invalid source",
+            crate::reduction::Refusal::Unsupported => {
+                "Script reduction refused: unsupported source"
+            }
+        }
+        .to_owned()
+    })?;
+    let buffer = TextBuffer::new(snapshot.text.as_ref());
+    let edits = candidate
+        .edits
+        .into_iter()
+        .map(|edit| {
+            let range = buffer
+                .range_for_span(Span {
+                    start: edit.range.start,
+                    end: edit.range.end,
+                })
+                .map_err(|error| error.to_string())?;
+            Ok(scope_ide::text::TextEdit::replace(range, edit.text))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(scope_ide::cli::ScriptReduction {
+        original: snapshot,
+        edits,
+        rule: candidate.rule.into(),
+        checked: candidate
+            .checked
+            .iter()
+            .map(|check| (*check).to_owned())
+            .collect(),
+    })
 }
 
 fn write_record(

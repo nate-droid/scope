@@ -20,11 +20,12 @@ pub use decision::edit::{
     EditState, EditSummary, InvalidTransition, InvestigationCompletion, InvestigationEvidence,
     ModelCompletion, SemanticDiscoveryOptions, SemanticEditOptions, SemanticInvestigationOptions,
     ToolResultClassification, run_edit_session, run_edit_session_with_state, run_semantic_edit,
-    run_semantic_edit_with_discovery, run_semantic_investigation_with_discovery,
+    run_semantic_edit_with_discovery, run_semantic_investigation_with_compact_discovery,
+    run_semantic_investigation_with_discovery,
 };
 pub use decision::{
-    AgentLimits, AgentRun, AgentStop, DecisionModel, read_only_policy, run_session,
-    run_session_traced,
+    AgentLimits, AgentRun, AgentStop, AgentWorkflow, AgentWorkflowContext, DecisionModel,
+    read_only_policy, run_session, run_session_traced, run_session_with_workflows,
 };
 pub use trace::ProtocolTrace;
 
@@ -495,11 +496,8 @@ mod tests {
 
     #[test]
     fn lists_installed_chat_capability_without_contacting_endpoint() {
-        let agent = CellAgent::new(AgentConfig::local(
-            "test-model",
-            "http://localhost:11434/v1",
-        ))
-        .unwrap();
+        let agent =
+            CellAgent::new(AgentConfig::local("test-model", "http://localhost:1234/v1")).unwrap();
         assert_eq!(agent.capabilities(), &["cell:openai/chat@0.1.0"]);
         assert_eq!(agent.capability_descriptors().len(), 1);
         assert_eq!(

@@ -1,0 +1,9 @@
+# Handle integer conversion failure as data, without host access.
+for text in ["42", "not-an-integer"] {
+    let result = parse_int(text)
+    if result.ok {
+        print({input: text, next: result.value + 1})
+    } else {
+        print({input: text, code: result.error.code, message: result.error.message})
+    }
+}

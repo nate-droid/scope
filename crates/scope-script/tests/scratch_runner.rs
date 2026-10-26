@@ -40,7 +40,35 @@ fn shell(runner: &mut ScriptRunner<'_>, commands: &str) -> String {
     String::from_utf8(output).unwrap()
 }
 #[test]
-fn authoring_completion_is_metadata_only_and_does_not_invent_bindings() {
+fn continuous_semantic_presentation_retains_evidence_without_reexecution() {
+    let service = language::DeclarationLanguage::default();
+    let mut runner = ScriptRunner::new(&service, "describe_selection", Some(true));
+    let output = shell(
+        &mut runner,
+        &format!(
+            ":scope scratch new example.declarations\n\
+         :scope scratch replace 1 1 1 1 let answer = 42\n\
+         :scope semantic-target 0\n\
+         :scope scratch new scope-script\n\
+         :scope script enter\n{CALL}.value.name\n:run\n\
+         :scope script evidence\n:scope script leave\n:scope script run\nquit\n"
+        ),
+    );
+    assert_eq!(runner.records.len(), 2, "{output}");
+    assert_eq!(service.calls.load(Ordering::SeqCst), 2);
+    let before_evidence = output.split("script:").next().unwrap();
+    assert!(before_evidence.contains("\"answer\"\n"), "{output}");
+    assert!(!before_evidence.contains("semantic status:"));
+    assert!(!before_evidence.contains("status: interpreter success"));
+    assert!(output.contains("catalog:"));
+    assert!(output.contains("envelope:"));
+    assert!(output.contains("target snapshot:\nlet answer = 42"));
+    assert_eq!(output.matches("status: interpreter success").count(), 2);
+    assert_eq!(runner.records[0].results.len(), 1);
+}
+
+#[test]
+fn authoring_completion_includes_declared_bindings_without_execution() {
     use scope_ide::cli::ReadOnlyCommand;
     let service = language::DeclarationLanguage::default();
     let runner = ScriptRunner::new(&service, "describe_selection", None);
@@ -56,7 +84,9 @@ fn authoring_completion_is_metadata_only_and_does_not_invent_bindings() {
     );
     assert!(names.iter().any(|item| item.insert_text == "scope.invoke"));
     assert!(
-        complete("let invented = scope.invoke(\"semantic\", \"bad\", {}); invented").is_empty()
+        complete("let invented = scope.invoke(\"semantic\", \"bad\", {}); invented")
+            .iter()
+            .any(|item| item.insert_text == "invented")
     );
     assert_eq!(
         complete("scope.invoke(\"sem")[0].insert_text,

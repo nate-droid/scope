@@ -6,6 +6,18 @@ Synchronous execution of typed pipelines through Cell. Semantic declarations liv
 opaque payload bytes. Transformations run inside real WebAssembly components, not
 host transformation callbacks.
 
+## Policy-aware execution
+
+Use `execute_with_policy(&cell, &pipeline, &bindings, inputs, &granted, &policy)`
+with Cell's `ExecutionPolicy` to enforce managed fuel, per-linear-memory limits,
+cooperative deadlines/cancellation, and logical envelope payload limits. Existing
+`execute` remains unconfigured and compatible. Both paths share typed validation
+and artifact retention; no host capabilities are installed implicitly.
+
+See [SE1 managed execution](../../docs/SE1_MANAGED_COMPONENT_EXECUTION.md) for
+budget semantics, structured errors, containment limitations, and Cross adoption.
+Run `cargo test -p scope-execution` for both legacy and managed execution tests.
+
 ## Run the tests and demonstration
 
 Run from the repository root:

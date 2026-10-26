@@ -32,6 +32,125 @@ impl DecisionModel for FakeModel {
         self.replies.pop_front().expect("unexpected model request")
     }
 }
+// AG1 contracts are deliberately enforced by the provider, not the runner.
+struct Ag1Provider {
+    tools: Vec<ToolDefinition>,
+    calls: Arc<std::sync::Mutex<Vec<ToolCall>>>,
+    structured: bool,
+}
+impl ToolProvider for Ag1Provider {
+    fn tools(&self) -> &[ToolDefinition] {
+        &self.tools
+    }
+    fn invoke(&mut self, call: ToolCall) -> Result<ToolResult, ToolError> {
+        self.calls.lock().unwrap().push(call.clone());
+        let expected = match call.name.as_str() {
+            "ag1.integer" | "experiment.evaluate" => {
+                Some(("k", crate::tool::ToolInputKind::Integer))
+            }
+            "ag1.path" => Some(("path", crate::tool::ToolInputKind::String)),
+            "ag1.empty" => None,
+            _ => panic!("unexpected dispatch"),
+        };
+        let invalid = |argument: &str| ToolError::InvalidArgument {
+            tool: call.name.clone(),
+            argument: argument.into(),
+            message: "use the registered key and kind".into(),
+        };
+        let validation = (|| {
+            for key in call.arguments.keys() {
+                if expected.is_none_or(|(name, _)| key != name) {
+                    return Err(invalid(key));
+                }
+            }
+            if let Some((key, kind)) = expected {
+                let value = call
+                    .arguments
+                    .get(key)
+                    .ok_or_else(|| ToolError::MissingArgument {
+                        tool: call.name.clone(),
+                        argument: key.into(),
+                    })?;
+                if !matches!(
+                    (kind, value),
+                    (crate::tool::ToolInputKind::Integer, ToolValue::Integer(_))
+                        | (crate::tool::ToolInputKind::String, ToolValue::String(_))
+                ) {
+                    return Err(invalid(key));
+                }
+            }
+            if self.structured
+                && !call
+                    .arguments
+                    .get("k")
+                    .and_then(ToolValue::as_i64)
+                    .is_some_and(|k| (0..=10).contains(&k))
+            {
+                return Err(invalid("k"));
+            }
+            Ok(())
+        })();
+        if self.structured {
+            return Ok(ToolResult::new(ToolValue::object([
+                (
+                    "status",
+                    if validation.is_ok() {
+                        "accepted"
+                    } else {
+                        "rejected"
+                    }
+                    .into(),
+                ),
+                (
+                    "failure",
+                    if validation.is_ok() {
+                        ToolValue::Null
+                    } else {
+                        "expected only integer k in 0..=10".into()
+                    },
+                ),
+                (
+                    "remaining",
+                    if validation.is_ok() { 3_i64 } else { 4_i64 }.into(),
+                ),
+            ])));
+        }
+        validation?;
+        Ok(ToolResult::new(ToolValue::Object(call.arguments)))
+    }
+}
+fn ag1_session(structured: bool) -> (AgentSession<'static>, Arc<std::sync::Mutex<Vec<ToolCall>>>) {
+    use crate::tool::{ToolInputDefinition, ToolInputKind};
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let provider = Ag1Provider {
+        tools: vec![
+            ToolDefinition::new(
+                if structured {
+                    "experiment.evaluate"
+                } else {
+                    "ag1.integer"
+                },
+                "integer contract",
+            )
+            .input(ToolInputDefinition::required(
+                "k",
+                ToolInputKind::Integer,
+                "integer key",
+            )),
+            ToolDefinition::new("ag1.path", "string contract").input(
+                ToolInputDefinition::required("path", ToolInputKind::String, "path key"),
+            ),
+            ToolDefinition::new("ag1.empty", "no arguments"),
+        ],
+        calls: calls.clone(),
+        structured,
+    };
+    (
+        AgentSession::builder().provider(provider).build().unwrap(),
+        calls,
+    )
+}
+
 struct Echo {
     tools: Vec<ToolDefinition>,
     calls: Arc<AtomicUsize>,
@@ -313,6 +432,270 @@ fn q1_multi_decisions_never_reach_authorization_or_mutation() {
 
 const COMPLETE: &str = r#"{"type":"complete","content":"done"}"#;
 const ECHO: &str = r#"{"type":"tool","name":"echo","arguments":{"path":"approved","nested":[null,true,-2,{"text":"héllo"}]}}"#;
+
+#[test]
+fn ag1_registered_contract_feedback_and_recovery() {
+    let cases = [
+        (
+            "ag1.integer",
+            r#"{"input":7}"#,
+            r#"{"k":7}"#,
+            "invalid_argument",
+        ),
+        ("ag1.integer", "{}", r#"{"k":7}"#, "missing_argument"),
+        (
+            "ag1.integer",
+            r#"{"k":"7"}"#,
+            r#"{"k":7}"#,
+            "invalid_argument",
+        ),
+        (
+            "ag1.path",
+            r#"{"input":"a.scope"}"#,
+            r#"{"path":"a.scope"}"#,
+            "invalid_argument",
+        ),
+        (
+            "ag1.path",
+            "{}",
+            r#"{"path":"a.scope"}"#,
+            "missing_argument",
+        ),
+        (
+            "ag1.path",
+            r#"{"path":7}"#,
+            r#"{"path":"a.scope"}"#,
+            "invalid_argument",
+        ),
+        ("ag1.empty", r#"{"input":7}"#, "{}", "invalid_argument"),
+    ];
+    for (name, bad, good, category) in cases {
+        let decision = |arguments: &str| {
+            format!(r#"{{"type":"tool","name":"{name}","arguments":{arguments}}}"#)
+        };
+        let bad_decision = decision(bad);
+        let good_decision = decision(good);
+        let (mut session, calls) = ag1_session(false);
+        let mut model = FakeModel::new(&[&bad_decision, &good_decision, COMPLETE]);
+        let limits = AgentLimits {
+            max_decisions: 5,
+            max_tool_calls: 3,
+            ..AgentLimits::default()
+        };
+        let run = run_session(
+            &mut model,
+            &mut session,
+            "inspect",
+            limits,
+            read_only_policy,
+        )
+        .unwrap();
+        assert_eq!(run.stop, AgentStop::Completed);
+        assert_eq!((run.decisions, run.tool_calls, run.malformed), (3, 2, 0));
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(
+            to_json(ToolValue::Object(calls[0].arguments.clone())),
+            serde_json::from_str::<Value>(bad).unwrap()
+        );
+        assert_eq!(
+            to_json(ToolValue::Object(calls[1].arguments.clone())),
+            serde_json::from_str::<Value>(good).unwrap()
+        );
+        let prompt = &model.conversations[0][0].1;
+        assert!(!prompt.contains(r#""input":"value""#));
+        for word in ["registered", "keys", "kinds"] {
+            assert!(prompt.contains(word), "missing {word}: {prompt}");
+        }
+        let initial: Value = serde_json::from_str(&model.conversations[0][1].1).unwrap();
+        let tools = initial["catalog"]["tools"].as_array().unwrap();
+        assert_eq!(tools[0]["definition"]["inputs"][0]["name"], "k");
+        assert_eq!(tools[0]["definition"]["inputs"][0]["kind"], "integer");
+        assert_eq!(tools[0]["definition"]["inputs"][0]["required"], true);
+        assert_eq!(tools[1]["definition"]["inputs"][0]["name"], "path");
+        assert_eq!(tools[1]["definition"]["inputs"][0]["kind"], "string");
+        assert_eq!(tools[1]["definition"]["inputs"][0]["required"], true);
+        assert_eq!(tools[2]["definition"]["inputs"], json!([]));
+        let definition = &tools
+            .iter()
+            .find(|t| t["definition"]["name"] == name)
+            .unwrap()["definition"];
+        let feedback: Value =
+            serde_json::from_str(&model.conversations[1].last().unwrap().1).unwrap();
+        assert_eq!(feedback["kind"], "tool_result");
+        assert_eq!(feedback["ok"], false);
+        assert_eq!(feedback["category"], category);
+        assert_eq!(feedback["expected_tool"], *definition);
+        let bad: Value = serde_json::from_str(bad).unwrap();
+        assert_eq!(
+            feedback["supplied_argument_keys"],
+            serde_json::json!(bad.as_object().unwrap().keys().collect::<Vec<_>>())
+        );
+        assert_eq!(feedback["remaining_decisions"], 4);
+        assert_eq!(feedback["remaining_tool_calls"], 2);
+        let success: Value =
+            serde_json::from_str(&model.conversations[2].last().unwrap().1).unwrap();
+        assert_eq!(success["ok"], true);
+        assert_eq!(
+            success["value"],
+            serde_json::from_str::<Value>(good).unwrap()
+        );
+    }
+}
+
+#[test]
+fn ag1_rejections_preserve_authority_and_budgets() {
+    let bad = r#"{"type":"tool","name":"ag1.integer","arguments":{"input":7}}"#;
+    let corrected = r#"{"type":"tool","name":"ag1.integer","arguments":{"k":7}}"#;
+    for (deny, max_decisions, replies, stop, dispatched) in [
+        (
+            true,
+            4,
+            vec![bad, corrected, COMPLETE],
+            AgentStop::Completed,
+            0,
+        ),
+        (false, 4, vec![bad, corrected], AgentStop::ToolBudget, 1),
+        (false, 4, vec![bad, COMPLETE], AgentStop::Completed, 1),
+        (false, 1, vec![bad], AgentStop::DecisionBudget, 1),
+    ] {
+        let (mut session, calls) = ag1_session(false);
+        let mut model = FakeModel::new(&replies);
+        let mut authorized = Vec::new();
+        let run = run_session(
+            &mut model,
+            &mut session,
+            "inspect",
+            AgentLimits {
+                max_decisions,
+                max_tool_calls: if deny { 2 } else { 1 },
+                ..AgentLimits::default()
+            },
+            |definition, call| {
+                assert_eq!(definition.name, "ag1.integer");
+                authorized.push(call.clone());
+                !deny
+            },
+        )
+        .unwrap();
+        assert_eq!(run.stop, stop);
+        assert_eq!(calls.lock().unwrap().len(), dispatched);
+        assert_eq!(authorized.len(), if deny { 2 } else { 1 });
+        assert_eq!(run.malformed, 0);
+        if deny {
+            for conversation in model.conversations.iter().skip(1) {
+                let feedback: Value =
+                    serde_json::from_str(&conversation.last().unwrap().1).unwrap();
+                assert_eq!(feedback["ok"], false);
+                assert!(feedback["error"].as_str().unwrap().contains("denied"));
+                assert!(feedback.get("expected_tool").is_none());
+            }
+        }
+    }
+}
+
+#[test]
+fn ag1_structured_rejection_is_ok_and_traces_correction_without_enrichment() {
+    let replies = [
+        r#"{"type":"tool","name":"experiment.evaluate","arguments":{"input":0}}"#,
+        r#"{"type":"tool","name":"experiment.evaluate","arguments":{"k":0}}"#,
+        COMPLETE,
+    ];
+    // Original observed sequence can complete immediately with no evaluation.
+    let (mut stopped_session, stopped_calls) = ag1_session(true);
+    let mut stopped_model = FakeModel::new(&[replies[0], COMPLETE]);
+    let stopped = run_session(
+        &mut stopped_model,
+        &mut stopped_session,
+        "inspect",
+        AgentLimits::default(),
+        read_only_policy,
+    )
+    .unwrap();
+    assert_eq!(stopped.stop, AgentStop::Completed);
+    assert_eq!((stopped.decisions, stopped.tool_calls), (2, 1));
+    assert_eq!(
+        stopped_calls.lock().unwrap()[0]
+            .arguments
+            .keys()
+            .collect::<Vec<_>>(),
+        vec!["input"]
+    );
+    let rejected: Value =
+        serde_json::from_str(&stopped_model.conversations[1].last().unwrap().1).unwrap();
+    assert_eq!(rejected["value"]["remaining"], 4);
+    assert_eq!(rejected["value"]["status"], "rejected");
+    let (mut plain_session, plain_calls) = ag1_session(true);
+    let mut plain_model = FakeModel::new(&replies);
+    let plain = run_session(
+        &mut plain_model,
+        &mut plain_session,
+        "inspect",
+        AgentLimits::default(),
+        read_only_policy,
+    )
+    .unwrap();
+    let (mut traced_session, traced_calls) = ag1_session(true);
+    let mut traced_model = FakeModel::new(&replies);
+    let mut bytes = Vec::new();
+    let traced = run_session_traced(
+        &mut traced_model,
+        &mut traced_session,
+        "inspect",
+        AgentLimits::default(),
+        read_only_policy,
+        &mut super::super::ProtocolTrace::new(&mut bytes),
+    )
+    .unwrap();
+    assert_eq!(plain, traced);
+    assert_eq!(traced.stop, AgentStop::Completed);
+    assert_eq!(
+        (traced.decisions, traced.tool_calls, traced.malformed),
+        (3, 2, 0)
+    );
+    assert_eq!(plain_model.conversations, traced_model.conversations);
+    assert_eq!(*plain_calls.lock().unwrap(), *traced_calls.lock().unwrap());
+    assert_eq!(plain_calls.lock().unwrap().len(), 2);
+    let events: Vec<Value> = std::str::from_utf8(&bytes)
+        .unwrap()
+        .lines()
+        .map(|s| serde_json::from_str(s).unwrap())
+        .collect();
+    for (ordinal, status) in [(1, "rejected"), (2, "accepted")] {
+        let feedback = events
+            .iter()
+            .find(|e| e["event"] == "feedback" && e["ordinal"] == ordinal)
+            .unwrap();
+        let envelope = &feedback["envelope"];
+        assert_eq!(envelope["ok"], true);
+        assert_eq!(envelope["value"]["status"], status);
+        for key in [
+            "category",
+            "expected_tool",
+            "supplied_argument_keys",
+            "remaining_decisions",
+            "remaining_tool_calls",
+        ] {
+            assert!(
+                envelope.get(key).is_none(),
+                "unexpected enrichment: {envelope}"
+            );
+        }
+        let retained: Value = serde_json::from_str(
+            &traced_model.conversations[ordinal as usize]
+                .last()
+                .unwrap()
+                .1,
+        )
+        .unwrap();
+        assert_eq!(*envelope, retained);
+        let response = events
+            .iter()
+            .find(|e| e["event"] == "response" && e["ordinal"] == ordinal)
+            .unwrap();
+        assert_eq!(response["raw"], replies[ordinal as usize - 1]);
+    }
+}
 
 #[test]
 fn discovery_feedback_and_completion() {

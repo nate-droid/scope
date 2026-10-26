@@ -81,9 +81,9 @@ fn syntax_runtime_and_immutable_errors_preserve_ordered_unicode_prints_and_recov
     input.push_str(":scope script run\n");
     input.push_str(&draft("print(999); if true { print([) }"));
     input.push_str(":scope script run\n");
-    input.push_str(&draft("let fixed = 1; fixed = 2"));
+    input.push_str(&draft("print(1); let fixed = 1; fixed = print(999)"));
     input.push_str(":scope script run\n");
-    input.push_str(&draft("6 * 7"));
+    input.push_str(&draft("let mut answer = 6; answer = answer * 7; answer"));
     input.push_str(":scope script run\n:scope quit\n");
     let output = shell(&input);
     let records = runs(&output);
@@ -104,13 +104,22 @@ fn syntax_runtime_and_immutable_errors_preserve_ordered_unicode_prints_and_recov
         assert!(record.contains("status: interpreter failure"), "{output}");
         assert!(record.contains("error:"), "{output}");
     }
+    assert!(records[1].contains("error: syntax error:"), "{output}");
     assert!(
         !records[1].contains("print:"),
         "syntax errors must not execute: {output}"
     );
     assert!(
-        records[2].contains("syntax error:"),
-        "assignment must be rejected: {output}"
+        records[2].contains("error: runtime error: assignment requires a mutable binding"),
+        "valid assignment syntax must enforce binding mutability at runtime: {output}"
+    );
+    assert!(
+        records[2].find("print: 1").unwrap() < records[2].find("diagnostic:").unwrap(),
+        "statements before the runtime failure must execute: {output}"
+    );
+    assert!(
+        !records[2].contains("print: 999"),
+        "immutable assignment must reject before evaluating its RHS: {output}"
     );
     assert!(
         records[3].contains("final: 42\nstatus: interpreter success"),

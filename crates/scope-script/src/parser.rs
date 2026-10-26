@@ -15,13 +15,13 @@ enum Token {
     Newline,
     Eof,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Expr {
     pub offset: usize,
     depth: usize,
     pub kind: Kind,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum Kind {
     Literal(Value),
     Name(String),
@@ -33,9 +33,28 @@ pub(crate) enum Kind {
     Field(Box<Expr>, String),
     Call(String, Vec<Expr>),
 }
+#[derive(Debug, Clone)]
 pub(crate) enum Statement {
+    For {
+        name: String,
+        collection: Expr,
+        body: Vec<Statement>,
+        offset: usize,
+    },
+    Function {
+        name: String,
+        params: Vec<String>,
+        body: Vec<Statement>,
+        offset: usize,
+    },
+    Assign {
+        name: String,
+        expr: Expr,
+        offset: usize,
+    },
     Expression {
         binding: Option<String>,
+        mutable: bool,
         expr: Expr,
         offset: usize,
     },
@@ -53,6 +72,17 @@ fn syntax(offset: usize, message: impl Into<String>) -> Error {
 }
 
 pub(crate) fn parse(source: &str) -> Result<Vec<Statement>, Error> {
+    parse_snapshot(source).0
+}
+
+/// The flag records an actual lexer/parser expectation at EOF, not delimiter balance.
+pub(crate) fn parse_snapshot(source: &str) -> (Result<Vec<Statement>, Error>, bool) {
+    let mut incomplete = false;
+    let result = parse_inner(source, &mut incomplete);
+    (result, incomplete)
+}
+
+fn parse_inner(source: &str, incomplete: &mut bool) -> Result<Vec<Statement>, Error> {
     if source.len() > MAX_SOURCE {
         return Err(syntax(0, "source size limit exceeded"));
     }
@@ -62,6 +92,12 @@ pub(crate) fn parse(source: &str) -> Result<Vec<Statement>, Error> {
     while let Some((offset, c)) = chars.next() {
         let token = match c {
             ' ' | '\t' | '\r' => continue,
+            '#' => {
+                while chars.peek().is_some_and(|(_, c)| *c != '\n') {
+                    chars.next();
+                }
+                continue;
+            }
             '\n' => Token::Newline,
             ';' => Token::End,
             'a'..='z' | 'A'..='Z' | '_' => {
@@ -91,9 +127,10 @@ pub(crate) fn parse(source: &str) -> Result<Vec<Statement>, Error> {
                             break;
                         }
                         '\\' => {
-                            let (_, escaped) = chars
-                                .next()
-                                .ok_or_else(|| syntax(at, "unfinished escape"))?;
+                            let (_, escaped) = chars.next().ok_or_else(|| {
+                                *incomplete = true;
+                                syntax(at, "unfinished escape")
+                            })?;
                             text.push(match escaped {
                                 'n' => '\n',
                                 'r' => '\r',
@@ -110,6 +147,7 @@ pub(crate) fn parse(source: &str) -> Result<Vec<Statement>, Error> {
                     }
                 }
                 if !closed {
+                    *incomplete = true;
                     return Err(syntax(offset, "unterminated string"));
                 }
                 Token::Str(text)
@@ -145,10 +183,11 @@ pub(crate) fn parse(source: &str) -> Result<Vec<Statement>, Error> {
         tokens,
         pos: 0,
         recursion: 0,
+        incomplete,
     };
     parser.statements(false, 0)
 }
-impl Parser {
+impl Parser<'_> {
     fn separators(&mut self) {
         while self.eat(&Token::End) || self.eat(&Token::Newline) {}
     }
@@ -160,7 +199,97 @@ impl Parser {
         let mut statements = Vec::new();
         parser.separators();
         while parser.token() != &Token::Eof && !(block && parser.token() == &Token::Symbol('}')) {
-            if parser.eat(&Token::Name("if".into())) {
+            let offset = parser.offset();
+            if parser.eat(&Token::Name("for".into())) {
+                let name = parser.name()?;
+                if crate::reserved(&name) {
+                    return Err(syntax(offset, "reserved loop binding"));
+                }
+                parser.expect(Token::Name("in".into()))?;
+                let collection = parser.expr(0)?;
+                parser.expect(Token::Symbol('{'))?;
+                let body = parser.statements(true, depth + 1)?;
+                parser.expect(Token::Symbol('}'))?;
+                statements.push(Statement::For {
+                    name,
+                    collection,
+                    body,
+                    offset,
+                });
+            } else if parser.eat(&Token::Name("fn".into())) {
+                if block {
+                    return Err(syntax(offset, "functions must be declared at top level"));
+                }
+                let name = parser.name()?;
+                if crate::reserved(&name)
+                    || matches!(
+                        name.as_str(),
+                        "len"
+                            | "contains"
+                            | "keys"
+                            | "join"
+                            | "split"
+                            | "parse_int"
+                            | "starts_with"
+                            | "ends_with"
+                            | "trim"
+                            | "lower"
+                            | "upper"
+                            | "replace"
+                            | "append"
+                            | "slice"
+                            | "reverse"
+                            | "get"
+                            | "range"
+                            | "abs"
+                            | "min"
+                            | "max"
+                            | "format"
+                    )
+                {
+                    return Err(syntax(offset, "reserved function name"));
+                }
+                parser.expect(Token::Symbol('('))?;
+                let mut params = Vec::new();
+                if !parser.eat(&Token::Symbol(')')) {
+                    loop {
+                        let param = parser.name()?;
+                        if crate::reserved(&param) {
+                            return Err(syntax(offset, "reserved parameter name"));
+                        }
+                        params.push(param);
+                        if parser.eat(&Token::Symbol(')')) {
+                            break;
+                        }
+                        parser.expect(Token::Symbol(','))?;
+                    }
+                }
+                parser.expect(Token::Symbol('{'))?;
+                let body = parser.statements(true, depth + 1)?;
+                parser.expect(Token::Symbol('}'))?;
+                if !matches!(
+                    body.last(),
+                    Some(Statement::Expression { binding: None, .. })
+                ) {
+                    return Err(syntax(offset, "function requires a final expression"));
+                }
+                statements.push(Statement::Function {
+                    name,
+                    params,
+                    body,
+                    offset,
+                });
+            } else if matches!(parser.token(), Token::Name(_))
+                && parser
+                    .tokens
+                    .get(parser.pos + 1)
+                    .is_some_and(|(_, t)| t == &Token::Op("=".into()))
+            {
+                let name = parser.name()?;
+                parser.expect(Token::Op("=".into()))?;
+                let expr = parser.expr(0)?;
+                statements.push(Statement::Assign { name, expr, offset });
+            } else if parser.eat(&Token::Name("if".into())) {
                 let condition = parser.expr(0)?;
                 parser.expect(Token::Symbol('{'))?;
                 let yes = parser.statements(true, depth + 1)?;
@@ -179,7 +308,9 @@ impl Parser {
                 statements.push(Statement::If { condition, yes, no });
             } else {
                 let offset = parser.offset();
+                let mut mutable = false;
                 let binding = if parser.eat(&Token::Name("let".into())) {
+                    mutable = parser.eat(&Token::Name("mut".into()));
                     let name = parser.name()?;
                     if crate::reserved(&name) {
                         return Err(syntax(offset, "reserved binding name"));
@@ -192,6 +323,7 @@ impl Parser {
                 let expr = parser.expr(0)?;
                 statements.push(Statement::Expression {
                     binding,
+                    mutable,
                     expr,
                     offset,
                 });
@@ -206,12 +338,17 @@ impl Parser {
         Ok(statements)
     }
 }
-struct Parser {
+struct Parser<'a> {
     tokens: Vec<(usize, Token)>,
     pos: usize,
     recursion: usize,
+    incomplete: &'a mut bool,
 }
-impl Parser {
+impl Parser<'_> {
+    fn expected(&mut self, message: impl Into<String>) -> Error {
+        *self.incomplete |= self.token() == &Token::Eof;
+        syntax(self.offset(), message)
+    }
     fn token(&self) -> &Token {
         &self.tokens[self.pos].1
     }
@@ -230,7 +367,7 @@ impl Parser {
         if self.eat(&token) {
             Ok(())
         } else {
-            Err(syntax(self.offset(), format!("expected {token:?}")))
+            Err(self.expected(format!("expected {token:?}")))
         }
     }
     fn name(&mut self) -> Result<String, Error> {
@@ -238,7 +375,7 @@ impl Parser {
             self.pos += 1;
             Ok(name)
         } else {
-            Err(syntax(self.offset(), "expected name"))
+            Err(self.expected("expected name"))
         }
     }
     fn node(&self, offset: usize, depth: usize, kind: Kind) -> Result<Expr, Error> {
@@ -268,6 +405,9 @@ impl Parser {
         // syntax by removing only newlines within expression delimiters.
         if matches!(token, Token::Symbol('(' | '[' | '{')) {
             self.group_newlines();
+        }
+        if token == Token::Eof {
+            return Err(self.expected("expected expression"));
         }
         self.pos += 1;
         let mut left = match token {
@@ -321,7 +461,7 @@ impl Parser {
                                 self.pos += 1;
                                 s
                             }
-                            _ => return Err(syntax(at, "expected object key")),
+                            _ => return Err(self.expected("expected object key")),
                         };
                         if keys.insert(key.clone(), ()).is_some() {
                             return Err(syntax(at, "duplicate object key"));
@@ -360,20 +500,25 @@ impl Parser {
                 self.group_newlines();
                 self.pos += 1;
                 let name = match &left.kind {
-                    Kind::Name(n) if n == "print" => n.clone(),
+                    Kind::Name(n) => n.clone(),
                     Kind::Field(base, n)
                         if matches!(&base.kind, Kind::Name(s) if s == "scope")
                             && matches!(n.as_str(), "operations" | "invoke") =>
                     {
                         format!("scope.{n}")
                     }
-                    _ => return Err(syntax(offset, "only builtin calls are supported")),
+                    _ => return Err(syntax(offset, "only named calls are supported")),
                 };
                 let args = self.arguments(')')?;
                 let expected = match name.as_str() {
-                    "print" => 1,
+                    "print" | "len" | "keys" | "parse_int" | "trim" | "lower" | "upper"
+                    | "reverse" | "abs" | "format" => 1,
+                    "contains" | "join" | "split" | "starts_with" | "ends_with" | "append"
+                    | "get" | "range" | "min" | "max" => 2,
+                    "replace" | "slice" => 3,
                     "scope.operations" => 0,
-                    _ => 3,
+                    "scope.invoke" => 3,
+                    _ => args.len(),
                 };
                 if args.len() != expected {
                     return Err(syntax(offset, "wrong number of arguments"));

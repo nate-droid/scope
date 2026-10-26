@@ -18,7 +18,18 @@
 The root Cargo workspace selects `scope-workbench` as its default member:
 `cargo run` opens its shell. `cargo run -p scope-script -- FILE` runs a saved
 Script file; `cargo run -p scope-ide` runs the host CLI without the workbench's
-Script runner. See [getting started](getting-started.md).
+Script runner. See the [Scope tutorial](../TUTORIAL.md).
+
+## Entry points and interaction surfaces
+
+The default `scope` executable offers a line-oriented shell and, with its default
+`tui` feature, the retained `workspace` editor. The legacy `tui` browser is a
+separate surface. `scope-terminal` supplies terminal primitives; host-owned pane
+and command integration lives in `scope-ide`. A frontend does not create new
+execution authority: the workbench supplies its pure Script runner explicitly.
+
+The standalone Script executable instead reads a saved file or starts its own
+stateful REPL. It does not share shell scratches or workspace editor drafts.
 
 ## Discovery is not execution authority
 
@@ -48,10 +59,19 @@ session are distinct state owners. Bare `open` selects the App document;
 `:scope open` selects a shell buffer. `context` exposes identities, revisions,
 and command targets. Changing source or target can invalidate captured requests.
 
+The retained workspace adds local editor drafts over committed scratches.
+Ctrl-S commits a changed draft to memory; Ctrl-C cancels it. A Script run is
+blocked while any editor draft is dirty, including an unselected scratch's draft.
+F5 runs the selected committed Script without changing the independently bound
+semantic target. Retained results own their captured source text, identity, and
+revision; later edits do not rewrite old evidence. Result history is not disk
+persistence. The [tutorial](../TUTORIAL.md#interactive-workspace) describes the
+controls and current limits.
+
 No downstream interactive evaluator is registered by the stock IDE shell.
 The default workbench separately installs `:scope script run` for pure Script
-scratch execution; this does not install a language session or semantic authority. Downstream hosts can register
-one and explicitly select a session. Script's standalone CLI instead uses
+scratch execution; this does not install a language session or semantic authority.
+Downstream hosts can register an evaluator and explicitly select a session. Script's standalone CLI instead uses
 `NoHost`; its semantic adapters and shell runner require explicit installation
 and authorization. See [Scope Script](scope-script.md).
 
@@ -66,7 +86,8 @@ conflicts but applies multiple files sequentially, not atomically.
 Agent/model integration and the browsing TUI are optional. Agent execution uses
 a bounded decision loop; the stock CLI/shell agent policy denies writes. There
 is no dynamic language-plugin loader or complete autonomous compile/test/review
-workflow. The TUI is not a full editor.
+workflow. The legacy TUI is a browser; the retained workspace is an editor with
+bounded actions and output, not a full IDE.
 
 ## Extension points and repository map
 
@@ -90,5 +111,5 @@ remain responsible for domain semantics, not Scope's approval policy. The
 [interoperability guide](design/INTEROPERABILITY.md) explains the limits of
 structural compatibility.
 
-For integration details, see the [Downstream Guide](../DOWNSTREAM_GUIDE.md),
-[Harness Guide](../HARNESS_GUIDE.md), and [Security Policy](../SECURITY.md).
+For integration details, see the [Downstream Guide](../docs/integration.md),
+[Harness Guide](../docs/agents.md), and [Security Policy](../SECURITY.md).

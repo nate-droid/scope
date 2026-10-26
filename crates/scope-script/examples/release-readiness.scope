@@ -1,0 +1,50 @@
+# Release readiness: edit this local checklist before a release meeting.
+# Report blocking checks and estimate the remaining review effort.
+fn summarize(checks) {
+    let mut passed = 0
+    let mut blocked = 0
+    let mut minutes = 0
+    for check in checks {
+        if check.ready {
+            passed = passed + 1
+        } else {
+            blocked = blocked + 1
+            minutes = minutes + check.review_minutes
+        }
+    }
+    {passed: passed, blocked: blocked, review_minutes: minutes}
+}
+
+fn report_component(component) {
+    let summary = summarize(component.checks)
+    print({component: component.name, summary: summary})
+    for pending in component.checks {
+        if !pending.ready {
+            print({owner: pending.owner, task: pending.name})
+        }
+    }
+    summary
+}
+
+let components = [
+    {name: "cli", checks: [
+        {name: "smoke test", owner: "Lee", ready: true, review_minutes: 10},
+        {name: "help text", owner: "Sam", ready: false, review_minutes: 15}
+    ]},
+    {name: "workbench", checks: [
+        {name: "scratch run", owner: "Ari", ready: true, review_minutes: 10},
+        {name: "release notes", owner: "Jo", ready: false, review_minutes: 20}
+    ]}
+]
+let mut blockers = 0
+let mut review_minutes = 0
+for component in components {
+    let status = report_component(component)
+    blockers = blockers + status.blocked
+    review_minutes = review_minutes + status.review_minutes
+}
+if blockers == 0 {
+    print({release: "ready"})
+} else {
+    print({release: "hold", blockers: blockers, review_minutes: review_minutes})
+}

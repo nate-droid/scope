@@ -1,0 +1,8 @@
+# Edit this input, then rerun the file or paste it into a Script scratch.
+let tasks = split("build,test,review", ",")
+let report = {count: len(tasks), tasks: join(tasks, " → ")}
+if contains(tasks, "test") {
+    print(report)
+} else {
+    print({warning: "Add a test task", report: report})
+}

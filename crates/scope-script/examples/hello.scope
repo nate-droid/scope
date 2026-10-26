@@ -1,0 +1,4 @@
+# A complete program: no project, providers, or permissions needed.
+let price = 7
+let quantity = 6
+print({total: price * quantity})

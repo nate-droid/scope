@@ -176,8 +176,11 @@ Your small toolbox:
 - Addition is integer arithmetic, **not string concatenation**.
 
 There are no loops, user-defined functions, recursion, mutation, imports, or
-collection methods such as `map` or `length`. The only built-in calls are
-`print`, `scope.operations`, and `scope.invoke`; the last two ask a host for help.
+collection methods such as `map` or `length`. Pure built-in functions now include
+`len`, `contains`, `keys`, `join`, and `split`, alongside `print`.
+`scope.operations` and `scope.invoke` ask a host for help. See the
+[small standard library](../scope-script.md#small-pure-standard-library) for contracts.
+Use `#` for line comments.
 Reusable computations currently mean bindings within a run or repeated source,
 not function definitions. A Fibonacci exercise must be a short, manually unrolled
 sequence of bindings, not a recursive function disguised as supported syntax.
@@ -287,7 +290,7 @@ exit, even if a command appears in history.
 Saving is a separate, authorized workflow: `scratch destination`, `scratch save`,
 and `scratch promote` are not evaluation commands. The default shell is read-only;
 this workshop does not require changing that. See the
-[workspace editing guide](../../INTERACTIVE_SESSIONS.md#workspace-editing) if you
+[workspace editing guide](../../docs/integration.md) if you
 later choose to explore explicit checked saves.
 
 **Try it:**
@@ -742,10 +745,11 @@ was not tested. No language or host implementation was changed to make an
 exercise work.
 
 The practical constraints shaping this workshop were the lack of functions,
-iteration, comments, imports, runtime input, and a general standard library; the
+iteration, imports, runtime input, and a general standard library; the
 absence of providers in pure runners; host-specific formatting and catalogs; and
 the declaration fixture's intentionally partial analysis. Keep those separate
-from new observations you make yourself.
+from new observations you make yourself. Since the original workshop, S10 added
+line comments and the small pure helper library described above.
 
 For more detail, see the [Script guide](../scope-script.md),
-[scratch editing](../scratch-editing.md), and [example catalog](../../examples/README.md).
+[scratch editing](../../TUTORIAL.md), and [example catalog](../../examples/README.md).

@@ -9,6 +9,10 @@ description = "Default unprivileged Scope Script workbench"
 name = "scope"
 path = "src/main.rs"
 
+[features]
+default = ["tui"]
+tui = ["scope-ide/tui"]
+
 [dependencies]
 scope-ide = { path = "../scope-ide" }
 scope-script = { path = "../scope-script" }

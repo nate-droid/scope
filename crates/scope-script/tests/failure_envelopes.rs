@@ -161,7 +161,7 @@ fn check_envelopes(check_presentation: bool) {
                             assert_eq!(interpreter.eval("null", &mut host).unwrap(), Value::Null);
                             let error = interpreter.eval("outcome.value", &mut host).unwrap_err();
                             assert!(matches!(error.kind, ErrorKind::Runtime(ref message)
-                                if message == "missing object field"));
+                                if message.starts_with("missing object field ")));
                             assert_eq!(value_json(&report), json, "{case}");
                         }
                     }
@@ -207,7 +207,7 @@ fn check_envelopes(check_presentation: bool) {
                         assert!(!fields.contains_key("value"), "{case}: {outcome:?}");
                         let error = interpreter.eval("outcome.value", &mut host).unwrap_err();
                         assert!(
-                            matches!(error.kind, ErrorKind::Runtime(ref message) if message == "missing object field")
+                            matches!(error.kind, ErrorKind::Runtime(ref message) if message.starts_with("missing object field "))
                         );
                     }
                 }

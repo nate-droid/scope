@@ -9,9 +9,36 @@ pub use agent_semantics::{
     TerminalSemanticConfig, run_terminal_agent_model,
     run_terminal_agent_model_with_projected_arguments,
 };
+#[cfg(feature = "agent")]
+mod retained_agent;
+#[cfg(feature = "agent")]
+pub use retained_agent::{
+    RetainedScratchAgentConfig, RetainedScratchAgentRun, run_retained_scratch_agent,
+};
 mod buffer_editor;
+mod script_context;
+
+/// Read-only admission of a complete accumulated Script source snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ScriptSnapshotAdmission {
+    /// Complete and safe to replay in full, with no print or host effects.
+    CompletePure,
+    /// Complete, but full-snapshot execution requires explicit user consent.
+    ExplicitRunRequired,
+    Incomplete,
+    Invalid(String),
+}
+pub mod composition;
+pub mod workspace_command;
+#[cfg(feature = "tui")]
+mod workspace_ui;
+pub use composition::{
+    BindingTransition, Composition, CompositionReport, CompositionStep, SelectedMetadata,
+};
 mod context;
 mod downstream;
+#[cfg(all(test, feature = "agent"))]
+mod retained_agent_shell_tests;
 use context::{print_app_target, print_buffer_target, print_source_context};
 pub use downstream::{DownstreamError, DownstreamOutcome};
 #[cfg(feature = "tools")]
@@ -38,9 +65,9 @@ struct AgentConfig;
 const AGENT_FEATURE_REQUIRED: &str = "agent support is disabled; rebuild with `--features agent` (downstream hosts: enable `scope-ide/agent`)";
 
 #[cfg(feature = "agent")]
-const DEFAULT_AGENT_MODEL: &str = "apple-foundationmodel";
+const DEFAULT_AGENT_MODEL: &str = "qwen3-30b-a3b";
 #[cfg(feature = "agent")]
-const DEFAULT_AGENT_BASE_URL: &str = "http://localhost:11434/v1";
+const DEFAULT_AGENT_BASE_URL: &str = "http://localhost:1234/v1";
 
 pub fn run_from_env() -> Result<(), Box<dyn std::error::Error>> {
     run_from_args(std::env::args().skip(1))
@@ -84,6 +111,34 @@ pub fn run_with_registry_and_command(
             None,
             Some(command),
         ),
+    }
+}
+
+/// Standard launcher with both a read-only command host (including contextual
+/// actions) and independently authorized contracted semantic editing.
+/// The editing contract lives with the workspace's retained proposal controller.
+/// Only shell and ordinary workspace startup support this configuration.
+#[cfg(feature = "agent")]
+pub fn run_with_registry_and_command_and_editing(
+    args: impl IntoIterator<Item = String>,
+    registry: LanguageRegistry,
+    command: &mut dyn ReadOnlyCommand,
+    editing: InteractiveEditConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match Args::parse(args)? {
+        ParseResult::Help => {
+            print_usage();
+            Ok(())
+        }
+        ParseResult::Run(args) => {
+            let supported = matches!(args.command, Command::Shell);
+            #[cfg(feature = "tui")]
+            let supported = supported || matches!(args.command, Command::Workspace);
+            if !supported {
+                return Err("interactive editing configuration requires shell or workspace".into());
+            }
+            run_configured(args, registry, Some(editing), Some(command))
+        }
     }
 }
 
@@ -226,6 +281,20 @@ fn run_configured(
             if !response.content.ends_with('\n') {
                 println!();
             }
+        }
+        #[cfg(feature = "tui")]
+        Command::Workspace => {
+            let mut app = App::builder(workspace)
+                .language_registry(languages.clone())
+                .build()?;
+            workspace_ui::run(
+                &mut app,
+                host_command,
+                #[cfg(feature = "agent")]
+                editing,
+                #[cfg(feature = "agent")]
+                args.agent_config,
+            )?;
         }
         #[cfg(feature = "tui")]
         Command::Tui => {
@@ -387,11 +456,103 @@ fn run_shell_inner(
     )
 }
 
+/// Host-owned per-invocation semantic agent configuration. No authority is inferred
+/// from registration or Read classification. Native services are trusted; resource
+/// limits beyond agent iteration/operation budgets remain the host's responsibility.
+#[cfg(feature = "agent")]
+pub struct SemanticAgentBinding<'a> {
+    pub service: &'a dyn scope_language::LanguageService,
+    pub allowed_operation_ids: &'a [String],
+    pub authorize:
+        &'a mut dyn for<'b> FnMut(crate::tool::semantic::SemanticAuthorization<'b>) -> bool,
+    pub limits: crate::agent::AgentLimits,
+    /// Optional sensitive protocol sink, bounded by max_conversation_bytes.
+    /// Also receives trace on model failure; never printed by the shell.
+    pub trace: Option<&'a mut dyn Write>,
+    /// None uses the shell's existing model and endpoint configuration.
+    pub model: Option<&'a mut dyn crate::agent::DecisionModel>,
+    /// Called once for a completed loop, including budget/correction stops.
+    /// Copy any desired attribution/trace data before this invocation-local borrow ends.
+    pub observe: &'a mut dyn FnMut(&RetainedScratchAgentRun<'_>),
+}
+
+/// Owned output of a direct Script invocation, independent of live buffers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScriptPresentation {
+    pub source_identity: scope_language::SourceId,
+    pub source_revision: scope_language::RevisionId,
+    pub source_text: String,
+    /// Formatted values in execution order, including prints before a failure.
+    pub prints: Vec<String>,
+    pub final_value: Option<String>,
+    pub error: Option<ScriptPresentationError>,
+}
+
+/// An interpreter failure located in the presentation's source snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScriptPresentationError {
+    pub message: String,
+    pub byte_offset: usize,
+    /// One-based line and column; columns count Unicode scalars.
+    pub line: usize,
+    pub column: usize,
+}
+
 /// A trusted host operation borrowing the live document for this invocation only.
 /// No workspace or runtime access is supplied. Hosts remain responsible for
 /// concrete operation authorization and for the purity of their native code.
 /// Errors are displayed by the shell; they do not alter runtime lifecycle.
+/// Syntax-only reduction result. Preconditions are not semantic validation evidence.
+#[derive(Clone, Debug)]
+pub struct ScriptReduction {
+    pub original: scope_language::SourceSnapshot,
+    pub edits: Vec<crate::text::TextEdit>,
+    pub rule: String,
+    pub checked: Vec<String>,
+}
+
 pub trait ReadOnlyCommand {
+    /// Reduce an immutable evaluation snapshot without execution, operations or IO.
+    /// The IDE separately binds the returned edits to the original scratch owner.
+    fn reduce_script_snapshot(
+        &self,
+        _snapshot: scope_language::SourceSnapshot,
+    ) -> Result<ScriptReduction, String> {
+        Err("Script reduction is unsupported by this host".into())
+    }
+    /// Parse and classify the entire accumulated Script snapshot without execution.
+    /// Purity must account for all prior statements and transitive function calls:
+    /// print and host calls must never be admitted for automatic replay.
+    /// Unsupported hosts deny by default. No persistent interpreter is supplied.
+    fn admit_script_snapshot(&self, _source: &str) -> ScriptSnapshotAdmission {
+        ScriptSnapshotAdmission::Invalid(
+            "Script snapshot admission is unsupported by this host".into(),
+        )
+    }
+    /// Contextual F1 shortcuts installed by the ordinary workspace launcher.
+    /// At most 64 registrations are accepted, using `WorkspaceTui`'s metadata
+    /// validation. Fixed literal arguments only; registration grants no authority.
+    /// Ignored by shell and non-workspace commands; existing hosts default to none.
+    #[cfg(feature = "tui")]
+    fn downstream_actions(&self) -> Vec<crate::tui::DownstreamAction> {
+        Vec::new()
+    }
+
+    /// Bounded declarative workflows exposed only as `:scope NAME COMMAND`.
+    /// Registrations are validated and snapshotted before the shell starts.
+    fn compositions(&self) -> &[composition::Composition] {
+        &[]
+    }
+    /// Receives owned metadata snapshots after a successful or canceled composition.
+    /// Not called on errors; this notification grants no operation authorization.
+    fn composition_completed(&mut self, _report: &composition::CompositionReport) {}
+
+    /// Opt in to the normal agent command against the independently bound scratch.
+    /// Returning Some forbids App/editor/disk fallback, even on resolution failure.
+    #[cfg(feature = "agent")]
+    fn semantic_agent(&mut self) -> Option<SemanticAgentBinding<'_>> {
+        None
+    }
     /// Explicit namespaces exposed by `:scope downstream`. At most 64 names,
     /// each 1–64 ASCII bytes matching `[a-z][a-z0-9_-]*`; duplicates are errors.
     /// Metadata is snapshotted and validated once before the shell starts.
@@ -414,6 +575,22 @@ pub trait ReadOnlyCommand {
     ) -> Result<DownstreamOutcome, DownstreamError> {
         Ok(DownstreamOutcome::Unhandled)
     }
+    /// Whether this host explicitly supports target-free, structured Script execution.
+    fn supports_direct_script(&self) -> bool {
+        false
+    }
+
+    /// Executes only the supplied scratch, without a semantic target or output writer.
+    /// Unsupported hosts deny by default, independently of the support query.
+    /// Dispatch/validation failures are returned; interpreter failures belong in
+    /// the owned presentation alongside any prints produced before failure.
+    fn invoke_script_direct(
+        &mut self,
+        _source: &crate::scratch::ScratchBuffer,
+    ) -> Result<ScriptPresentation, Box<dyn std::error::Error>> {
+        Err("direct script execution is unsupported by this read-only host command".into())
+    }
+
     /// Runs selected scratch source without an App document or active session.
     /// The source borrow is invocation-local. Hosts must explicitly authorize
     /// execution and remain responsible for all native effects.
@@ -438,6 +615,24 @@ pub trait ReadOnlyCommand {
         output: &mut dyn Write,
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.invoke_script(source, output)
+    }
+
+    /// Continuous-context presentation. Legacy hosts retain their existing output.
+    fn invoke_script_context(
+        &mut self,
+        source: &crate::scratch::ScratchBuffer,
+        target: Option<&crate::scratch::ScratchBuffer>,
+        output: &mut dyn Write,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.invoke_script_with_target(source, target, output)
+    }
+
+    /// Inspect the latest owned Script record without evaluating live source.
+    fn inspect_script_evidence(
+        &self,
+        _output: &mut dyn Write,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        Err("Script evidence inspection is unsupported by this host".into())
     }
 
     /// Inspects the selected scratch's current editor draft without evaluation.
@@ -539,6 +734,104 @@ pub fn run_terminal_with_session_and_command(
     )
 }
 
+/// Temporarily runs the normal terminal shell using caller-owned application state.
+///
+/// Returns on `:scope quit`, terminal EOF, or error without clearing or dropping
+/// the supplied session. Explicit session commands may still replace, reset, or
+/// clear it. App changes and runtime state remain available to the caller.
+/// `command` optionally installs the same host hooks as the owned shell.
+///
+/// The caller must suspend its terminal UI and release all terminal input readers
+/// before calling, then restore its UI even if this returns an error. This uses
+/// ambient terminal stdin/stdout, the existing raw-mode input reader, and history
+/// configuration; it does not manage an alternate screen or resume a TUI.
+/// Scratch buffers, pending proposals, inspection state, and submission capture
+/// are local to this invocation and are discarded on return (never auto-saved).
+/// No provider or editing authority is installed implicitly; agent configuration
+/// uses the same defaults as `run_terminal_with_session_and_command`.
+pub fn run_terminal_borrowed(
+    app: &mut App,
+    session: &mut InteractiveSession,
+    command: Option<&mut dyn ReadOnlyCommand>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io;
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return Err("terminal shell requires terminal stdin and stdout".into());
+    }
+    run_shell_borrowed(
+        app,
+        session,
+        #[cfg(feature = "agent")]
+        AgentConfig::local(DEFAULT_AGENT_MODEL, DEFAULT_AGENT_BASE_URL),
+        #[cfg(not(feature = "agent"))]
+        AgentConfig,
+        io::stdin().lock(),
+        io::stdout(),
+        true,
+        #[cfg(feature = "agent")]
+        None,
+        command,
+    )
+}
+
+/// Runs the normal borrowed terminal shell with caller-owned scratch state.
+/// Scratch identities, revisions, selection, binding and closed-target state survive
+/// quit, EOF and errors. No save, evaluation or authorization is implicit.
+pub fn run_terminal_borrowed_with_sources(
+    app: &mut App,
+    session: &mut InteractiveSession,
+    command: Option<&mut dyn ReadOnlyCommand>,
+    sources: &mut ScratchBuffers,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io;
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return Err("terminal shell requires terminal stdin and stdout".into());
+    }
+    run_shell_borrowed_with_sources(
+        app,
+        session,
+        #[cfg(feature = "agent")]
+        AgentConfig::local(DEFAULT_AGENT_MODEL, DEFAULT_AGENT_BASE_URL),
+        #[cfg(not(feature = "agent"))]
+        AgentConfig,
+        io::stdin().lock(),
+        io::stdout(),
+        true,
+        #[cfg(feature = "agent")]
+        None,
+        command,
+        sources,
+    )
+}
+
+/// Stream-driven equivalent of the retained borrowed terminal shell. Uses only
+/// supplied I/O, without terminal history or ambient readers. Session and source
+/// mutations made before an I/O error remain with their caller-owned owners.
+pub fn run_borrowed_with_sources(
+    app: &mut App,
+    session: &mut InteractiveSession,
+    command: Option<&mut dyn ReadOnlyCommand>,
+    sources: &mut ScratchBuffers,
+    input: impl BufRead,
+    output: impl Write,
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_shell_borrowed_with_sources(
+        app,
+        session,
+        #[cfg(feature = "agent")]
+        AgentConfig::local(DEFAULT_AGENT_MODEL, DEFAULT_AGENT_BASE_URL),
+        #[cfg(not(feature = "agent"))]
+        AgentConfig,
+        input,
+        output,
+        false,
+        #[cfg(feature = "agent")]
+        None,
+        command,
+        sources,
+    )
+}
+
 /// Runs the generic shell with a host-created application and session owner.
 ///
 /// Takes ownership of both. REPL and explicit buffer evaluation use this exact
@@ -599,13 +892,98 @@ fn run_shell_owned(
     mut app: App,
     mut session: InteractiveSession,
     #[cfg_attr(not(feature = "agent"), allow(unused_variables))] agent_config: AgentConfig,
+    input: impl BufRead,
+    output: impl Write,
+    interactive: bool,
+    #[cfg(feature = "agent")] editing: Option<InteractiveEditConfig>,
+    host_command: Option<&mut dyn ReadOnlyCommand>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_shell_borrowed(
+        &mut app,
+        &mut session,
+        agent_config,
+        input,
+        output,
+        interactive,
+        #[cfg(feature = "agent")]
+        editing,
+        host_command,
+    )?;
+    session.clear()?;
+    Ok(())
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Shell orchestration accepts independent host state, I/O, and optional feature configuration"
+)]
+fn run_shell_borrowed(
+    app: &mut App,
+    session: &mut InteractiveSession,
+    #[cfg_attr(not(feature = "agent"), allow(unused_variables))] agent_config: AgentConfig,
+    input: impl BufRead,
+    output: impl Write,
+    interactive: bool,
+    #[cfg(feature = "agent")] editing: Option<InteractiveEditConfig>,
+    host_command: Option<&mut dyn ReadOnlyCommand>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_shell_borrowed_with_sources(
+        app,
+        session,
+        agent_config,
+        input,
+        output,
+        interactive,
+        #[cfg(feature = "agent")]
+        editing,
+        host_command,
+        &mut ScratchBuffers::default(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_shell_borrowed_with_sources(
+    app: &mut App,
+    session: &mut InteractiveSession,
+    agent_config: AgentConfig,
+    input: impl BufRead,
+    output: impl Write,
+    interactive: bool,
+    #[cfg(feature = "agent")] editing: Option<InteractiveEditConfig>,
+    host_command: Option<&mut dyn ReadOnlyCommand>,
+    scratches: &mut ScratchBuffers,
+) -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(feature = "agent")]
+    let mut proposals = source_proposals::Proposals::configured(editing)?;
+    #[cfg(not(feature = "agent"))]
+    let mut proposals = source_proposals::Proposals::default();
+    run_shell_with_proposals(
+        app,
+        session,
+        agent_config,
+        input,
+        output,
+        interactive,
+        host_command,
+        scratches,
+        &mut proposals,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_shell_with_proposals(
+    #[cfg_attr(not(feature = "tools"), allow(unused_mut))] mut app: &mut App,
+    mut session: &mut InteractiveSession,
+    #[cfg_attr(not(feature = "agent"), allow(unused_variables))] agent_config: AgentConfig,
     mut input: impl BufRead,
     mut output: impl Write,
     interactive: bool,
-    #[cfg(feature = "agent")] editing: Option<InteractiveEditConfig>,
     mut host_command: Option<&mut dyn ReadOnlyCommand>,
+    mut scratches: &mut ScratchBuffers,
+    source_proposals: &mut source_proposals::Proposals,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let downstream_namespaces = downstream::registrations(host_command.as_deref())?;
+    let compositions = composition::registrations(host_command.as_deref())?;
     let max_history = if interactive {
         std::env::var("SCOPE_HISTORY_LIMIT")
             .ok()
@@ -642,16 +1020,12 @@ fn run_shell_owned(
     )?;
     writeln!(
         output,
-        "Script: :scope script run evaluates the selected scratch (default workbench); standalone: cargo run -p scope-script -- --help"
+        "Script: :scope script enter / leave selects continuous context; :scope script run evaluates selected scratch. Standalone: cargo run -p scope-script -- --help"
     )?;
     let mut proposal: Option<crate::workspace::Proposal> = None;
-    let mut scratches = ScratchBuffers::default();
     #[cfg(feature = "tools")]
     let mut inspections = inspection::Inspections::default();
-    #[cfg(feature = "agent")]
-    let mut source_proposals = source_proposals::Proposals::configured(editing)?;
-    #[cfg(not(feature = "agent"))]
-    let mut source_proposals = source_proposals::Proposals::default();
+
     #[cfg(feature = "agent")]
     if source_proposals.requires_evaluation() {
         writeln!(
@@ -660,16 +1034,37 @@ fn run_shell_owned(
         )?;
     }
     let mut last_submission: Option<(String, String)> = None;
+    let mut script_context = script_context::ScriptContext::default();
 
     loop {
+        source_proposals.observe(scratches);
         #[cfg(feature = "tools")]
         inspections.observe(&app);
-        write!(output, "{}> ", session.language_id().unwrap_or("scope"))?;
+        let script_active = script_context.is_active();
+        let prompt = if script_active {
+            format!("{} ", script_context.prompt().trim_end())
+        } else {
+            format!("{}> ", session.language_id().unwrap_or("scope"))
+        };
+        write!(output, "{prompt}")?;
         output.flush()?;
 
         let line = if interactive {
-            let Some(line) = crate::shell_input::read_line(&mut history, &mut output, &session)?
-            else {
+            let line = if script_active {
+                crate::shell_input::read_line_with(
+                    &mut history,
+                    &mut output,
+                    &prompt,
+                    true,
+                    |_| crate::language::Completeness::Complete,
+                    |line, cursor| {
+                        script_context.complete(line, cursor, scratches, host_command.as_deref())
+                    },
+                )?
+            } else {
+                crate::shell_input::read_line(&mut history, &mut output, &session)?
+            };
+            let Some(line) = line else {
                 break;
             };
             line
@@ -697,6 +1092,32 @@ fn run_shell_owned(
             continue;
         }
 
+        if script_context.is_active() && matches!(line.trim(), ":compact" | ":scope compact") {
+            let result = script_context.compact(
+                source_proposals,
+                &mut scratches,
+                host_command.as_deref(),
+                &mut output,
+            );
+            if let Err(error) = result {
+                writeln!(output, "error: {error}")?;
+            }
+            continue;
+        }
+        let routed_line = match script_context.route(
+            line,
+            &mut scratches,
+            host_command.as_deref(),
+            &mut output,
+        ) {
+            Ok(Some(line)) => line,
+            Ok(None) => continue,
+            Err(error) => {
+                writeln!(output, "error: {error}")?;
+                continue;
+            }
+        };
+        let line = routed_line.as_str();
         let command = match session.route(line) {
             InputRoute::Source(source) => {
                 last_submission =
@@ -714,6 +1135,36 @@ fn run_shell_owned(
         // Session controls exist only in the explicit namespace, preserving legacy parsing.
         if line == ":scope" || line.starts_with(":scope ") {
             let mut parts = command.split_whitespace();
+            if let Some(namespace) = parts.clone().next()
+                && compositions
+                    .iter()
+                    .any(|entry| entry.namespace == namespace)
+            {
+                let tokens: Vec<_> = command.split_whitespace().collect();
+                if tokens.len() == 2
+                    && let Some(entry) = compositions
+                        .iter()
+                        .find(|entry| entry.namespace == tokens[0] && entry.command == tokens[1])
+                {
+                    if let Err(error) = composition::execute(
+                        entry,
+                        &mut scratches,
+                        app.workspace(),
+                        app.languages(),
+                        &mut host_command,
+                        &mut input,
+                        &mut output,
+                    ) {
+                        writeln!(output, "error: {error}")?;
+                    }
+                } else {
+                    writeln!(
+                        output,
+                        "error: expected registered :scope {namespace} COMMAND (no arguments)"
+                    )?;
+                }
+                continue;
+            }
             match parts.next() {
                 Some("downstream") => {
                     if let Err(error) = downstream::dispatch(
@@ -950,6 +1401,20 @@ fn run_shell_owned(
                     writeln!(output, "error: {error}")?;
                 }
             }
+            Ok(ShellCommand::ScriptEvidence) => {
+                let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+                    if !line.starts_with(":scope ") {
+                        return Err("script command requires explicit :scope namespace".into());
+                    }
+                    host_command
+                        .as_deref()
+                        .ok_or("no read-only host command installed")?
+                        .inspect_script_evidence(&mut output)
+                })();
+                if let Err(error) = result {
+                    writeln!(output, "error: {error}")?;
+                }
+            }
             Ok(ShellCommand::ScriptRun) => {
                 let result = (|| -> Result<(), Box<dyn std::error::Error>> {
                     if !line.starts_with(":scope ") {
@@ -958,11 +1423,19 @@ fn run_shell_owned(
                     let callback = host_command
                         .as_deref_mut()
                         .ok_or("no read-only host command installed")?;
-                    callback.invoke_script_with_target(
-                        scratches.selected()?,
-                        scratches.semantic_target()?,
-                        &mut output,
-                    )
+                    if script_context.is_active() {
+                        callback.invoke_script_context(
+                            scratches.selected()?,
+                            scratches.semantic_target()?,
+                            &mut output,
+                        )
+                    } else {
+                        callback.invoke_script_with_target(
+                            scratches.selected()?,
+                            scratches.semantic_target()?,
+                            &mut output,
+                        )
+                    }
                 })();
                 if let Err(error) = result {
                     writeln!(output, "error: {error}")?;
@@ -1172,22 +1645,70 @@ fn run_shell_owned(
                 writeln!(output, "error: {AGENT_FEATURE_REQUIRED}")?;
             }
             #[cfg(feature = "agent")]
-            Ok(ShellCommand::Agent { request }) => match CellAgent::new(agent_config.clone()) {
-                Ok(agent) => {
-                    print_app_target(&app, &mut output)?;
-                    match run_cli_agent(&agent, &mut app, Some(&session), &request) {
-                        Ok(response) => writeln!(output, "{}", response.content)?,
-                        Err(error) => writeln!(output, "error: {error}")?,
+            Ok(ShellCommand::Agent { request }) => {
+                let binding = host_command
+                    .as_deref_mut()
+                    .and_then(|host| host.semantic_agent());
+                if let Some(binding) = binding {
+                    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+                        let source = scratches
+                            .semantic_target()?
+                            .ok_or("semantic agent requires a bound semantic target")?;
+                        // Validate before constructing or invoking even the default model.
+                        if source.language_id() != binding.service.language_id() {
+                            return Err(
+                                "semantic agent target language does not match service".into()
+                            );
+                        }
+                        let mut default_model;
+                        let model = match binding.model {
+                            Some(model) => model,
+                            None => {
+                                default_model = CellAgent::new(agent_config.clone())?;
+                                &mut default_model
+                            }
+                        };
+                        let outcome = run_retained_scratch_agent(
+                            source,
+                            binding.service,
+                            model,
+                            &request,
+                            binding.limits,
+                            RetainedScratchAgentConfig {
+                                allowed_operation_ids: binding.allowed_operation_ids,
+                                authorize: binding.authorize,
+                                trace: binding.trace,
+                            },
+                        )?;
+                        (binding.observe)(&outcome);
+                        writeln!(
+                            output,
+                            "Semantic agent: {:?}: {}",
+                            outcome.run.stop, outcome.run.content
+                        )?;
+                        Ok(())
+                    })();
+                    if let Err(error) = result {
+                        writeln!(output, "error: {error}")?;
                     }
+                    continue;
                 }
-                Err(error) => writeln!(output, "error: {error}")?,
-            },
+                match CellAgent::new(agent_config.clone()) {
+                    Ok(agent) => {
+                        print_app_target(&app, &mut output)?;
+                        match run_cli_agent(&agent, &mut app, Some(&session), &request) {
+                            Ok(response) => writeln!(output, "{}", response.content)?,
+                            Err(error) => writeln!(output, "error: {error}")?,
+                        }
+                    }
+                    Err(error) => writeln!(output, "error: {error}")?,
+                }
+            }
             Ok(ShellCommand::Quit) => break,
             Err(error) => writeln!(output, "error: {error}")?,
         }
     }
 
-    session.clear()?;
     Ok(())
 }
 
@@ -1285,6 +1806,59 @@ mod source_command_tests {
             writeln!(output, "source invoked")?;
             Ok(())
         }
+    }
+
+    #[test]
+    fn continuous_script_uses_existing_execution_dispatch() {
+        struct Runner(Vec<String>);
+        impl ReadOnlyCommand for Runner {
+            fn supports_direct_script(&self) -> bool {
+                true
+            }
+            fn admit_script_snapshot(&self, source: &str) -> ScriptSnapshotAdmission {
+                if source.contains("print") {
+                    ScriptSnapshotAdmission::ExplicitRunRequired
+                } else {
+                    ScriptSnapshotAdmission::CompletePure
+                }
+            }
+            fn invoke(
+                &mut self,
+                _: &Document,
+                _: TextRange,
+                _: &str,
+                _: &mut dyn Write,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                panic!("must use ScriptRun");
+            }
+            fn invoke_script(
+                &mut self,
+                source: &ScratchBuffer,
+                _: &mut dyn Write,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                self.0.push(source.text().to_owned());
+                Ok(())
+            }
+        }
+        let root = TempWorkspace::new("continuous-script-routing");
+        let mut host = Runner(Vec::new());
+        let mut output = Vec::new();
+        run_with_session_and_command(
+            App::new(root.workspace()).unwrap(),
+            InteractiveSession::new(),
+            &mut host,
+            std::io::Cursor::new(
+                ":scope script enter\n1\nprint(2)\n3\n:run\n:scope script leave\nquit\n",
+            ),
+            &mut output,
+        )
+        .unwrap();
+        assert_eq!(host.0, ["1", "1;\nprint(2);\n3"]);
+        assert!(
+            String::from_utf8(output)
+                .unwrap()
+                .contains("Source updated. Run required (:run, full snapshot).")
+        );
     }
 
     #[test]
@@ -1465,6 +2039,17 @@ mod source_command_tests {
                 Ok(())
             }
         }
+        let mut legacy = Legacy;
+        assert!(!legacy.supports_direct_script());
+        let mut buffers = crate::scratch::ScratchBuffers::default();
+        buffers.create("scope-script", "42");
+        assert!(
+            legacy
+                .invoke_script_direct(buffers.selected().unwrap())
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported")
+        );
         let root = TempWorkspace::new("source-command-default");
         root.write_file("target.txt", "target");
         let mut output = Vec::new();
@@ -1999,7 +2584,7 @@ fn print_languages(
 fn print_shell_help(output: &mut impl Write) -> std::io::Result<()> {
     writeln!(
         output,
-        "Discovery: languages (or :scope languages) lists analysis services, installed semantic operations, evaluators and current session. Use :scope context for source owners; :scope inspect for eligible document reads. Scratch edits stay in memory; :scope script run executes the selected scratch in the default workbench. Standalone: cargo run -p scope-script -- --help."
+        "Discovery: languages (or :scope languages) lists analysis services, installed semantic operations, evaluators and current session. Use :scope context for source owners; :scope inspect for eligible document reads. Scratch edits stay in memory; :scope script run executes selected scratch. Continuous Script: :scope script enter / leave; source appends to selected scope-script scratch, pure snapshots run automatically, effects require :run; :cancel drops pending input; :edit reuses the editor. Standalone: cargo run -p scope-script -- --help."
     )?;
     writeln!(
         output,
@@ -2041,6 +2626,7 @@ enum ShellCommand {
         full: bool,
     },
     ScriptRun,
+    ScriptEvidence,
     Host {
         operation: String,
         selection: TextRange,
@@ -2164,10 +2750,15 @@ shell_commands! { line, trimmed, parts, command;
                 Ok(result)
             },
             "script" => {
-                if parts.next() != Some("run") || parts.next().is_some() {
-                    return Err(ShellError::UnexpectedArgument("usage: :scope script run".into()));
+                let command = match parts.next() {
+                    Some("run") => Self::ScriptRun,
+                    Some("evidence") => Self::ScriptEvidence,
+                    _ => return Err(ShellError::UnexpectedArgument("usage: :scope script run | evidence".into())),
+                };
+                if parts.next().is_some() {
+                    return Err(ShellError::UnexpectedArgument("usage: :scope script run | evidence".into()));
                 }
-                Ok(Self::ScriptRun)
+                Ok(command)
             },
             "host" | "run" => {
                 let usage = || ShellError::UnexpectedArgument(
@@ -2669,6 +3260,8 @@ enum Command {
     },
     #[cfg(feature = "tui")]
     Tui,
+    #[cfg(feature = "tui")]
+    Workspace,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2821,8 +3414,12 @@ impl Args {
                     break;
                 }
                 #[cfg(feature = "tui")]
-                "tui" => {
-                    command = Some(Command::Tui);
+                "tui" | "workspace" => {
+                    command = Some(if arg == "workspace" {
+                        Command::Workspace
+                    } else {
+                        Command::Tui
+                    });
                     if let Some(root) = args.next() {
                         if workspace_root.is_some() {
                             return Err(CliError::UnexpectedArgument(root));
@@ -2968,7 +3565,9 @@ fn print_usage() {
     #[cfg(not(feature = "agent"))]
     println!("{AGENT_FEATURE_REQUIRED}");
     #[cfg(feature = "tui")]
-    println!("  tui [workspace]            Start the experimental ratatui interface");
+    println!(
+        "  tui [workspace]            Start the experimental ratatui interface\n  workspace [path]           Scratch editor, F4 commands/output, F2 shell"
+    );
 }
 
 #[cfg(test)]
@@ -2989,7 +3588,7 @@ mod tests {
             vec!["ask", "explain"],
             vec!["--agent-api-key-env", "SCOPE_MISSING_KEY"],
             vec!["--agent-model", "test-model"],
-            vec!["--agent-base-url", "http://localhost:11434/v1"],
+            vec!["--agent-base-url", "http://localhost:1234/v1"],
             vec!["--agent-openai"],
         ] {
             let error = Args::parse(args.into_iter().map(String::from)).unwrap_err();
@@ -3326,7 +3925,7 @@ mod tests {
                 .all(|interface| !interface.contains("chat"))
         );
         let expected = format!(
-            "Scope — {}\nType `help` for commands, `quit` to exit. Workspace files change only on explicit commands.\nDiscover: :scope languages | :scope session | :scope context | :scope inspect\nScratch edits: :scope scratch new <language-id>, then :scope edit (in memory; not evaluation).\nScript: :scope script run evaluates the selected scratch (default workbench); standalone: cargo run -p scope-script -- --help\nscope> {}\nscope> ",
+            "Scope — {}\nType `help` for commands, `quit` to exit. Workspace files change only on explicit commands.\nDiscover: :scope languages | :scope session | :scope context | :scope inspect\nScratch edits: :scope scratch new <language-id>, then :scope edit (in memory; not evaluation).\nScript: :scope script enter / leave selects continuous context; :scope script run evaluates selected scratch. Standalone: cargo run -p scope-script -- --help\nscope> {}\nscope> ",
             app.workspace().root(),
             interfaces.join("\n")
         );
@@ -3766,6 +4365,106 @@ mod inspection_tests {
     }
 
     #[test]
+    fn borrowed_shell_preserves_owners_on_quit_eof_and_io_error() {
+        struct Runtime(std::sync::Arc<Mutex<Vec<String>>>);
+        impl InteractiveLanguageSession for Runtime {
+            fn language_id(&self) -> &str {
+                "borrowed-mock"
+            }
+            fn evaluate(&mut self, source: &str) -> Result<EvaluationResult, SessionError> {
+                self.0.lock().unwrap().push(format!("eval:{source}"));
+                Ok(EvaluationResult {
+                    output: vec![],
+                    diagnostics: vec![],
+                    status: scope_language::EvaluationStatus::Success,
+                })
+            }
+            fn reset(&mut self) -> Result<(), SessionError> {
+                Ok(())
+            }
+            fn close(&mut self) -> Result<(), SessionError> {
+                self.0.lock().unwrap().push("close".into());
+                Ok(())
+            }
+        }
+        struct BrokenInput;
+        impl std::io::Read for BrokenInput {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("input failed"))
+            }
+        }
+        impl BufRead for BrokenInput {
+            fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+                Err(std::io::Error::other("input failed"))
+            }
+            fn consume(&mut self, _: usize) {}
+        }
+        let root = crate::test_support::TempWorkspace::new("borrowed_shell");
+        root.write_file("target", "original");
+        let mut app = App::builder(root.workspace()).build().unwrap();
+        app.open_path("target").unwrap();
+        let events = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let mut session = InteractiveSession::new();
+        session
+            .install("borrowed-mock", Box::new(Runtime(events.clone())))
+            .unwrap();
+        for input in [
+            &b"first\n:scope quit\nnot evaluated\n"[..],
+            &b"second\n"[..],
+        ] {
+            run_shell_borrowed(
+                &mut app,
+                &mut session,
+                #[cfg(feature = "agent")]
+                AgentConfig::local(DEFAULT_AGENT_MODEL, DEFAULT_AGENT_BASE_URL),
+                #[cfg(not(feature = "agent"))]
+                AgentConfig,
+                input,
+                Vec::new(),
+                false,
+                #[cfg(feature = "agent")]
+                None,
+                None,
+            )
+            .unwrap();
+            assert_eq!(session.language_id(), Some("borrowed-mock"));
+            assert_eq!(app.open_document().unwrap().text(), "original");
+        }
+        let error = run_shell_borrowed(
+            &mut app,
+            &mut session,
+            #[cfg(feature = "agent")]
+            AgentConfig::local(DEFAULT_AGENT_MODEL, DEFAULT_AGENT_BASE_URL),
+            #[cfg(not(feature = "agent"))]
+            AgentConfig,
+            BrokenInput,
+            Vec::new(),
+            false,
+            #[cfg(feature = "agent")]
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("input failed"));
+        session.evaluate("after error").unwrap();
+        assert_eq!(
+            *events.lock().unwrap(),
+            ["eval:first", "eval:second", "eval:after error"]
+        );
+        run_with_session(app, session, &b":scope quit\n"[..], Vec::new()).unwrap();
+        assert_eq!(events.lock().unwrap().last().unwrap(), "close");
+        assert_eq!(
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| *event == "close")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn inspection_routing_errors_and_recovery() {
         let root = crate::test_support::TempWorkspace::new("cli_inspection");
         root.write_file("sentinel", "unchanged");
@@ -3945,3 +4644,43 @@ mod inspection_tests {
 #[cfg(test)]
 #[path = "cli/interactive_tests.rs"]
 mod interactive_tests;
+
+#[cfg(test)]
+mod disposable_source_tests {
+    use super::*;
+
+    #[test]
+    fn borrowed_shell_without_opt_in_discards_sources() {
+        let mut app =
+            App::new(crate::workspace::Workspace::read_only(env!("CARGO_MANIFEST_DIR")).unwrap())
+                .unwrap();
+        let mut session = InteractiveSession::new();
+        for input in [
+            ":scope scratch new text\n:scope semantic-target 0\n:scope quit\n",
+            ":scope buffers\n:scope semantic-target\n",
+        ] {
+            let mut output = Vec::new();
+            run_shell_borrowed(
+                &mut app,
+                &mut session,
+                #[cfg(feature = "agent")]
+                AgentConfig::local(DEFAULT_AGENT_MODEL, DEFAULT_AGENT_BASE_URL),
+                #[cfg(not(feature = "agent"))]
+                AgentConfig,
+                input.as_bytes(),
+                &mut output,
+                false,
+                #[cfg(feature = "agent")]
+                None,
+                None,
+            )
+            .unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(!output.contains("error:"), "{output}");
+            if input.starts_with(":scope buffers") {
+                assert!(output.contains("none"), "{output}");
+                assert!(!output.contains("target: 0"), "{output}");
+            }
+        }
+    }
+}

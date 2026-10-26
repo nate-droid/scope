@@ -1,4 +1,4 @@
-//! Read-only, lexical completion of names and direct `scope.invoke` string arguments.
+//! Read-only completion of names and direct `scope.invoke` string arguments.
 //! Does not evaluate expressions, infer object fields, or resolve provider expressions.
 use crate::{Host, Interpreter};
 use scope_terminal::{CompletionCandidate, CompletionProvider};
@@ -23,6 +23,12 @@ impl<H: Host + ?Sized> CompletionProvider for ScriptCompletionProvider<'_, H> {
         }
         let tokens = tokens(input);
         for (index, token) in tokens.iter().enumerate() {
+            if token.text(input).starts_with('#')
+                && token.range.start <= cursor
+                && cursor <= token.range.end
+            {
+                return Vec::new();
+            }
             if token.string && token.range.start < cursor && cursor <= token.content_end {
                 let before = &tokens[..index];
                 let provider = if invoke_start(before, input) {
@@ -78,6 +84,29 @@ impl<H: Host + ?Sized> CompletionProvider for ScriptCompletionProvider<'_, H> {
         let prefix = &input[start..cursor];
         let mut names = vec![
             "let",
+            "if",
+            "else",
+            "len",
+            "contains",
+            "keys",
+            "join",
+            "split",
+            "parse_int",
+            "starts_with",
+            "ends_with",
+            "trim",
+            "lower",
+            "upper",
+            "replace",
+            "append",
+            "slice",
+            "reverse",
+            "get",
+            "range",
+            "abs",
+            "min",
+            "max",
+            "format",
             "true",
             "false",
             "null",
@@ -86,6 +115,8 @@ impl<H: Host + ?Sized> CompletionProvider for ScriptCompletionProvider<'_, H> {
             "scope.invoke",
         ];
         names.extend(self.interpreter.bindings.keys().map(String::as_str));
+        let live = top_level_bindings(input, start, &tokens);
+        names.extend(live.iter().map(String::as_str));
         sorted(
             names
                 .into_iter()
@@ -98,6 +129,40 @@ impl<H: Host + ?Sized> CompletionProvider for ScriptCompletionProvider<'_, H> {
                 .collect(),
         )
     }
+}
+
+// Only submit a completed top-level prefix to the real parser. An unfinished
+// block must not expose its locals, and a declaration's initializer must not
+// see its own binding. Invalid prefixes conservatively contribute no names.
+fn top_level_bindings(input: &str, before: usize, tokens: &[Token]) -> Vec<String> {
+    let mut depth = 0usize;
+    let mut end = 0;
+    let mut previous_end = 0;
+    for token in tokens.iter().take_while(|t| t.range.start < before) {
+        if depth == 0 && input[previous_end..token.range.start].contains('\n') {
+            end = token.range.start;
+        }
+        if !token.string && !token.text(input).starts_with('#') {
+            match token.text(input) {
+                "(" | "[" | "{" => depth += 1,
+                ")" | "]" | "}" => depth = depth.saturating_sub(1),
+                ";" if depth == 0 => end = token.range.end,
+                _ => {}
+            }
+        }
+        previous_end = token.range.end;
+    }
+    if depth == 0 && input[previous_end..before].contains('\n') {
+        end = before;
+    }
+    crate::parser::parse(&input[..end])
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|statement| match statement {
+            crate::parser::Statement::Expression { binding, .. } => binding,
+            _ => None,
+        })
+        .collect()
 }
 
 fn sorted(mut candidates: Vec<CompletionCandidate>) -> Vec<CompletionCandidate> {
@@ -128,7 +193,12 @@ fn tokens(input: &str) -> Vec<Token> {
         }
         let mut end = start + c.len_utf8();
         let mut content_end = end;
-        if c == '"' {
+        if c == '#' {
+            while chars.peek().is_some_and(|(_, c)| *c != '\n') {
+                let (at, next) = chars.next().unwrap();
+                end = at + next.len_utf8();
+            }
+        } else if c == '"' {
             content_end = input.len();
             while let Some((at, next)) = chars.next() {
                 end = at + next.len_utf8();
@@ -256,14 +326,37 @@ mod tests {
         assert_eq!(
             insertions(&candidates),
             [
+                "abs",
                 "alpha",
+                "append",
+                "contains",
+                "else",
+                "ends_with",
                 "false",
+                "format",
+                "get",
+                "if",
+                "join",
+                "keys",
+                "len",
                 "let",
+                "lower",
+                "max",
+                "min",
                 "null",
+                "parse_int",
                 "print",
+                "range",
+                "replace",
+                "reverse",
                 "scope.invoke",
                 "scope.operations",
+                "slice",
+                "split",
+                "starts_with",
+                "trim",
                 "true",
+                "upper",
                 "zebra"
             ]
         );
@@ -273,12 +366,79 @@ mod tests {
     }
 
     #[test]
+    fn live_top_level_bindings_are_parser_backed_and_never_executed() {
+        for input in [
+            "let live = 1; li",
+            "let live = unknown; li",
+            "let live = scope.operations(); li",
+            "let mut live = print(1); li",
+            "let live = [\n1,\n2\n]\nli",
+            "let live = 1 # comment\nli",
+            "let live = 1; print(li",
+            "let live = 1; if true { li",
+        ] {
+            let candidates = complete(input, input.len());
+            assert_eq!(insertions(&candidates), ["live"], "{input}");
+            assert_eq!(&input[candidates[0].replacement.clone()], "li");
+        }
+    }
+
+    #[test]
+    fn live_bindings_exclude_locals_future_and_unfinished_declarations() {
+        for input in [
+            "let live = li",
+            "let live = ; li",
+            "if true { let live = 1; }; li",
+            "for live in [] { 1 }; li",
+            "fn f(live) { let local = live; local }; li",
+            "# let live = 1;\nli",
+            "\"let live = 1;\"; li",
+        ] {
+            assert!(complete(input, input.len()).is_empty(), "{input}");
+        }
+        let input = "li; let live = 1;";
+        assert!(complete(input, 2).is_empty());
+        let input = "let live = 1; liwrong; let later = 2";
+        let cursor = input.find("liwrong").unwrap() + 2;
+        let candidates = complete(input, cursor);
+        assert_eq!(insertions(&candidates), ["live"]);
+        assert_eq!(&input[candidates[0].replacement.clone()], "liwrong");
+    }
+
+    #[test]
+    fn live_bindings_refresh_on_edits_and_deduplicate_retained_names() {
+        let mut interpreter = Interpreter::new();
+        interpreter.eval("let live = 1", &mut NoHost).unwrap();
+        let mut provider = ScriptCompletionProvider::new(&interpreter, &MetadataHost);
+        for (input, expected) in [
+            ("let live = 2; li", vec!["live"]),
+            ("let linked = 2; li", vec!["linked", "live"]),
+            ("let gone = 2; li", vec!["live"]),
+            ("li", vec!["live"]),
+        ] {
+            assert_eq!(insertions(&provider.complete(input, input.len())), expected);
+        }
+    }
+
+    #[test]
+    fn helper_completions_and_comments() {
+        for name in ["len", "contains", "keys", "join", "split", "if", "else"] {
+            assert_eq!(insertions(&complete(name, name.len())), [name]);
+        }
+        for input in ["# len", "len([]) # scope.invoke(\"a", "#"] {
+            assert!(complete(input, input.len()).is_empty());
+        }
+        let input = "# comment\nlen";
+        assert_eq!(insertions(&complete(input, input.len())), ["len"]);
+    }
+
+    #[test]
     fn replaces_entire_name_at_intermediate_cursor() {
         let candidates = complete("print(scope.incorrect)", 13);
         assert_eq!(insertions(&candidates), ["scope.invoke"]);
         assert_eq!(candidates[0].replacement, 6..21);
         let candidates = complete("trailing", 2);
-        assert_eq!(insertions(&candidates), ["true"]);
+        assert_eq!(insertions(&candidates), ["trim", "true"]);
         assert_eq!(candidates[0].replacement, 0..8);
     }
 

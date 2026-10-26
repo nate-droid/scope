@@ -51,7 +51,7 @@ cargo test -p scope-script --offline --test workspace_semantic
 
 This is explicit example-level wiring, not automatic attachment to a live IDE or
 generic catalog search. Current multi-read embedding is documented in the
-[Script guide](scope-script.md#composing-downstream-semantic-reads-si7).
+[Script guide](scope-script.md#composing-downstream-semantic-reads).
 The read-only mount does not prevent external writers; freshness is the bound
 in-memory source contract, not atomic disk freshness. Native providers are trusted
 Rust code, not sandboxed by effect metadata. Reports may contain source-derived

@@ -6,9 +6,17 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::app::App;
 
+mod composition;
+pub use composition::{
+    ActionInfo, DownstreamAction, View, WorkspaceAction, WorkspaceInput, WorkspaceTui,
+};
 mod pane;
 mod panes;
 mod quick_open;
+pub mod scratch_editor;
+pub use scratch_editor::{
+    EditableScratchPane, ScratchEditAccess, ScratchEditError, ScratchEditSnapshot,
+};
 mod semantic;
 mod session;
 #[cfg(feature = "tools")]

@@ -10,7 +10,13 @@ pub(super) fn run(
     input: &mut impl BufRead,
     output: &mut impl Write,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    run_with_completion(buffers, input, output, &|_, _, _| Vec::new())
+    run_with_completion(buffers, input, output, &|_, _, _| Vec::new()).map(|_| ())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum EditorOutcome {
+    Committed,
+    Canceled,
 }
 
 pub(super) fn run_with_completion(
@@ -22,7 +28,7 @@ pub(super) fn run_with_completion(
         &str,
         usize,
     ) -> Vec<crate::language::CompletionItem>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<EditorOutcome, Box<dyn std::error::Error>> {
     let selected = buffers.selected()?;
     let original = selected.text().to_owned();
     let identity = format!(
@@ -54,7 +60,7 @@ pub(super) fn run_with_completion(
         input_line.clear();
         if input.read_line(&mut input_line)? == 0 {
             writeln!(output, "Draft canceled at EOF; original buffer unchanged.")?;
-            return Ok(());
+            return Ok(EditorOutcome::Canceled);
         }
         if input_line.ends_with('\n') {
             input_line.pop();
@@ -88,9 +94,9 @@ pub(super) fn run_with_completion(
                 if draft != original {
                     commit(buffers, target, &original, draft)?;
                 }
-                return Ok(());
+                return Ok(EditorOutcome::Committed);
             }
-            ":cancel" if arguments.trim().is_empty() => return Ok(()),
+            ":cancel" if arguments.trim().is_empty() => return Ok(EditorOutcome::Canceled),
             ":help" if arguments.trim().is_empty() => {
                 writeln!(
                     output,

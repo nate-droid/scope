@@ -15,11 +15,18 @@ impl TerminalSession {
     pub fn enter() -> Result<Self, Box<dyn std::error::Error>> {
         enable_raw_mode()?;
         let mut stdout = std::io::stdout();
-        execute!(stdout, EnterAlternateScreen)?;
+        // Arm cleanup before any fallible setup after raw mode is enabled.
+        let mut setup = SetupGuard(true);
+        execute!(
+            stdout,
+            EnterAlternateScreen,
+            crossterm::event::EnableBracketedPaste
+        )?;
 
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
         terminal.clear()?;
+        setup.0 = false;
 
         Ok(Self { terminal })
     }
@@ -32,10 +39,29 @@ impl TerminalSession {
     }
 }
 
+struct SetupGuard(bool);
+impl Drop for SetupGuard {
+    fn drop(&mut self) {
+        if self.0 {
+            let _ = disable_raw_mode();
+            let _ = execute!(
+                std::io::stdout(),
+                LeaveAlternateScreen,
+                crossterm::event::DisableBracketedPaste,
+                crossterm::cursor::Show
+            );
+        }
+    }
+}
+
 impl Drop for TerminalSession {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
+        let _ = execute!(
+            self.terminal.backend_mut(),
+            LeaveAlternateScreen,
+            crossterm::event::DisableBracketedPaste
+        );
         let _ = self.terminal.show_cursor();
     }
 }

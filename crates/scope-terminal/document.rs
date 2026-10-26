@@ -77,7 +77,9 @@ pub fn edit_document(
         validate(document)?;
         let (width, height) = terminal::size()?;
         session.view.draw(document, session.output, width, height)?;
-        if let Some(accepted) = apply(document, event::read()?, &mut preferred_column)? {
+        if let Some(accepted) =
+            apply_document_event(document, event::read()?, &mut preferred_column)?
+        {
             return Ok(accepted);
         }
     }
@@ -105,7 +107,11 @@ fn replace(d: &mut impl DocumentEditor, range: Range<usize>, text: &str) -> io::
     d.set_cursor(cursor);
     validate(d)
 }
-fn apply(
+/// Applies one event without owning terminal input, rendering, or raw mode.
+/// Returns `Some(true)` for Ctrl-S and `Some(false)` for Ctrl-C/Escape.
+/// The caller owns rollback and must reserve its own host shortcuts first.
+/// `preferred` retains the scalar column across vertical movement.
+pub fn apply_document_event(
     d: &mut impl DocumentEditor,
     event: Event,
     preferred: &mut Option<usize>,
@@ -330,6 +336,7 @@ impl View {
 
 #[cfg(test)]
 mod tests {
+    use super::apply_document_event as apply;
     use super::*;
     use crossterm::event::KeyEvent;
     #[derive(Default)]

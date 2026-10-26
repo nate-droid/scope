@@ -1,0 +1,27 @@
+# S10-S13 local experiment summary: S12 conversion results are ordinary records.
+let trials = [
+    {stage: "S10", milliseconds: " 42 "},
+    {stage: "S11", milliseconds: "invalid"},
+    {stage: "S12", milliseconds: "37"},
+    {stage: "S13"}
+]
+let mut accepted = []
+let mut rejected = []
+let mut total = 0
+for trial in trials {
+    let measured = get(trial, "milliseconds")
+    if measured.ok {
+        let parsed = parse_int(trim(measured.value))
+        if parsed.ok {
+            total = total + parsed.value
+            accepted = append(accepted, {stage: trial.stage, milliseconds: parsed.value})
+        } else {
+            rejected = append(rejected, {stage: trial.stage, code: parsed.error.code})
+        }
+    } else {
+        rejected = append(rejected, {stage: trial.stage, code: measured.error.code})
+    }
+}
+let summary = {accepted: accepted, rejected: rejected, total_ms: total}
+print(summary)
+print(format({accepted_count: len(accepted), rejected_count: len(rejected)}))

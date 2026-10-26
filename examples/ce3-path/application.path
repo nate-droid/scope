@@ -1,0 +1,1 @@
+theorem application (A : Type 0) (B : Type 0) (f : Pi (a : A). B) (x : A) : B := ?

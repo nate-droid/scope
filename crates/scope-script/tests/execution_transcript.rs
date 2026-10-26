@@ -44,7 +44,7 @@ fn transcript_preserves_values_errors_and_execution_boundaries() {
             }
             "field" => {
                 assert!(
-                    matches!(&transcript.result.as_ref().unwrap_err().kind, ErrorKind::Runtime(message) if message == "missing object field")
+                    matches!(&transcript.result.as_ref().unwrap_err().kind, ErrorKind::Runtime(message) if message.starts_with("missing object field "))
                 );
                 assert_eq!(
                     field(&transcript.output[2], "status").as_str(),

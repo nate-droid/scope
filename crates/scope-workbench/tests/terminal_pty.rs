@@ -26,6 +26,12 @@ fn workbench_end_user_pty() {
     python_suite(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pty_workbench.py"));
 }
 
+#[cfg(feature = "tui")]
+#[test]
+fn workspace_end_to_end_pty() {
+    python_suite(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pty_workspace.py"));
+}
+
 #[test]
 fn existing_terminal_suite_against_workbench_binary() {
     python_suite(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../scope-ide/tests/pty_shell.py"));

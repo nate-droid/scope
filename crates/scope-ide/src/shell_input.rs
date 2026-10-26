@@ -647,6 +647,26 @@ pub(crate) fn read_line(
     output: &mut impl io::Write,
     session: &crate::language::InteractiveSession,
 ) -> io::Result<Option<String>> {
+    read_line_with(
+        history,
+        output,
+        &primary_prompt(session),
+        false,
+        |buffer| inspect_buffer(session, buffer),
+        |source, cursor| session.complete(source, cursor),
+    )
+}
+
+/// Configurable terminal reader. When `return_cancel` is set, Ctrl-C returns
+/// `:cancel` so the caller can discard externally collected pending source.
+pub(crate) fn read_line_with(
+    history: &mut CommandHistory,
+    output: &mut impl io::Write,
+    prompt: &str,
+    return_cancel: bool,
+    inspect: impl Fn(&str) -> crate::language::Completeness,
+    complete: impl Fn(&str, usize) -> Vec<crate::language::CompletionItem>,
+) -> io::Result<Option<String>> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -656,8 +676,7 @@ pub(crate) fn read_line(
     output.flush()?;
     let _raw = RawGuard::enter()?;
     let _display = DisplayGuard::enter(output)?;
-    let inspect = |buffer: &str| inspect_buffer(session, buffer);
-    let prompt = primary_prompt(session);
+
     let mut viewport = InlineViewport::new()?;
     history.reset_navigation();
     let mut input = Input::default();
@@ -665,11 +684,12 @@ pub(crate) fn read_line(
     loop {
         match event::read()? {
             Event::Key(key) => {
-                match input.key_with_completion(key, history, &inspect, &|source, cursor| {
-                    session.complete(source, cursor)
-                }) {
+                let action = input.key_with_completion(key, history, &inspect, &complete);
+                let canceled = action == Action::Cancel;
+                match submission_action(action, return_cancel) {
                     Action::Submit(line) => {
-                        viewport.finish(Some(&line), &prompt, output)?;
+                        let echo = if canceled { "^C" } else { &line };
+                        viewport.finish(Some(echo), prompt, output)?;
                         return Ok(Some(line));
                     }
                     Action::Eof => {
@@ -694,9 +714,70 @@ pub(crate) fn read_line(
     }
 }
 
+fn submission_action(action: Action, return_cancel: bool) -> Action {
+    match action {
+        Action::Cancel if return_cancel => Action::Submit(":cancel".to_owned()),
+        action => action,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn script_input_uses_callbacks_and_external_line_admission() {
+        let mut history = CommandHistory::new(10);
+        let mut input = Input::default();
+        input.insert("le");
+        let inspect = |_: &str| crate::language::Completeness::Complete;
+        let complete = |source: &str, cursor: usize| {
+            assert_eq!((source, cursor), ("le", 2));
+            vec![candidate(0..2, "let value = {")]
+        };
+        assert_eq!(
+            input.key_with_completion(
+                KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+                &mut history,
+                &inspect,
+                &complete
+            ),
+            Action::Continue
+        );
+        let (rows, _, _) = input.rows_with_prompt(80, 8, "...> ");
+        assert!(rows[0].starts_with("...> let value = {"));
+        assert_eq!(
+            input.key_with_completion(
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                &mut history,
+                &inspect,
+                &complete
+            ),
+            Action::Submit("let value = {".into())
+        );
+    }
+
+    #[test]
+    fn script_ctrl_c_returns_cancel_but_normal_ctrl_c_reprompts() {
+        for script in [false, true] {
+            let mut history = CommandHistory::new(10);
+            let mut input = Input::default();
+            input.insert("pending draft");
+            input.choices = vec![candidate(0..0, "first"), candidate(0..0, "second")];
+            let action = ctrl(&mut input, &mut history, 'c');
+            assert_eq!(action, Action::Cancel);
+            assert!(input.line.is_empty());
+            assert!(input.choices.is_empty());
+            assert_eq!(
+                submission_action(action, script),
+                if script {
+                    Action::Submit(":cancel".into())
+                } else {
+                    Action::Cancel
+                }
+            );
+        }
+    }
 
     fn candidate(range: std::ops::Range<usize>, text: &str) -> crate::language::CompletionItem {
         crate::language::CompletionItem {

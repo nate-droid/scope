@@ -176,6 +176,69 @@ pub(super) struct Proposals {
 }
 
 impl Proposals {
+    pub(super) fn compact(
+        &mut self,
+        source: &crate::scratch::ScratchBuffer,
+        reduction: super::ScriptReduction,
+        output: &mut impl Write,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use crate::proposal::SourceEditProposal;
+        if reduction.edits.is_empty() {
+            return Err("reducer returned no edits".into());
+        }
+        let rationale = format!(
+            "Rule: {}\nChecked preconditions: {:?}\nEvaluation snapshot: {:?}\nAssurance: unevaluated; local rule only, not validation evidence; fresh whole-snapshot execution only",
+            reduction.rule, reduction.checked, reduction.original,
+        );
+        let proposal = SourceEditProposal::new(
+            self.controller.next()?,
+            source,
+            reduction.edits,
+            Some(rationale.clone()),
+        )?;
+        let candidate = proposal
+            .preview(source)
+            .map_err(crate::source_edit::ControllerError::Validation)?;
+        if candidate == source.text() {
+            return Err("reducer returned an unchanged candidate".into());
+        }
+        let diff = proposal
+            .unified_diff(source)
+            .map_err(crate::source_edit::ControllerError::Validation)?;
+        print_target(&proposal, output)?;
+        writeln!(output, "{}", escaped_lines(&rationale))?;
+        writeln!(output, "{}", escaped_lines(&diff))?;
+        match self.controller.register(proposal, source) {
+            Ok(id) => writeln!(
+                output,
+                "source proposal {} pending; not saved or evaluated; :source-accept {}, :source-reject {}",
+                id.0, id.0, id.0,
+            )?,
+            Err(error) => writeln!(
+                output,
+                "Preview only: {error}; no proposal registered; configured assurance unchanged."
+            )?,
+        }
+        Ok(())
+    }
+
+    pub(super) fn controller_mut(&mut self) -> &mut SourceEditController {
+        &mut self.controller
+    }
+
+    /// Closure invalidates pending proposals, without retargeting or reopening.
+    /// Revision changes remain pending so normal freshness diagnostics explain them.
+    pub(super) fn observe(&mut self, buffers: &ScratchBuffers) {
+        let closed: Vec<_> = self.controller.list()
+            .filter(|proposal| proposal.status() == ProposalStatus::Pending)
+            .filter(|proposal| matches!(proposal.target(), SourceId::Scratch(id) if buffers.get(id).is_err()))
+            .map(|proposal| proposal.id())
+            .collect();
+        for id in closed {
+            self.controller.discard(id).expect("listed proposal exists");
+        }
+    }
+
     #[cfg(feature = "agent")]
     pub(super) fn requires_evaluation(&self) -> bool {
         self.editing.is_some()
@@ -537,6 +600,65 @@ fn payload(json: &str) -> Result<(Vec<TextEdit>, Option<String>), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn compact_retains_original_owner_and_unevaluated_assurance() {
+        use super::*;
+        use crate::text::{Span, TextBuffer, TextEdit};
+        let mut buffers = ScratchBuffers::default();
+        buffers.create("scope-script", "let mut n=6; n=8; n");
+        let source = buffers.selected().unwrap();
+        let owner = source.id();
+        let original = source.text().to_owned();
+        let snapshot = scope_language::SourceSnapshot {
+            source_id: source.evaluation_source_id().clone(),
+            revision_id: scope_language::RevisionId::from_version(source.version()),
+            text: original.clone().into(),
+        };
+        let reduction = super::super::ScriptReduction {
+            original: snapshot,
+            edits: vec![TextEdit::replace(
+                TextBuffer::new(&original)
+                    .range_for_span(Span::new(0, original.len()))
+                    .unwrap(),
+                "let mut n=8; n",
+            )],
+            rule: "test supplied rule".into(),
+            checked: vec!["test precondition".into()],
+        };
+        let mut proposals = Proposals::default();
+        let mut output = Vec::new();
+        proposals
+            .compact(source, reduction.clone(), &mut output)
+            .unwrap();
+        assert_eq!(buffers.get(owner).unwrap().text(), original);
+        let id = proposals.controller.list().next().unwrap().id();
+        assert!(proposals.controller.get(id).unwrap().evidence().is_none());
+        let display = String::from_utf8(output).unwrap();
+        assert!(display.contains("test precondition"));
+        assert!(display.contains("unevaluated"));
+        buffers.create("scope-script", "other");
+        proposals
+            .run(Command::Accept(id), &mut buffers, &mut Vec::new())
+            .unwrap();
+        assert_eq!(buffers.get(owner).unwrap().text(), "let mut n=8; n");
+        assert_eq!(buffers.selected().unwrap().text(), "other");
+
+        let mut blocked = Proposals::default();
+        blocked.controller =
+            SourceEditController::with_validation_contract(scope_language::ValidationContract {
+                id: "required".into(),
+                origin: scope_language::ExpectationOrigin::User("test".into()),
+                checks: std::collections::BTreeMap::new(),
+            });
+        let mut baseline = ScratchBuffers::default();
+        baseline.create("scope-script", original);
+        let mut output = Vec::new();
+        blocked
+            .compact(baseline.selected().unwrap(), reduction, &mut output)
+            .unwrap();
+        assert_eq!(blocked.controller.list().count(), 0);
+        assert!(String::from_utf8(output).unwrap().contains("Preview only"));
+    }
     #[test]
     fn proposal_target_label_is_owner_tagged_and_uses_supplied_version() {
         assert_eq!(
