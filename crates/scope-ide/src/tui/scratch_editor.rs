@@ -17,6 +17,57 @@ use crate::{
     text::{Span, TextBuffer, TextEdit},
 };
 
+/// Find a lexical pair at the cursor, preferring the delimiter under it over
+/// the one immediately before it. Offsets are UTF-8 bytes, like DocumentEditor.
+/// Language services expose no string/comment ranges, so all delimiters count.
+fn matching_delimiters(text: &str, cursor: usize) -> Option<[usize; 2]> {
+    if !text.is_char_boundary(cursor) {
+        return None;
+    }
+    let bytes = text.as_bytes();
+    let is_delimiter = |byte: u8| b"()[]{}".contains(&byte);
+    let at = if bytes.get(cursor).is_some_and(|b| is_delimiter(*b)) {
+        cursor
+    } else {
+        let previous = cursor.checked_sub(1)?;
+        is_delimiter(*bytes.get(previous)?).then_some(previous)?
+    };
+    let opening = |b| matches!(b, b'(' | b'[' | b'{');
+    let counterpart = |b| match b {
+        b'(' => b')',
+        b'[' => b']',
+        b'{' => b'}',
+        b')' => b'(',
+        b']' => b'[',
+        b'}' => b'{',
+        _ => unreachable!(),
+    };
+    let forward = opening(bytes[at]);
+    let mut stack = vec![bytes[at]];
+    let mut index = at;
+    loop {
+        index = if forward {
+            index.checked_add(1)?
+        } else {
+            index.checked_sub(1)?
+        };
+        let byte = *bytes.get(index)?;
+        if !is_delimiter(byte) {
+            continue;
+        }
+        if opening(byte) == forward {
+            stack.push(byte);
+        } else {
+            if counterpart(stack.pop()?) != byte {
+                return None;
+            }
+            if stack.is_empty() {
+                return Some([at, index]);
+            }
+        }
+    }
+}
+
 /// An owned optimistic-concurrency baseline, including owner-independent identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScratchEditSnapshot {
@@ -523,6 +574,7 @@ impl Pane for EditableScratchPane {
                 )
             })
             .unwrap_or((usize::from(ctx.scroll()), 0));
+        let matching = draft.and_then(|draft| matching_delimiters(text, draft.cursor));
         // Slice before rendering rather than narrowing large source offsets to u16.
         let lines: Vec<Line<'_>> = text
             .split('\n')
@@ -566,6 +618,12 @@ impl Pane for EditableScratchPane {
                                 RenderSpan::styled(
                                     grapheme,
                                     Style::default().add_modifier(Modifier::REVERSED),
+                                )
+                            } else if matching.is_some_and(|pair| pair.contains(&byte)) {
+                                RenderSpan::styled(
+                                    grapheme,
+                                    Style::default()
+                                        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
                                 )
                             } else {
                                 RenderSpan::raw(grapheme)
@@ -678,6 +736,94 @@ mod tests {
         assert!(pane.draft.as_ref().unwrap().editing.undo.is_empty());
         assert!(!pane.has_dirty_draft());
     }
+    #[test]
+    fn lexical_pairs_cover_nesting_adjacency_unicode_and_unmatched_input() {
+        let text = "猫({[é]}) ";
+        for (cursor, pair) in [
+            (3, [3, 10]),
+            (4, [4, 9]),
+            (5, [5, 8]),
+            (8, [8, 5]),
+            (9, [9, 4]),
+            (10, [10, 3]),
+            (11, [10, 3]),
+        ] {
+            assert_eq!(matching_delimiters(text, cursor), Some(pair));
+        }
+        for (text, cursor) in [
+            ("([)]", 0),
+            ("([)]", 3),
+            ("(", 1),
+            ("]", 0),
+            ("abc", 1),
+            ("() x", 4),
+            ("猫()", 1),
+            ("()", 99),
+        ] {
+            assert_eq!(
+                matching_delimiters(text, cursor),
+                None,
+                "{text:?} at {cursor}"
+            );
+        }
+        assert_eq!(matching_delimiters("(\n[]\n)", 0), Some([0, 5]));
+        assert_eq!(matching_delimiters("()", 2), Some([1, 0]));
+    }
+
+    #[test]
+    fn delimiter_rendering_tracks_cursor_without_publishing_or_editing() {
+        let mut sources = ScratchBuffers::default();
+        let id = sources.create("test", "(x) z");
+        sources.bind_semantic_target(Some(id)).unwrap();
+        let mut pane = EditableScratchPane::new();
+        let root = crate::test_support::TempWorkspace::new("delimiter_rendering");
+        let app = crate::app::App::new(root.workspace()).unwrap();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 6)).unwrap();
+        // Initialize the draft with navigation, then move onto and after the
+        // closing delimiter, away from it, and back to the opening delimiter.
+        for (key, highlighted) in [
+            (KeyCode::Home, true),
+            (KeyCode::Right, true),
+            (KeyCode::Right, true),
+            (KeyCode::Right, true),
+            (KeyCode::Right, false),
+            (KeyCode::Home, true),
+        ] {
+            local_key(&mut pane, &mut sources, key, KeyModifiers::NONE);
+            terminal
+                .draw(|frame| {
+                    pane.render(
+                        frame,
+                        frame.area(),
+                        &TuiContext::with_view_sources(&app, true, 0, Some(&sources)),
+                    )
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            for x in [1, 3] {
+                assert_eq!(
+                    buffer[(x, 1)].modifier.contains(Modifier::UNDERLINED),
+                    highlighted
+                );
+            }
+            assert!(!buffer[(2, 1)].modifier.contains(Modifier::UNDERLINED));
+            let draft = pane.draft.as_ref().unwrap();
+            assert_eq!(draft.text.as_str(), "(x) z");
+            assert!(draft.editing.undo.is_empty());
+            assert!(draft.editing.redo.is_empty());
+            assert_eq!(sources.get(id).unwrap().text(), "(x) z");
+            assert_eq!(sources.get(id).unwrap().version(), 0);
+            assert_eq!(
+                ScratchEditAccess::new(&mut sources)
+                    .snapshot()
+                    .unwrap()
+                    .source,
+                draft.baseline.source
+            );
+        }
+    }
+
     fn sources() -> ScratchBuffers {
         let mut sources = ScratchBuffers::default();
         let id = sources.create("test", "é\n");
