@@ -520,7 +520,17 @@ pub struct ScriptReduction {
     pub checked: Vec<String>,
 }
 
+#[cfg(feature = "tui")]
+pub use workspace_ui::WorkspaceConfig;
+
 pub trait ReadOnlyCommand {
+    /// Optional initial ordinary-workspace presentation and document. Ignored by shell.
+    /// This supplies values only, not filesystem or edit authorization.
+    #[cfg(feature = "tui")]
+    fn workspace_config(&self) -> Option<WorkspaceConfig> {
+        None
+    }
+
     /// Reduce an immutable evaluation snapshot without execution, operations or IO.
     /// The IDE separately binds the returned edits to the original scratch owner.
     fn reduce_script_snapshot(

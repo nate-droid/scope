@@ -7,6 +7,48 @@ use crate::{
     tui::{EditableScratchPane, Pane, TuiContext, View, WorkspaceTui},
 };
 
+/// Optional downstream startup values. Scope retains source, input, and proposal ownership.
+/// Pane IDs in `layout` and `focus` refer to `editor` and `inspector`.
+pub struct WorkspaceConfig {
+    pub language: String,
+    pub content: String,
+    /// Existing workspace-relative file; opened through normal workspace authority.
+    /// Takes precedence over language/content and never writes the file.
+    pub open_path: Option<String>,
+    pub bind_selected: bool,
+    pub focus: String,
+    pub layout: Option<View>,
+    /// Rendering-only inspector; input and edit callbacks are not installed.
+    pub inspector: Option<Box<dyn Pane>>,
+}
+impl Default for WorkspaceConfig {
+    fn default() -> Self {
+        Self {
+            language: "text".into(),
+            content: String::new(),
+            open_path: None,
+            bind_selected: false,
+            focus: "editor".into(),
+            layout: None,
+            inspector: None,
+        }
+    }
+}
+struct SuppliedInspector(Box<dyn Pane>);
+impl Pane for SuppliedInspector {
+    fn id(&self) -> &'static str {
+        self.0.id()
+    }
+    fn render(
+        &self,
+        frame: &mut ratatui::Frame<'_>,
+        area: ratatui::layout::Rect,
+        ctx: &TuiContext<'_>,
+    ) {
+        self.0.render(frame, area, ctx)
+    }
+}
+
 /// Presentation only: no input callback, editing capability or execution access.
 struct Inspector;
 impl Pane for Inspector {
@@ -62,25 +104,55 @@ impl Pane for Inspector {
     }
 }
 
-fn initial_sources() -> ScratchBuffers {
+fn configured_sources(
+    app: &App,
+    config: &WorkspaceConfig,
+) -> Result<ScratchBuffers, Box<dyn std::error::Error>> {
     let mut sources = ScratchBuffers::default();
-    sources.create("text", "");
-    sources
+    let id = if let Some(path) = &config.open_path {
+        sources.open(app.workspace(), app.languages(), path)?
+    } else {
+        sources.create(&config.language, &config.content)
+    };
+    if config.bind_selected {
+        sources.bind_semantic_target(Some(id))?;
+    }
+    Ok(sources)
 }
 
+#[cfg(test)]
 pub(super) fn build() -> Result<WorkspaceTui, Box<dyn std::error::Error>> {
+    build_configured(WorkspaceConfig::default())
+}
+
+fn build_configured(
+    mut config: WorkspaceConfig,
+) -> Result<WorkspaceTui, Box<dyn std::error::Error>> {
     let mut ui = WorkspaceTui::new();
     ui.register_editable("editor", EditableScratchPane::new())?;
-    ui.register("inspector", Inspector)?;
+    ui.register(
+        "inspector",
+        SuppliedInspector(
+            config
+                .inspector
+                .take()
+                .unwrap_or_else(|| Box::new(Inspector)),
+        ),
+    )?;
     ui.layout(
         "workspace",
-        View::horizontal([View::leaf("editor"), View::leaf("inspector")]),
+        config
+            .layout
+            .take()
+            .unwrap_or_else(|| View::horizontal([View::leaf("editor"), View::leaf("inspector")])),
     )?;
     ui.layout("editor", View::leaf("editor"))?;
     ui.select_layout("workspace")?;
+    ui.focus_initial(&config.focus)?;
     Ok(ui)
 }
 
+#[cfg(test)]
 fn build_with_actions(
     actions: impl IntoIterator<Item = crate::tui::DownstreamAction>,
 ) -> Result<WorkspaceTui, Box<dyn std::error::Error>> {
@@ -97,13 +169,20 @@ pub(super) fn run(
     #[cfg(feature = "agent")] editing: Option<super::InteractiveEditConfig>,
     #[cfg(feature = "agent")] agent_config: super::AgentConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let config = host
+        .as_deref()
+        .and_then(|host| host.workspace_config())
+        .unwrap_or_default();
     let mut session = InteractiveSession::new();
-    let mut sources = initial_sources();
+    let mut sources = configured_sources(app, &config)?;
     let actions = host
         .as_deref()
         .map(|host| host.downstream_actions())
         .unwrap_or_default();
-    let mut ui = build_with_actions(actions)?;
+    let mut ui = build_configured(config)?;
+    for action in actions {
+        ui.register_downstream_action(action)?;
+    }
     #[cfg(feature = "agent")]
     ui.configure_commands(editing, agent_config)?;
     ui.run_with_sources(app, &mut session, host, &mut sources)
@@ -112,6 +191,54 @@ pub(super) fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn downstream_startup_uses_owned_sources_and_existing_layout_validation() {
+        let root = crate::test_support::TempWorkspace::new("configured-workspace");
+        root.write_file("existing.txt", "retained file");
+        let app = App::new(root.workspace()).unwrap();
+        let config = WorkspaceConfig {
+            language: "demo".into(),
+            content: "starter".into(),
+            bind_selected: true,
+            focus: "inspector".into(),
+            layout: Some(View::vertical([
+                View::leaf("editor"),
+                View::leaf("inspector"),
+            ])),
+            ..WorkspaceConfig::default()
+        };
+        let sources = configured_sources(&app, &config).unwrap();
+        assert_eq!(sources.selected().unwrap().language_id(), "demo");
+        assert_eq!(sources.selected().unwrap().text(), "starter");
+        assert!(sources.semantic_target().unwrap().is_some());
+        assert_eq!(
+            build_configured(config).unwrap().focused(),
+            Some("inspector")
+        );
+        let mut config = WorkspaceConfig {
+            open_path: Some("existing.txt".into()),
+            content: "never replace".into(),
+            bind_selected: true,
+            ..WorkspaceConfig::default()
+        };
+        let sources = configured_sources(&app, &config).unwrap();
+        assert_eq!(sources.selected().unwrap().text(), "retained file");
+        assert_eq!(sources.selected().unwrap().language_id(), "text");
+        assert_eq!(root.read_file("existing.txt"), "retained file");
+        config.open_path = Some("missing.txt".into());
+        assert!(configured_sources(&app, &config).is_err());
+        assert!(!root.host_path_exists("missing.txt"));
+        config.focus = "absent".into();
+        assert!(build_configured(config).is_err());
+        assert!(
+            build_configured(WorkspaceConfig {
+                layout: Some(View::leaf("unknown")),
+                ..WorkspaceConfig::default()
+            })
+            .is_err()
+        );
+    }
 
     #[test]
     fn launcher_registration_uses_existing_bounds_and_duplicate_validation() {
@@ -180,7 +307,7 @@ mod tests {
     fn executable_workspace_starts_with_selected_editable_text_and_no_semantic_binding() {
         let root = crate::test_support::TempWorkspace::new("executable-workspace");
         let mut app = App::new(root.workspace()).unwrap();
-        let mut sources = initial_sources();
+        let mut sources = configured_sources(&app, &WorkspaceConfig::default()).unwrap();
         let id = sources.selected().unwrap().id();
         assert_eq!(sources.selected().unwrap().language_id(), "text");
         assert_eq!(sources.selected().unwrap().text(), "");

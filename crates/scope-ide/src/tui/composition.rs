@@ -263,6 +263,30 @@ impl WorkspaceTui {
         self.visible.clear();
         Ok(())
     }
+    /// Launcher-only focus selection before terminal geometry is available.
+    pub(crate) fn focus_initial(&mut self, name: &str) -> Result<(), String> {
+        fn contains(view: &View, name: &str) -> bool {
+            match view {
+                View::Leaf(id) => id == name,
+                View::Split { children, .. } => {
+                    children.iter().any(|(_, view)| contains(view, name))
+                }
+                View::Tabs { selected, children } => children
+                    .get(*selected)
+                    .is_some_and(|view| contains(view, name)),
+            }
+        }
+        if !self
+            .layouts
+            .get(self.active)
+            .is_some_and(|(_, view)| contains(view, name))
+        {
+            return Err(format!("pane is not in the initial layout: {name}"));
+        }
+        self.focused = Some(name.into());
+        Ok(())
+    }
+
     pub fn focused(&self) -> Option<&str> {
         self.focused.as_deref()
     }
