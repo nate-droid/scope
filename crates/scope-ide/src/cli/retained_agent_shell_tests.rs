@@ -191,6 +191,137 @@ fn shell(app: &mut App, sources: &mut ScratchBuffers, host: &mut Host<'_>, scrip
     .unwrap();
     String::from_utf8(output).unwrap()
 }
+#[test]
+fn workbench_document_ask_uses_selected_source_and_host_model_over_launcher_binding() {
+    use crate::cli::workspace_command::WorkspaceCommandOutput;
+    let (root, mut app, service, mut sources) = fixture();
+    let bound = sources.semantic_target().unwrap().unwrap().id();
+    let selected = sources.create("retained-fixture", "selected Script exact é\r\n");
+    let mut authorize = |context: SemanticAuthorization<'_>| {
+        assert_eq!(context.source.text, "selected Script exact é\r\n");
+        true
+    };
+    let mut observe = |run: &RetainedScratchAgentRun<'_>| {
+        assert_eq!(
+            run.source.id,
+            crate::source_edit::SourceId::Scratch(selected)
+        );
+        assert_eq!(run.source.text, "selected Script exact é\r\n");
+    };
+    let mut host = host(
+        service,
+        Model::new([call("inspect", json!({}))]),
+        &mut authorize,
+        &mut observe,
+    );
+    let mut output = WorkspaceCommandOutput::default();
+    output.set_agent_config(
+        crate::agent::AgentConfig::local("must-not-contact", "http://127.0.0.1:1/v1")
+            .enable_launcher_binding()
+            .unwrap(),
+    );
+    output
+        .submit(
+            ":scope document-ask explain active Script",
+            &mut app,
+            &mut InteractiveSession::new(),
+            Some(&mut host),
+            &mut sources,
+        )
+        .unwrap();
+    assert_eq!(
+        service.calls.lock().unwrap()[0]["text"],
+        "selected Script exact é\r\n"
+    );
+    assert_eq!(sources.semantic_target().unwrap().unwrap().id(), bound);
+    assert_eq!(sources.selected().unwrap().id(), selected);
+    assert_eq!(sources.get(selected).unwrap().version(), 0);
+    assert_eq!(root.read_file("sample.fixture"), "disk");
+}
+
+#[test]
+fn workbench_document_agents_refuse_missing_configuration_before_model_calls() {
+    use crate::cli::workspace_command::WorkspaceCommandOutput;
+    let (_root, mut app, service, mut sources) = fixture();
+    let mut output = WorkspaceCommandOutput::default();
+    output.set_agent_config(
+        crate::agent::AgentConfig::local("must-not-contact", "http://127.0.0.1:1/v1")
+            .enable_launcher_binding()
+            .unwrap(),
+    );
+    let mut session = InteractiveSession::new();
+    for line in [
+        ":scope document-ask explain",
+        ":scope document-propose change",
+        ":scope agent explain",
+        ":scope agent edit \"change\"",
+        ":scope ask explain",
+        ":scope proposal-agent change",
+    ] {
+        assert!(
+            output
+                .submit(line, &mut app, &mut session, None, &mut sources)
+                .is_err()
+        );
+    }
+    let mut authorize = |_: SemanticAuthorization<'_>| panic!("no configured editing contract");
+    let mut observe = |_: &RetainedScratchAgentRun<'_>| panic!("no run expected");
+    let mut host = host(service, Model::new([]), &mut authorize, &mut observe);
+    let error = output
+        .submit(
+            ":scope document-propose @buffer:999 change",
+            &mut app,
+            &mut session,
+            Some(&mut host),
+            &mut sources,
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("editing contract required"));
+    assert!(host.model.conversations.is_empty());
+    assert!(service.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn workbench_document_ask_refuses_binding_without_explicit_model() {
+    use crate::cli::workspace_command::WorkspaceCommandOutput;
+    struct NoModel<'a>(Host<'a>);
+    impl ReadOnlyCommand for NoModel<'_> {
+        fn invoke(
+            &mut self,
+            _: &Document,
+            _: TextRange,
+            _: &str,
+            _: &mut dyn Write,
+        ) -> Result<(), Box<dyn std::error::Error>> {
+            panic!("App fallback")
+        }
+        fn semantic_agent(&mut self) -> Option<SemanticAgentBinding<'_>> {
+            let mut binding = self.0.semantic_agent().unwrap();
+            binding.model = None;
+            Some(binding)
+        }
+    }
+    let (_root, mut app, service, mut sources) = fixture();
+    let mut authorize = |_: SemanticAuthorization<'_>| panic!("no model");
+    let mut observe = |_: &RetainedScratchAgentRun<'_>| panic!("no run");
+    let mut host = NoModel(host(service, Model::new([]), &mut authorize, &mut observe));
+    let error = WorkspaceCommandOutput::default()
+        .submit(
+            ":scope document-ask explain",
+            &mut app,
+            &mut InteractiveSession::new(),
+            Some(&mut host),
+            &mut sources,
+        )
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("explicit host model is required")
+    );
+    assert!(host.0.model.conversations.is_empty());
+}
+
 const RUN: &str = ":scope agent inspect retained source\n:scope quit\n";
 
 fn trace_events(run: &RetainedScratchAgentRun<'_>) -> Vec<Value> {

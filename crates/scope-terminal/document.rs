@@ -13,6 +13,8 @@ use std::{
     ops::Range,
 };
 
+use unicode_segmentation::UnicodeSegmentation;
+
 /// Caller-owned UTF-8 document. Cursors and replacement ranges are byte offsets
 /// on scalar boundaries. `replace` must leave the document and cursor valid.
 pub trait DocumentEditor {
@@ -110,7 +112,9 @@ fn replace(d: &mut impl DocumentEditor, range: Range<usize>, text: &str) -> io::
 /// Applies one event without owning terminal input, rendering, or raw mode.
 /// Returns `Some(true)` for Ctrl-S and `Some(false)` for Ctrl-C/Escape.
 /// The caller owns rollback and must reserve its own host shortcuts first.
-/// `preferred` retains the scalar column across vertical movement.
+/// `preferred` retains the grapheme column across vertical movement.
+/// Horizontal movement stops at extended grapheme boundaries; deletion removes
+/// a whole grapheme even when a caller supplies a cursor inside that grapheme.
 pub fn apply_document_event(
     d: &mut impl DocumentEditor,
     event: Event,
@@ -147,7 +151,12 @@ pub fn apply_document_event(
     let text = d.text();
     if matches!(key.code, KeyCode::Up | KeyCode::Down) {
         let start = line_start(text, cursor);
-        let column = *preferred.get_or_insert_with(|| text[start..cursor].chars().count());
+        let column = *preferred.get_or_insert_with(|| {
+            text[start..line_end(text, cursor)]
+                .grapheme_indices(true)
+                .take_while(|(offset, _)| start + offset < cursor)
+                .count()
+        });
         let target = if key.code == KeyCode::Up {
             if start == 0 {
                 return Ok(None);
@@ -162,7 +171,7 @@ pub fn apply_document_event(
         };
         let end = line_end(text, target);
         let offset = text[target..end]
-            .char_indices()
+            .grapheme_indices(true)
             .nth(column)
             .map_or(end, |(p, _)| target + p);
         d.set_cursor(offset);
@@ -171,26 +180,35 @@ pub fn apply_document_event(
     *preferred = None;
     match key.code {
         KeyCode::Left => d.set_cursor(
-            text[..cursor]
-                .char_indices()
-                .next_back()
+            text.grapheme_indices(true)
+                .take_while(|(p, _)| *p < cursor)
+                .last()
                 .map_or(0, |(p, _)| p),
         ),
         KeyCode::Right => d.set_cursor(
-            text[cursor..]
-                .chars()
-                .next()
-                .map_or(cursor, |c| cursor + c.len_utf8()),
+            text.grapheme_indices(true)
+                .map(|(p, g)| p + g.len())
+                .find(|end| *end > cursor)
+                .unwrap_or(text.len()),
         ),
         KeyCode::Home => d.set_cursor(line_start(text, cursor)),
         KeyCode::End => d.set_cursor(line_end(text, cursor)),
         KeyCode::Backspace if cursor > 0 => {
-            let start = text[..cursor].char_indices().next_back().unwrap().0;
-            replace(d, start..cursor, "")?;
+            let (start, grapheme) = text
+                .grapheme_indices(true)
+                .take_while(|(p, _)| *p < cursor)
+                .last()
+                .unwrap();
+            let end = start + grapheme.len();
+            replace(d, start..end, "")?;
         }
         KeyCode::Delete if cursor < text.len() => {
-            let end = cursor + text[cursor..].chars().next().unwrap().len_utf8();
-            replace(d, cursor..end, "")?;
+            let (start, grapheme) = text
+                .grapheme_indices(true)
+                .find(|(p, g)| p + g.len() > cursor)
+                .unwrap();
+            let end = start + grapheme.len();
+            replace(d, start..end, "")?;
         }
         KeyCode::Enter => replace(d, cursor..cursor, "\n")?,
         KeyCode::Tab => replace(d, cursor..cursor, "\t")?,
@@ -400,6 +418,116 @@ mod tests {
         assert_eq!(d.text, "é🙂\nx\n\té🙂");
         assert_eq!(d.edits, 4);
     }
+    #[test]
+    fn grapheme_horizontal_navigation_and_deletion() {
+        let text = "e\u{301}👩‍💻\n👨‍👩‍👧‍👦🇺🇸";
+        let boundaries = [
+            0,
+            "e\u{301}".len(),
+            "e\u{301}👩‍💻".len(),
+            "e\u{301}👩‍💻\n".len(),
+            "e\u{301}👩‍💻\n👨‍👩‍👧‍👦".len(),
+            text.len(),
+        ];
+        let mut d = Model {
+            text: text.into(),
+            ..Model::default()
+        };
+        let mut p = None;
+        key(&mut d, KeyCode::Left, &mut p);
+        assert_eq!(d.cursor, 0);
+        for expected in &boundaries[1..] {
+            key(&mut d, KeyCode::Right, &mut p);
+            assert_eq!(d.cursor, *expected);
+        }
+        key(&mut d, KeyCode::Right, &mut p);
+        assert_eq!(d.cursor, text.len());
+        for expected in boundaries[..boundaries.len() - 1].iter().rev() {
+            key(&mut d, KeyCode::Left, &mut p);
+            assert_eq!(d.cursor, *expected);
+        }
+        for pair in boundaries.windows(2).rev() {
+            d.cursor = pair[1];
+            key(&mut d, KeyCode::Backspace, &mut p);
+            assert_eq!(d.cursor, pair[0]);
+            assert_eq!(d.text, text[..pair[0]]);
+        }
+        assert!(d.text.is_empty());
+        d.text = text.into();
+        for end in &boundaries[1..] {
+            key(&mut d, KeyCode::Delete, &mut p);
+            assert_eq!(d.cursor, 0);
+            assert_eq!(d.text, text[*end..]);
+        }
+        key(&mut d, KeyCode::Delete, &mut p);
+        key(&mut d, KeyCode::Backspace, &mut p);
+        assert!(d.text.is_empty());
+    }
+
+    #[test]
+    fn grapheme_vertical_columns_and_line_boundaries() {
+        let mut d = Model {
+            text: "e\u{301}👩‍💻z\nx\n\ne\u{301}👨‍👩‍👧‍👦z".into(),
+            cursor: "e\u{301}👩‍💻".len(),
+            ..Model::default()
+        };
+        let mut p = None;
+        key(&mut d, KeyCode::Down, &mut p);
+        assert_eq!(&d.text[..d.cursor], "e\u{301}👩‍💻z\nx");
+        assert_eq!(p, Some(2));
+        key(&mut d, KeyCode::Down, &mut p);
+        assert_eq!(&d.text[..d.cursor], "e\u{301}👩‍💻z\nx\n");
+        key(&mut d, KeyCode::Down, &mut p);
+        assert_eq!(&d.text[d.cursor..], "z");
+        key(&mut d, KeyCode::Down, &mut p);
+        assert_eq!(&d.text[d.cursor..], "z");
+        for _ in 0..3 {
+            key(&mut d, KeyCode::Up, &mut p);
+        }
+        assert_eq!(d.cursor, "e\u{301}👩‍💻".len());
+        key(&mut d, KeyCode::Up, &mut p);
+        assert_eq!(d.cursor, "e\u{301}👩‍💻".len());
+        key(&mut d, KeyCode::End, &mut p);
+        assert_eq!(d.cursor, "e\u{301}👩‍💻z".len());
+        assert_eq!(p, None);
+        key(&mut d, KeyCode::Delete, &mut p);
+        assert!(d.text.starts_with("e\u{301}👩‍💻zx\n"));
+        key(&mut d, KeyCode::Down, &mut p);
+        key(&mut d, KeyCode::Down, &mut p);
+        key(&mut d, KeyCode::Home, &mut p);
+        key(&mut d, KeyCode::Backspace, &mut p);
+        assert!(d.text.starts_with("e\u{301}👩‍💻zx\n"));
+        assert_eq!(&d.text[d.cursor..], "e\u{301}👨‍👩‍👧‍👦z");
+    }
+
+    #[test]
+    fn scalar_boundary_inside_grapheme() {
+        for grapheme in ["e\u{301}", "👩‍💻", "🇺🇸"] {
+            let inside = grapheme.chars().next().unwrap().len_utf8();
+            for code in [
+                KeyCode::Left,
+                KeyCode::Right,
+                KeyCode::Backspace,
+                KeyCode::Delete,
+            ] {
+                let mut d = Model {
+                    text: format!("a{grapheme}z"),
+                    cursor: 1 + inside,
+                    ..Model::default()
+                };
+                key(&mut d, code, &mut None);
+                match code {
+                    KeyCode::Left => assert_eq!(d.cursor, 1),
+                    KeyCode::Right => assert_eq!(d.cursor, 1 + grapheme.len()),
+                    _ => {
+                        assert_eq!(d.text, "az");
+                        assert_eq!(d.cursor, 1);
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn paste_outcomes_and_errors() {
         let mut d = Model::default();

@@ -7,6 +7,10 @@ pub fn ty(name: &str) -> TypeId {
 }
 
 #[derive(Clone, Copy)]
+#[allow(
+    dead_code,
+    reason = "Shared fixture: execution and policy test targets construct different guest variants"
+)]
 pub enum Guest {
     Uppercase,
     WordCount,

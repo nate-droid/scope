@@ -1,5 +1,9 @@
 # Scope Script: A Weekend of Little Programs
 
+This is a language workshop using explicit specialist shell/interpreter commands.
+For the normal application launch and editor workflow, start with the
+[canonical quickstart](../quickstart.md).
+
 Welcome! This is a workshop for a programmer with a free afternoon, a little
 curiosity, and perhaps a cup of something warm. We'll start with five, build a
 calculator, and finish by asking questions about source code.

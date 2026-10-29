@@ -1,5 +1,9 @@
 //! Explicit downstream embedding; stock Script installs none of these operations.
 //! Run: cargo run -p scope-script --example recoverable_semantic
+#[expect(
+    dead_code,
+    reason = "This example uses the shared service but supplies its own script instead of COMBINED"
+)]
 #[path = "support/multi_semantic.rs"]
 mod fixture;
 use fixture::*;

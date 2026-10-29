@@ -7,15 +7,31 @@ and local reducer.
 
 ## Start here
 
-From the repository root, with the toolchain in `rust-toolchain.toml`:
+The normal application launch, from the repository root, is:
 
 ```sh
-cargo build --locked -p scope-workbench
-cargo run --locked --offline -p scope-workbench -- shell
+cargo run
 ```
 
-The initial build may need network access for dependencies; subsequent commands
-can run offline once they are cached. At the shell prompt:
+This opens the retained workbench editor with the toolchain in
+`rust-toolchain.toml` and default features—no `-p` or feature flags are needed.
+For the first editor-based Script, follow the [canonical quickstart](../quickstart.md):
+F1 → New Script, type source, Ctrl-S to publish in memory, then F5 to run the
+committed revision. F1 discovers actions; F4 accepts workbench commands, not
+language input. The inspector identifies the selected scratch and revision;
+output retains the identity and revision actually run.
+
+**This workshop uses continuous Script in the shell**, not editor input. From the
+workbench, commit or cancel editor drafts, press **F2**, then use the shell prompt.
+Alternatively, launch that context explicitly (also suitable for piped input):
+
+```sh
+cargo run -- shell
+```
+
+The initial build may need network access for dependencies; once cached, use
+`cargo run --offline -- shell` to prevent Cargo downloads. Startup makes no model
+request and grants no optional integration authority. At the shell prompt:
 
 ```text
 :scope script enter
@@ -26,14 +42,23 @@ without prompt labels. **Each numbered exercise is independent:** start it with
 `:scope scratch new scope-script` as shown, while in Script context. This selects
 an empty scratch without destroying earlier ones. If a draft is pending, first
 use `:cancel`. To start an exercise in a new process, launch the shell and enter
-Script context first.
+Script context first. Use `:scope help` for commands valid in this context;
+`:scope context` identifies source owners and command targets. Script expressions
+are language input; the colon-prefixed commands below are workbench commands.
+
+`:script leave` returns to ordinary shell input without recreating the workspace.
+In ordinary shell context, `quit` returns to the same workbench if you entered via
+F2; it exits the process if you launched `cargo run -- shell` directly. Scratch
+identities and committed revisions are retained across these context switches.
 
 Three different actions matter:
 
 - **Evaluate:** complete pure input commits source and evaluates the entire scratch
   in a fresh interpreter. `:run` explicitly evaluates that same full snapshot.
 - **Edit/accept:** editing source or accepting a proposal changes memory only;
-  neither executes nor saves it.
+  neither executes nor saves it. In the retained editor, Ctrl-S publishes the
+  human draft and F5 explicitly runs the committed source; typing there never
+  triggers continuous evaluation.
 - **Save:** a separate command writes committed source to an authorized destination.
 
 There is no persistent runtime environment: earlier declarations work because
@@ -116,7 +141,8 @@ it is not a source formatter.
 The syntax-invalid first line is rejected without committing it. The division
 by zero is syntactically valid, so it **remains in the scratch** after its runtime
 failure. The command editor replaces those five characters with `1 / 1`.
-`:done` keeps the draft in memory; it does not evaluate or save. Evidence still
+`:done` publishes the editing draft to the authoritative scratch in memory;
+it does not evaluate or save. Evidence still
 shows the failed execution until `:run` produces `1`.
 
 Editor coordinates are one-based lines and Unicode-scalar columns. `:delete`
@@ -227,7 +253,7 @@ want to keep). These commands assume the directory does not already exist:
 ```sh
 mkdir script-evening-workspace
 touch script-evening-workspace/evening.scope
-cargo run --locked --offline -p scope-workbench -- --workspace script-evening-workspace --writable shell
+cargo run --offline -- --workspace script-evening-workspace --writable shell
 ```
 
 In this new writable shell:
@@ -251,7 +277,8 @@ destination; external-change and workspace-authority checks still apply. The
 normal launch is read-only and rejects saves. Pending input is not saved.
 
 Leaving Script context retains committed scratch source; returning selects it
-again. Quitting never implicitly saves, and unsaved scratches are lost. Reopen
+again. Exiting the process never implicitly saves, and unsaved scratches are lost.
+Returning from the F2 shell to the workbench is not process exit. Reopen
 the saved file in a later shell with `:scope scratch open evening.scope`, then
 `:scope script enter` and `:run` (using that same workspace root).
 

@@ -710,6 +710,10 @@ fn run_edit_session_inventory(
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep session inventory inputs explicit without restructuring the edit lifecycle"
+)]
 fn run_objective_session_inventory(
     model: &mut (impl DecisionModel + ?Sized),
     session: &mut AgentSession<'_>,
@@ -1549,6 +1553,10 @@ fn run_semantic_edit_inventory<T: SourceTarget>(
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep semantic inventory inputs explicit without restructuring the edit lifecycle"
+)]
 fn run_semantic_objective_inventory<T: SourceTarget>(
     model: &mut (impl DecisionModel + ?Sized),
     controller: &mut SourceEditController,

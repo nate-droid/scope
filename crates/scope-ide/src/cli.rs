@@ -62,7 +62,7 @@ use crate::workspace::{SnapshotOptions, Workspace, WorkspaceMeta};
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AgentConfig;
 
-const AGENT_FEATURE_REQUIRED: &str = "agent support is disabled; rebuild with `--features agent` (downstream hosts: enable `scope-ide/agent`)";
+const AGENT_FEATURE_REQUIRED: &str = "agent support is disabled in this binary; from the Scope repository run:\n  cargo run --locked -p scope-workbench --features agent -- shell\nCargo's --features agent must appear before --; runtime options cannot enable it. For the standalone CLI use -p scope-ide instead. Downstream hosts must enable scope-ide/agent.";
 
 #[cfg(feature = "agent")]
 const DEFAULT_AGENT_MODEL: &str = "qwen3-30b-a3b";
@@ -206,6 +206,15 @@ fn run_configured(
     #[cfg(feature = "agent")] editing: Option<InteractiveEditConfig>,
     host_command: Option<&mut dyn ReadOnlyCommand>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(feature = "agent")]
+    if args.agent_config.launcher_binding() {
+        let supported = matches!(args.command, Command::Shell);
+        #[cfg(feature = "tui")]
+        let supported = supported || matches!(args.command, Command::Workspace);
+        if !supported {
+            return Err("--agent-local-binding requires shell or workspace; selected Script only, no App fallback".into());
+        }
+    }
     let root = std::path::Path::new(&args.workspace_root);
     if !root.is_dir() {
         return Err(format!(
@@ -546,6 +555,14 @@ pub trait ReadOnlyCommand {
     /// Receives owned metadata snapshots after a successful or canceled composition.
     /// Not called on errors; this notification grants no operation authorization.
     fn composition_completed(&mut self, _report: &composition::CompositionReport) {}
+
+    /// Legacy hosts may retain generic App agents. Document-only hosts can deny
+    /// that routing even when no semantic binding is installed; denial must not
+    /// construct a backend or silently substitute another source owner.
+    #[cfg(feature = "agent")]
+    fn allow_app_agent_fallback(&self) -> bool {
+        true
+    }
 
     /// Opt in to the normal agent command against the independently bound scratch.
     /// Returning Some forbids App/editor/disk fallback, even on resolution failure.
@@ -972,14 +989,14 @@ fn run_shell_borrowed_with_sources(
 
 #[allow(clippy::too_many_arguments)]
 fn run_shell_with_proposals(
-    #[cfg_attr(not(feature = "tools"), allow(unused_mut))] mut app: &mut App,
-    mut session: &mut InteractiveSession,
+    #[cfg_attr(not(feature = "tools"), allow(unused_mut))] app: &mut App,
+    session: &mut InteractiveSession,
     #[cfg_attr(not(feature = "agent"), allow(unused_variables))] agent_config: AgentConfig,
     mut input: impl BufRead,
     mut output: impl Write,
     interactive: bool,
     mut host_command: Option<&mut dyn ReadOnlyCommand>,
-    mut scratches: &mut ScratchBuffers,
+    scratches: &mut ScratchBuffers,
     source_proposals: &mut source_proposals::Proposals,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let downstream_namespaces = downstream::registrations(host_command.as_deref())?;
@@ -1039,7 +1056,7 @@ fn run_shell_with_proposals(
     loop {
         source_proposals.observe(scratches);
         #[cfg(feature = "tools")]
-        inspections.observe(&app);
+        inspections.observe(app);
         let script_active = script_context.is_active();
         let prompt = if script_active {
             format!("{} ", script_context.prompt().trim_end())
@@ -1062,7 +1079,7 @@ fn run_shell_with_proposals(
                     },
                 )?
             } else {
-                crate::shell_input::read_line(&mut history, &mut output, &session)?
+                crate::shell_input::read_line(&mut history, &mut output, session)?
             };
             let Some(line) = line else {
                 break;
@@ -1095,7 +1112,7 @@ fn run_shell_with_proposals(
         if script_context.is_active() && matches!(line.trim(), ":compact" | ":scope compact") {
             let result = script_context.compact(
                 source_proposals,
-                &mut scratches,
+                scratches,
                 host_command.as_deref(),
                 &mut output,
             );
@@ -1104,19 +1121,15 @@ fn run_shell_with_proposals(
             }
             continue;
         }
-        let routed_line = match script_context.route(
-            line,
-            &mut scratches,
-            host_command.as_deref(),
-            &mut output,
-        ) {
-            Ok(Some(line)) => line,
-            Ok(None) => continue,
-            Err(error) => {
-                writeln!(output, "error: {error}")?;
-                continue;
-            }
-        };
+        let routed_line =
+            match script_context.route(line, scratches, host_command.as_deref(), &mut output) {
+                Ok(Some(line)) => line,
+                Ok(None) => continue,
+                Err(error) => {
+                    writeln!(output, "error: {error}")?;
+                    continue;
+                }
+            };
         let line = routed_line.as_str();
         let command = match session.route(line) {
             InputRoute::Source(source) => {
@@ -1148,7 +1161,7 @@ fn run_shell_with_proposals(
                 {
                     if let Err(error) = composition::execute(
                         entry,
-                        &mut scratches,
+                        scratches,
                         app.workspace(),
                         app.languages(),
                         &mut host_command,
@@ -1171,7 +1184,7 @@ fn run_shell_with_proposals(
                         command.trim_start().strip_prefix("downstream").unwrap(),
                         &downstream_namespaces,
                         &mut host_command,
-                        &scratches,
+                        scratches,
                         &mut output,
                     ) {
                         writeln!(output, "error: {error}")?;
@@ -1181,7 +1194,7 @@ fn run_shell_with_proposals(
                 Some("line") => {
                     if let Err(error) = replace_scratch_line(
                         command.trim_start().strip_prefix("line").unwrap(),
-                        &mut scratches,
+                        scratches,
                     ) {
                         writeln!(output, "error: {error}")?;
                     } else {
@@ -1191,8 +1204,7 @@ fn run_shell_with_proposals(
                 }
                 Some("edit") if matches!(command.trim(), "edit" | "edit --commands") => {
                     if command.trim() == "edit" && scope_terminal::document_editing_available() {
-                        if let Err(error) = buffer_editor::run_keyboard(&mut scratches, &mut output)
-                        {
+                        if let Err(error) = buffer_editor::run_keyboard(scratches, &mut output) {
                             writeln!(output, "error: {error}")?;
                         }
                         writeln!(output, "Returned to REPL (no save or evaluation).")?;
@@ -1203,7 +1215,7 @@ fn run_shell_with_proposals(
                         "Editing draft; :help for commands, :done to keep, :cancel to cancel. Nothing is executed or saved."
                     )?;
                     if let Err(error) = buffer_editor::run_with_completion(
-                        &mut scratches,
+                        scratches,
                         &mut input,
                         &mut output,
                         &|source, draft, cursor| {
@@ -1239,7 +1251,7 @@ fn run_shell_with_proposals(
                                 output,
                                 "error: show requires no arguments; use :scope edit --commands then :show START to page"
                             )?;
-                        } else if let Err(error) = print_buffer(&scratches, &mut output) {
+                        } else if let Err(error) = print_buffer(scratches, &mut output) {
                             writeln!(output, "error: {error}")?;
                         }
                     } else if operation == "buffer"
@@ -1254,8 +1266,8 @@ fn run_shell_with_proposals(
                         )?;
                     } else if let Err(error) = run_scratch_command(
                         &format!("{mapped}{arguments}"),
-                        &mut scratches,
-                        &mut session,
+                        scratches,
+                        session,
                         last_submission.as_ref(),
                         app.workspace(),
                         app.languages(),
@@ -1297,8 +1309,8 @@ fn run_shell_with_proposals(
                 Some("scratch") => {
                     if let Err(error) = run_scratch_command(
                         command.trim_start().strip_prefix("scratch").unwrap(),
-                        &mut scratches,
-                        &mut session,
+                        scratches,
+                        session,
                         last_submission.as_ref(),
                         app.workspace(),
                         app.languages(),
@@ -1372,7 +1384,7 @@ fn run_shell_with_proposals(
                 | ShellCommand::InspectResult { .. }),
             ) => {
                 #[cfg(feature = "tools")]
-                inspections.run(command, &mut app, &scratches, &mut output)?;
+                inspections.run(command, app, scratches, &mut output)?;
                 #[cfg(not(feature = "tools"))]
                 {
                     let _ = command;
@@ -1464,18 +1476,30 @@ fn run_shell_with_proposals(
             #[cfg(feature = "agent")]
             Ok(ShellCommand::Source(source_proposals::Command::AgentEdit(request))) => {
                 let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+                    let document_only = agent_config.launcher_binding()
+                        || host_command
+                            .as_deref()
+                            .is_some_and(|host| !host.allow_app_agent_fallback());
+                    let request = if document_only {
+                        if !source_proposals.requires_evaluation() {
+                            return Err("selected-document proposals require explicit --allow-edit and a host editing contract".into());
+                        }
+                        format!("@buffer:{} {request}", scratches.selected()?.id())
+                    } else {
+                        request
+                    };
                     // Resolve authorization before configuring or invoking a model.
-                    source_proposals.validate_request(&request, &scratches)?;
+                    source_proposals.validate_request(&request, scratches)?;
                     print_buffer_target(scratches.selected()?, &mut output)?;
                     let mut agent = CellAgent::new(agent_config.clone())?;
-                    source_proposals.generate(&mut agent, &request, &scratches, &mut output)
+                    source_proposals.generate(&mut agent, &request, scratches, &mut output)
                 })();
                 if let Err(error) = result {
                     writeln!(output, "error: {error}; source unchanged")?;
                 }
             }
             Ok(ShellCommand::Source(command)) => {
-                if let Err(error) = source_proposals.run(command, &mut scratches, &mut output) {
+                if let Err(error) = source_proposals.run(command, scratches, &mut output) {
                     writeln!(output, "error: {error}")?;
                 }
             }
@@ -1552,6 +1576,18 @@ fn run_shell_with_proposals(
                 writeln!(output, "error: {AGENT_FEATURE_REQUIRED}")?
             }
             #[cfg(feature = "agent")]
+            Ok(ShellCommand::ProposalAgent { .. })
+                if agent_config.launcher_binding()
+                    || host_command
+                        .as_deref()
+                        .is_some_and(|host| !host.allow_app_agent_fallback()) =>
+            {
+                writeln!(
+                    output,
+                    "error: document-only agent cannot use workspace-path proposals; use agent edit with explicit editing authority"
+                )?;
+            }
+            #[cfg(feature = "agent")]
             Ok(ShellCommand::ProposalAgent { request }) => match proposal.as_mut() {
                 Some(snapshot) => match CellAgent::new(agent_config.clone()) {
                     Ok(agent) => match agent.run_proposal(
@@ -1573,35 +1609,35 @@ fn run_shell_with_proposals(
                 None => writeln!(output, "error: create a proposal with approved paths first")?,
             },
             Ok(ShellCommand::Context) => {
-                print_source_context(&app, &scratches, &session, &mut output)?
+                print_source_context(app, scratches, session, &mut output)?
             }
-            Ok(ShellCommand::Languages) => print_languages(app.languages(), &session, &mut output)?,
+            Ok(ShellCommand::Languages) => print_languages(app.languages(), session, &mut output)?,
             Ok(ShellCommand::Help) => print_shell_help(&mut output)?,
-            Ok(ShellCommand::Files) => print_files(&app, &mut output)?,
+            Ok(ShellCommand::Files) => print_files(app, &mut output)?,
             Ok(ShellCommand::Capabilities) => print_capabilities(app.workspace(), &mut output)?,
             Ok(ShellCommand::Authority) => print_authority(app.workspace(), &mut output)?,
             Ok(ShellCommand::Open { path }) => match app.open_path(&path) {
                 Ok(document) => {
                     writeln!(output, "opened {}", document.path().display())?;
-                    print_app_target(&app, &mut output)?;
+                    print_app_target(app, &mut output)?;
                 }
                 Err(error) => writeln!(output, "error: {error}")?,
             },
             Ok(ShellCommand::OpenSelected) => match app.open_selected() {
                 Ok(document) => {
                     writeln!(output, "opened {}", document.path().display())?;
-                    print_app_target(&app, &mut output)?;
+                    print_app_target(app, &mut output)?;
                 }
                 Err(error) => writeln!(output, "error: {error}")?,
             },
             Ok(ShellCommand::Show) => match app.open_document() {
                 Some(document) => {
-                    print_app_target(&app, &mut output)?;
+                    print_app_target(app, &mut output)?;
                     write!(output, "{}", document.text())?;
                 }
                 None => writeln!(output, "error: no document is open")?,
             },
-            Ok(ShellCommand::Lines { start, end }) => print_lines(&app, start, end, &mut output)?,
+            Ok(ShellCommand::Lines { start, end }) => print_lines(app, start, end, &mut output)?,
             Ok(ShellCommand::Replace { edit }) => match app.open_document_mut() {
                 Some(document) => match document.apply_edit(edit) {
                     Ok(()) => writeln!(output, "replaced")?,
@@ -1609,9 +1645,9 @@ fn run_shell_with_proposals(
                 },
                 None => writeln!(output, "error: no document is open")?,
             },
-            Ok(ShellCommand::Language) => print_language(&app, &mut output)?,
-            Ok(ShellCommand::Outline) => print_outline(&app, &mut output)?,
-            Ok(ShellCommand::Diagnostics) => print_diagnostics(&app, &mut output)?,
+            Ok(ShellCommand::Language) => print_language(app, &mut output)?,
+            Ok(ShellCommand::Outline) => print_outline(app, &mut output)?,
+            Ok(ShellCommand::Diagnostics) => print_diagnostics(app, &mut output)?,
             Ok(ShellCommand::Dirty) => match app.open_document() {
                 Some(document) => writeln!(
                     output,
@@ -1628,7 +1664,7 @@ fn run_shell_with_proposals(
             Ok(ShellCommand::Save) => match app.save_open_document() {
                 Ok(()) => {
                     writeln!(output, "saved")?;
-                    print_app_target(&app, &mut output)?;
+                    print_app_target(app, &mut output)?;
                 }
                 Err(error) => writeln!(output, "error: {error}")?,
             },
@@ -1651,9 +1687,13 @@ fn run_shell_with_proposals(
                     .and_then(|host| host.semantic_agent());
                 if let Some(binding) = binding {
                     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
-                        let source = scratches
-                            .semantic_target()?
-                            .ok_or("semantic agent requires a bound semantic target")?;
+                        let source = if agent_config.launcher_binding() {
+                            scratches.selected()?
+                        } else {
+                            scratches
+                                .semantic_target()?
+                                .ok_or("semantic agent requires a bound semantic target")?
+                        };
                         // Validate before constructing or invoking even the default model.
                         if source.language_id() != binding.service.language_id() {
                             return Err(
@@ -1693,10 +1733,21 @@ fn run_shell_with_proposals(
                     }
                     continue;
                 }
+                if agent_config.launcher_binding()
+                    || host_command
+                        .as_deref()
+                        .is_some_and(|host| !host.allow_app_agent_fallback())
+                {
+                    writeln!(
+                        output,
+                        "error: selected-document agent requires a configured semantic host and explicit agent opt-in; no App fallback"
+                    )?;
+                    continue;
+                }
                 match CellAgent::new(agent_config.clone()) {
                     Ok(agent) => {
-                        print_app_target(&app, &mut output)?;
-                        match run_cli_agent(&agent, &mut app, Some(&session), &request) {
+                        print_app_target(app, &mut output)?;
+                        match run_cli_agent(&agent, app, Some(session), &request) {
                             Ok(response) => writeln!(output, "{}", response.content)?,
                             Err(error) => writeln!(output, "error: {error}")?,
                         }
@@ -2604,7 +2655,7 @@ fn print_shell_help(output: &mut impl Write) -> std::io::Result<()> {
     )?;
     writeln!(
         output,
-        "Workspace buffers (explicit namespace, including in language sessions):\n  :scope open <path> | buffers | buffer <id> | show | edit [--commands]\n  :scope line N JSON_STRING Replace one whole line in the selected shell buffer (1-based)\n                     Preserves LF/CRLF; a trailing newline includes a final empty line.\n                     JSON string only; no CR/LF in replacement. Never saves or evaluates.\n  :scope buffer eval      Evaluate current in-memory source in the matching active session\n  :scope save | save-as <path> | reload | close\n  :scope reload-discard | discard (explicitly lose unsaved contents)\nTTY editing: arrows navigate, Home/End move within a line, Enter inserts a newline; Backspace/Delete edit, bracketed paste preserves layout. Ctrl-S keeps the draft; Ctrl-C/Escape cancels. Nothing saves or evaluates implicitly.\nUse :scope edit --commands for explicit editing (also the default with redirected input): :at LINE COLUMN, :insert TEXT, :delete COUNT, :show [START], :done, :cancel, :help.\nCoordinates are one-based Unicode scalars. Literal lines insert at the cursor with a newline; escapes in :insert are \\n, \\t, \\\\. Editing is a draft: :done keeps changes in memory, :cancel/EOF drops only the draft. Save separately.\n\nScratch buffers (explicit :scope namespace only):\n  :scope scratch new <language-id>\n  :scope scratch open <path> Open and select an existing workspace file\n  :scope scratch list | select <id> | show\n  :scope scratch replace <start-line> <start-column> <end-line> <end-column> <text>\n                     Same coordinates and escapes as replace below\n  :scope scratch capture   Copy the last exact REPL submission and language\n  :scope scratch eval      Evaluate in the matching active session; never switches\n  :scope scratch destination <path> Read an existing file baseline without writing\n  :scope scratch save      Checked save to the bound destination\n  :scope scratch promote <path> Checked replacement of an existing file\n  :scope scratch save-as <path> Checked replacement of an existing file\n  :scope scratch close     Close selected buffer only if clean; never saves\n  :scope scratch reload    Reload the destination only if clean\n  :scope scratch reload-discard Explicitly discard edits and reload\n  :scope scratch discard   Drop selected buffer, including unsaved edits, without writing\nBuffers are local to this shell; nothing is persisted implicitly. Destinations must already exist: create the file first, then bind, promote, or save-as. Replacement is atomic; revision checks are best effort, not atomic compare-and-swap."
+        "Workspace buffers (explicit namespace, including in language sessions):\n  :scope open <path> | buffers | buffer <id> | show | edit [--commands]\n  :scope line N JSON_STRING Replace one whole line in the selected shell buffer (1-based)\n                     Preserves LF/CRLF; a trailing newline includes a final empty line.\n                     JSON string only; no CR/LF in replacement. Never saves or evaluates.\n  :scope buffer eval      Evaluate current in-memory source in the matching active session\n  :scope save | save-as <path> | reload | close\n  :scope reload-discard | discard (explicitly lose unsaved contents)\nTTY editing: arrows navigate, Home/End move within a line, Enter inserts a newline; Backspace/Delete edit, bracketed paste preserves layout. Ctrl-S keeps the draft; Ctrl-C/Escape cancels. Nothing saves or evaluates implicitly.\nUse :scope edit --commands for explicit editing (also the default with redirected input): :at LINE COLUMN, :insert TEXT, :delete COUNT, :show [START], :done, :cancel, :help.\nCoordinates are one-based Unicode scalars. Literal lines insert at the cursor with a newline; escapes in :insert are \\n, \\t, \\\\. Editing is a draft: :done keeps changes in memory, :cancel/EOF drops only the draft. Save separately.\n\nScratch buffers (explicit :scope namespace only):\n  :scope scratch new <language-id>\n  :scope scratch open <path> Open and select an existing workspace file\n  :scope scratch list | select <id> | show\n  :scope scratch replace <start-line> <start-column> <end-line> <end-column> <text>\n                     Same coordinates and escapes as replace below\n  :scope scratch capture   Copy the last exact REPL submission and language\n  :scope scratch eval      Evaluate in the matching active session; never switches\n  :scope scratch destination <path> Read an existing file baseline without writing\n  :scope scratch save      Checked save to the bound destination\n  :scope scratch promote <path> Checked replacement of an existing file\n  :scope scratch save-as <path> Checked replacement or exclusive new-file creation\n  :scope scratch close     Close selected buffer only if clean; never saves\n  :scope scratch reload    Reload the destination only if clean\n  :scope scratch reload-discard Explicitly discard edits and reload\n  :scope scratch discard   Drop selected buffer, including unsaved edits, without writing\nBuffers are local to this shell; nothing is persisted implicitly. Binding and promotion require existing files. Save As can exclusively create a file in an existing authorized parent (Unix; parent must not have hostile writers; no fsync guarantee). Replacement is atomic; revision checks are best effort, not atomic compare-and-swap."
     )?;
     writeln!(
         output,
@@ -3283,6 +3334,9 @@ impl Args {
         let mut agent_base_url = Some(DEFAULT_AGENT_BASE_URL.to_string());
         #[cfg(feature = "agent")]
         let mut agent_api_key = None;
+        #[cfg(feature = "agent")]
+        let (mut launcher_binding, mut explicit_model, mut explicit_endpoint) =
+            (false, false, false);
 
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -3293,11 +3347,15 @@ impl Args {
                     workspace_root = Some(root);
                 }
                 #[cfg(feature = "agent")]
+                "--agent-local-binding" => launcher_binding = true,
+                #[cfg(feature = "agent")]
                 "--agent-model" => {
+                    explicit_model = true;
                     agent_model = args.next().ok_or(CliError::MissingAgentModel)?;
                 }
                 #[cfg(feature = "agent")]
                 "--agent-base-url" => {
+                    explicit_endpoint = true;
                     agent_base_url = Some(args.next().ok_or(CliError::MissingAgentBaseUrl)?);
                 }
                 #[cfg(feature = "agent")]
@@ -3316,6 +3374,7 @@ impl Args {
                 "agent"
                 | "ask"
                 | "--agent-model"
+                | "--agent-local-binding"
                 | "--agent-base-url"
                 | "--agent-openai"
                 | "--agent-api-key-env" => return Err(CliError::AgentFeatureRequired),
@@ -3455,6 +3514,21 @@ impl Args {
             None => agent_config,
         };
 
+        #[cfg(feature = "agent")]
+        let agent_config = if launcher_binding {
+            if !explicit_model || !explicit_endpoint {
+                return Err(CliError::UnexpectedArgument(
+                    "--agent-local-binding requires explicit --agent-model and --agent-base-url"
+                        .into(),
+                ));
+            }
+            agent_config
+                .enable_launcher_binding()
+                .map_err(CliError::UnexpectedArgument)?
+        } else {
+            agent_config
+        };
+
         #[cfg(not(feature = "agent"))]
         let agent_config = AgentConfig;
 
@@ -3541,6 +3615,85 @@ impl std::error::Error for CliError {
     }
 }
 
+#[cfg(all(test, feature = "agent"))]
+mod launcher_binding_tests {
+    use super::*;
+
+    fn parse(flags: &[&str]) -> Result<ParseResult, CliError> {
+        Args::parse(flags.iter().map(|s| s.to_string()))
+    }
+
+    #[test]
+    fn binding_is_off_by_default_and_requires_explicit_local_configuration() {
+        let ParseResult::Run(args) = parse(&["shell"]).unwrap() else {
+            panic!()
+        };
+        assert!(!args.agent_config.launcher_binding());
+        for flags in [
+            vec!["--agent-local-binding", "shell"],
+            vec!["--agent-local-binding", "--agent-model", "mock", "shell"],
+            vec![
+                "--agent-local-binding",
+                "--agent-base-url",
+                "http://localhost:1234/v1",
+                "shell",
+            ],
+            vec![
+                "--agent-local-binding",
+                "--agent-model",
+                "mock",
+                "--agent-base-url",
+                "https://example.com/v1",
+                "shell",
+            ],
+            vec![
+                "--agent-local-binding",
+                "--agent-model",
+                "mock",
+                "--agent-base-url",
+                "http://localhost.evil/v1",
+                "shell",
+            ],
+            vec![
+                "--agent-local-binding",
+                "--agent-model",
+                "mock",
+                "--agent-base-url",
+                "http://localhost:1234/v1",
+                "--agent-openai",
+                "shell",
+            ],
+        ] {
+            assert!(parse(&flags).is_err(), "{flags:?}");
+        }
+    }
+
+    #[test]
+    fn explicit_binding_does_not_grant_workspace_writes_or_contact_backend() {
+        for endpoint in [
+            "http://localhost:1234/v1",
+            "http://127.0.0.1:1/v1",
+            "http://[::1]:1234/v1",
+        ] {
+            let ParseResult::Run(args) = parse(&[
+                "--agent-local-binding",
+                "--agent-model",
+                "mock",
+                "--agent-base-url",
+                endpoint,
+                "shell",
+            ])
+            .unwrap() else {
+                panic!()
+            };
+            assert!(args.agent_config.launcher_binding());
+            assert!(!args.writable);
+            assert_eq!(args.agent_config.model(), "mock");
+            assert_eq!(args.agent_config.base_url(), Some(endpoint));
+        }
+    }
+}
+
 fn reject_extra_args(mut args: impl Iterator<Item = String>) -> Result<(), CliError> {
     if let Some(argument) = args.next() {
         return Err(CliError::UnexpectedArgument(argument));
@@ -3560,7 +3713,8 @@ fn print_usage() {
     );
     #[cfg(feature = "agent")]
     println!(
-        "Agent: agent [--open <path>] <request>\n  --agent-model <name>        Model (default: apple-foundationmodel)\n  --agent-base-url <url>      API URL (default: http://localhost:11434/v1)\n  --agent-openai              Use OpenAI default API URL\n  --agent-api-key-env <name>  Read API key from environment"
+        "Agent: agent [--open <path>] <request>\n  --agent-model <name>        Model (default: {})\n  --agent-base-url <url>      API URL (default: {})\n  --agent-local-binding       Opt in to selected-document host model binding; requires explicit model and loopback base URL; grants no read/edit/filesystem authority\n  --agent-openai              Use OpenAI default API URL\n  --agent-api-key-env <name>  Read API key from environment",
+        DEFAULT_AGENT_MODEL, DEFAULT_AGENT_BASE_URL
     );
     #[cfg(not(feature = "agent"))]
     println!("{AGENT_FEATURE_REQUIRED}");
@@ -3592,7 +3746,12 @@ mod tests {
             vec!["--agent-openai"],
         ] {
             let error = Args::parse(args.into_iter().map(String::from)).unwrap_err();
-            assert!(error.to_string().contains("--features agent"));
+            let message = error.to_string();
+            assert!(
+                message.contains("cargo run --locked -p scope-workbench --features agent -- shell")
+            );
+            assert!(message.contains("before --"));
+            assert!(message.contains("scope-ide/agent"));
         }
         let root = TempWorkspace::new("disabled_agent");
         root.write_file("main.scope", "fn main() {}\n");

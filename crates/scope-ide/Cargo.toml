@@ -37,6 +37,7 @@ scope-language = { path = "../scope-language" }
 scope-meta = { path = "../scope-meta" }
 scope-terminal = { path = "../scope-terminal" }
 crossterm = "0.28"
+unicode-segmentation = "1.12"
 ratatui = { version = "0.29", optional = true, features = ["unstable-rendered-line-info"] }
 
 [dev-dependencies]

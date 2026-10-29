@@ -282,20 +282,20 @@ impl<T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool> ToolP
             .into_iter()
             .collect(),
         })?;
-        if let ToolValue::Object(fields) = &mut result.value {
-            if fields.get("status").and_then(ToolValue::as_str) == Some("invalid_arguments") {
-                if let Some(ToolValue::String(message)) = fields.get_mut("message") {
-                    *message = format!(
-                        "{}. Retry using invocation_schema with language arguments only; the host owns source preconditions.",
-                        message
-                            .split(". Language fields belong inside arguments.")
-                            .next()
-                            .unwrap_or("Invalid arguments")
-                    );
-                }
-                if let Some(schema) = schema {
-                    fields.insert("invocation_schema".into(), schema);
-                }
+        if let ToolValue::Object(fields) = &mut result.value
+            && fields.get("status").and_then(ToolValue::as_str) == Some("invalid_arguments")
+        {
+            if let Some(ToolValue::String(message)) = fields.get_mut("message") {
+                *message = format!(
+                    "{}. Retry using invocation_schema with language arguments only; the host owns source preconditions.",
+                    message
+                        .split(". Language fields belong inside arguments.")
+                        .next()
+                        .unwrap_or("Invalid arguments")
+                );
+            }
+            if let Some(schema) = schema {
+                fields.insert("invocation_schema".into(), schema);
             }
         }
         Ok(result)

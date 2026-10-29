@@ -1,18 +1,24 @@
 # Scope Script
 
-Scope Script is an embeddable orchestration language. Use it in three distinct
-ways:
+Scope Script is an embeddable orchestration language. Use it through these distinct
+interfaces:
 
 | Entry point | Source and state | Host access |
 | --- | --- | --- |
-| Default workbench, `:scope script run` | Selected scratch; fresh interpreter per run | `NoHost` |
+| Default workbench, `cargo run`, then F5 | Committed selected scratch; fresh interpreter per run | `NoHost` |
+| Workbench shell, `:scope script run` or continuous Script | Same retained scratches; fresh interpreter per full-snapshot evaluation | `NoHost` |
 | Standalone CLI, `cargo run --locked -p scope-script -- FILE` | Saved UTF-8 file; fresh interpreter per run | `NoHost` |
 | Standalone REPL, `cargo run --locked -p scope-script` | Bindings retained within the REPL | `NoHost` |
 
 Embedded hosts can explicitly install adapters and authorize operations; the
-stock entry points do not do that automatically. Root `cargo run --locked`
-selects package `scope-workbench`, binary `scope`, composing `scope-ide` and
-`scope-script`. For a guided editing loop, see the [Scope tutorial](../TUTORIAL.md).
+stock entry points do not do that automatically. Root `cargo run` opens the
+retained workbench editor using package `scope-workbench`, production binary
+`scope`, composing `scope-ide` and `scope-script`. No package or feature flags are
+needed for normal Script editing. Start with the [canonical quickstart](quickstart.md);
+`cargo run -- --help` and `cargo run -- --version` describe the public interface.
+The specialist interpreter and embedding APIs remain available; they are not
+alternate recommendations for starting the application. Compiling agent support
+never by itself invokes a backend or grants runtime authorization.
 
 ## First useful programs
 
@@ -43,10 +49,12 @@ from the checkout once, then use `scope-script tasks.scope` from any directory.
 Installation uses Cargo's normal installation directory; it grants scripts no
 filesystem access. Use `scope-script --help` for output options.
 
-To run the **same source** in the workbench, start `cargo run --locked`, enter
-`:scope scratch new script`, then `:scope edit --commands`, paste the source,
-enter `:done`, and run `:scope script run`. Edit and rerun: each run starts fresh.
-The REPL instead retains bindings and evaluates one submitted line at a time;
+To run the **same source** in the workbench, start `cargo run`, press F1,
+choose **New Script**, and paste the source into the editor. Ctrl-S publishes the
+human draft to the authoritative in-memory scratch; F5 runs that committed
+revision. Output retains source/revision attribution; F1 → Focus output inspects
+it and F3 returns to editing the same source. Each run starts fresh.
+The standalone REPL instead retains bindings and evaluates one submitted line at a time;
 do not pipe multiline files into it. REPL evaluation errors are displayed but do
 not make the REPL process exit nonzero; file failures do.
 
@@ -189,11 +197,10 @@ External downstream integrations remain untested by these pure examples.
 
 ## Unsaved source: the default workbench
 
-Start `cargo run`, then enter:
+Start `cargo run` in an interactive terminal. Press F1, choose **New Script**,
+and type or paste this language source into the editor:
 
-```text
-:scope scratch new script
-:scope edit --commands
+```scope
 let experiment = {name: "daily", samples: [2, 4, 6]}
 let total = experiment.samples[0] + experiment.samples[1] + experiment.samples[2]
 if total == 12 {
@@ -201,16 +208,32 @@ if total == 12 {
 } else {
     print({name: experiment.name, total: total, status: "unexpected"})
 }
-:done
-:scope script run
 ```
+
+Press **Ctrl-S** to publish to the authoritative scratch in memory, then **F5**
+to run the committed selected Script. All editor drafts must be committed or
+cancelled before execution. Ctrl-S is not a disk save; Ctrl-C cancels the local
+draft. F1 discovers actions, F4 accepts workbench commands, and the inspector shows
+the selected scratch identity and committed revision. Output remains available,
+including older revision-attributed results; F1 → Focus output inspects it and F3
+returns to editing. Alt-Left/Right navigates result history. Ctrl-Q exits the
+application; unsaved in-memory scratches do not survive process exit.
+
+For shell commands instead of editor keys, press **F2** after committing or
+cancelling drafts, or launch explicitly with `cargo run -- shell` (required for
+piped shell input). At that shell prompt, use `:scope scratch new script`,
+`:scope edit --commands`, the source above, `:done`, and `:scope script run`.
+`help` discovers shell commands and `:scope context` shows owners and targets.
+Shell `quit` returns to the same workbench when entered via F2, retaining the
+workspace, session, scratch identities, selection, and revisions; a separately
+launched shell is a separate process, not a context switch.
 
 This exact source is runnable as
 `cargo run -p scope-script -- examples/workbench.scope`. On a TTY, plain
-`:scope edit` opens a multiline keyboard editor: arrows/Home/End, Enter,
+`:scope edit` in the shell opens a multiline keyboard editor: arrows/Home/End, Enter,
 Backspace/Delete, Tab, and bracketed paste edit the draft; Ctrl-S accepts and
-Ctrl-C/Escape cancel. The transcript uses `:scope edit --commands` explicitly;
-non-TTY input also defaults to this cooked-line editor, which
+Ctrl-C/Escape cancel. Explicit `:scope edit --commands` selects the cooked-line
+editor; non-TTY shell input also defaults to it. This mode
 inserts ordinary lines with a newline. `:done` commits to memory only;
 `:cancel` or EOF discards the draft. Inside the editor, use `:at LINE COLUMN`
 (one-based Unicode scalars), `:delete COUNT` (forward, including newlines), and
@@ -221,12 +244,23 @@ not evaluate source or authorize operations. These colon commands belong to
 command mode, not the raw editor. Acceptance creates one revision only if text
 changed; cancellation creates none. See [editing and rerunning](../TUTORIAL.md#editing-and-rerunning).
 
-Each `:scope script run` snapshots the selected scratch source and evaluates it
-with a fresh interpreter and `NoHost`. Output includes source identity/revision,
+Both F5 and shell `:scope script run` snapshot the committed selected scratch
+and evaluate it with a fresh interpreter and `NoHost`. Output includes source identity/revision,
 ordered prints, final value and interpreter status, or source-located errors.
 No bindings persist between runs. Neither editing nor running implicitly saves
 source, writes results, or creates a report. Opening `.scope` source grants no
-authority and installs no providers.
+authority and installs no providers. Workspace filesystem access is read-only by
+default; explicit file saves require a writable workspace, independently of
+in-memory publication.
+
+For continuous language input, enter `:scope script enter` from the shell.
+Complete pure submissions publish source and replay the full scratch in a fresh
+interpreter; effectful snapshots require explicit `:run`. This is distinct from
+typing in the retained editor, which never automatically evaluates source.
+`:scope help` discovers workbench commands in Script context, and
+`:scope script leave` returns to shell input without recreating the workspace.
+See [An evening with continuous Script](tutorials/script-evening.md) and
+[continuous entry](continuous-script.md) for its draft, replay, and evidence rules.
 
 `:scope run` remains a distinct, configured downstream semantic runner. Scope
 Simple (`scope.simple`) supplies analysis; neither its analysis nor pure Script
@@ -353,7 +387,9 @@ cargo run -p scope-script -- --help
 cargo run -p scope-script -- crates/scope-script/examples/daily.scope
 ```
 
-The general form is `cargo run -p scope-script -- FILE`. Files must be UTF-8 and
+The general form is `cargo run -p scope-script -- FILE`. The public `scope run FILE`
+form is not yet supported; this specialist CLI remains the saved-file runner.
+Files must be UTF-8 and
 at most 64 KiB. Each run reads the saved source into a fresh interpreter with
 `NoHost`: no providers, semantic services, workspace grants, or language runtime.
 The CLI reads the supplied script file; the script itself receives no filesystem
@@ -663,4 +699,4 @@ Unlike the default pure workbench, it uses a separately configured App target.
 Source buffer and App target remain separate; execution neither saves the script
 nor edits the target. See the
 [example catalog](../examples/README.md) for commands and host classifications.
-See also [architecture](architecture.md) and [source evaluation](SOURCE_EVALUATION.md).
+See also [architecture](architecture.md) and [language/session integration](integration.md).

@@ -5,6 +5,7 @@ use std::process::{Command, Stdio};
 fn shell(input: &str) -> String {
     let workspace = tempfile::tempdir().unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_scope"))
+        .arg("shell")
         .current_dir(workspace.path())
         .env("XDG_STATE_HOME", workspace.path())
         .env_remove("SCOPE_HISTORY_FILE")

@@ -4,8 +4,8 @@ Build, features, crate inventory and validation live here. See
 [Integration](integration.md) for language/session/component contracts and
 [Agents and harnesses](agents.md) for model loops, tool policy and proposals.
 Contribution expectations are in [CONTRIBUTING.md](../CONTRIBUTING.md).
-The [consolidation report](CLEANUP.md) records cleanup decisions, validation results,
-and deferred work; it is not an additional setup guide.
+The [entry-point audit](ux0-entry-points.md) records launcher and feature boundaries;
+the [quickstart](quickstart.md) is the canonical user setup guide.
 
 ## Workspace inventory
 
@@ -53,7 +53,7 @@ and component-encoding requirements; consult the matching Cell tag.
 
 ## Runtime defaults
 
-Bare `cargo run` starts the shell in the current existing directory, mounts the
+Bare `cargo run` starts the retained workbench in the current existing directory, mounts the
 workspace read-only, and registers no language evaluator. The workbench does
 install a separate pure Script callback (`:scope script run` / direct workspace
 Script action): fresh interpreter, `NoHost`, no semantic or filesystem authority.
@@ -64,7 +64,8 @@ always uses a read-only mount, even with `--writable`.
 
 The `scope-ide` default feature set is `["tools"]`. Tool availability does not grant write
 authority. `--no-default-features` disables tools; it does not change filesystem
-authority. Agent/model, TUI, and logging integrations remain opt-in.
+authority. Agent/model and logging integrations remain opt-in; the public workbench
+enables TUI by default.
 
 ## Build and run
 
@@ -75,9 +76,10 @@ cargo run --locked -- --help
 cargo run --locked -p scope-script -- crates/scope-script/examples/daily.scope
 ```
 
-The root default member is `scope-workbench` (binary `scope`). No arguments opens the shell in the
-current existing directory; it does not create a workspace. Script is a separate
-binary. See [getting started](../TUTORIAL.md) for argument placement and
+The root default member is `scope-workbench` (binary `scope`). No arguments opens the retained
+workbench in the current existing directory; it does not create a workspace directory.
+Use `cargo run -- shell` for explicit shell or piped input. Standalone Script remains a
+specialist binary. See [getting started](quickstart.md) for argument placement and
 read-only authority boundaries.
 
 The shell can run without optional model, TUI, logging, or language evaluation

@@ -511,7 +511,7 @@ fn scratch_callback_uses_live_target_and_fresh_revisions() {
         .invoke_script_with_target(source, Some(targets.selected().unwrap()), &mut output)
         .unwrap();
     assert!(runner.records[0].outcome.is_ok());
-    let revision = runner.records[0].target.revision.clone();
+    let revision = runner.records[0].target.revision;
     targets
         .selected_mut()
         .unwrap()

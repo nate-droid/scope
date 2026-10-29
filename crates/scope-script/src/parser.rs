@@ -328,10 +328,11 @@ impl Parser<'_> {
                     offset,
                 });
             }
-            if parser.token() != &Token::Eof && !(block && parser.token() == &Token::Symbol('}')) {
-                if !parser.eat(&Token::Newline) {
-                    parser.expect(Token::End)?;
-                }
+            if parser.token() != &Token::Eof
+                && !(block && parser.token() == &Token::Symbol('}'))
+                && !parser.eat(&Token::Newline)
+            {
+                parser.expect(Token::End)?;
             }
             parser.separators();
         }

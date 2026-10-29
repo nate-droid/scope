@@ -31,7 +31,7 @@ class Shell:
             os.environ['XDG_STATE_HOME'] = self.workspace.name
             os.environ.pop('SCOPE_HISTORY_FILE', None)
             os.chdir(self.workspace.name)
-            os.execv(str(BINARY), [str(BINARY)])
+            os.execv(str(BINARY), [str(BINARY), 'shell'])
         fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack('HHHH', 40, 120, 0, 0))
         self.pending = b''
         startup = ''

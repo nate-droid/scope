@@ -553,6 +553,10 @@ fn completion_replacement_utf8_and_safety() {
     assert_eq!(r.complete(&mut provider), CompletionAction::Applied);
     assert_eq!((r.buffer.text(), r.buffer.cursor()), ("é中 tail", 5));
     let before = r.buffer.clone();
+    #[expect(
+        clippy::reversed_empty_ranges,
+        reason = "verify that replacement rejects reversed ranges without modifying the buffer"
+    )]
     for range in [1..2, 0..99, 5..2] {
         assert!(!r.buffer.replace(range, "bad"));
         assert_eq!(r.buffer, before);

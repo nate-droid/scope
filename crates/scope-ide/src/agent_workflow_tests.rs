@@ -23,7 +23,7 @@ impl ToolProvider for Provider {
     }
     fn invoke(&mut self, call: ToolCall) -> Result<ToolResult, ToolError> {
         assert_eq!(call.name, "read");
-        let value = if call.arguments.get("large").is_some() {
+        let value = if call.arguments.contains_key("large") {
             "x".repeat(10000)
         } else {
             "value".into()

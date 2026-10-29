@@ -7,6 +7,7 @@ description = "Minimal single-line terminal input and reusable UTF-8 editing"
 
 [dependencies]
 crossterm = "0.28"
+unicode-segmentation = "1.12"
 
 [lib]
 path = "lib.rs"

@@ -18,6 +18,8 @@ pub mod repl;
 pub mod runner;
 pub mod semantic;
 pub mod workbench;
+#[cfg(feature = "agent")]
+pub mod workbench_agent;
 
 pub use scope_ide::tool::ToolValue as Value;
 use scope_ide::tool::operations::OperationError;
@@ -318,10 +320,10 @@ impl Interpreter {
         })?;
         // Keep named-call frames small enough for the supported call depth,
         // independently of the much larger general expression evaluator.
-        if let parser::Kind::Call(name, args) = &expr.kind {
-            if let Some(function) = self.functions.get(name).cloned() {
-                return self.user_call(name, args, function, expr.offset, host, budget);
-            }
+        if let parser::Kind::Call(name, args) = &expr.kind
+            && let Some(function) = self.functions.get(name).cloned()
+        {
+            return self.user_call(name, args, function, expr.offset, host, budget);
         }
         self.expression_inner(expr, host, budget)
     }
@@ -495,16 +497,15 @@ impl Interpreter {
                     .iter()
                     .map(|e| self.expression(e, host, budget))
                     .collect::<Result<Vec<_>, _>>()?;
-                if name == "replace" {
-                    if let [Value::String(text), Value::String(from), Value::String(_)] =
+                if name == "replace"
+                    && let [Value::String(text), Value::String(from), Value::String(_)] =
                         values.as_slice()
-                    {
-                        let work = replace_work(text, from).map_err(at)?;
-                        budget.work = budget
-                            .work
-                            .checked_sub(work)
-                            .ok_or_else(|| at(ErrorKind::LimitExceeded))?;
-                    }
+                {
+                    let work = replace_work(text, from).map_err(at)?;
+                    budget.work = budget
+                        .work
+                        .checked_sub(work)
+                        .ok_or_else(|| at(ErrorKind::LimitExceeded))?;
                 }
                 match name.as_str() {
                     "print" => {
@@ -849,13 +850,13 @@ fn check_bindings(
             | parser::Statement::Function { name, offset, .. } => Some((name, offset)),
             _ => None,
         };
-        if let Some((name, offset)) = declaration {
-            if !names.insert(name.clone()) {
-                return Err(Error {
-                    offset: *offset,
-                    kind: runtime("binding already exists"),
-                });
-            }
+        if let Some((name, offset)) = declaration
+            && !names.insert(name.clone())
+        {
+            return Err(Error {
+                offset: *offset,
+                kind: runtime("binding already exists"),
+            });
         }
     }
     for statement in statements {

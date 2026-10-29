@@ -272,7 +272,10 @@ fn registered_contracts_are_inspectable_by_script_without_execution_or_authority
                     "let contract = scope.operations(); if contract.authorized == false { print(contract) } else { scope.invoke(\"receiver\", \"accept\", {}) }",
                     &mut host,
                 ).unwrap();
-        assert_eq!(interpreter.take_output(), [report.clone()]);
+        assert_eq!(
+            interpreter.take_output().as_slice(),
+            std::slice::from_ref(&report)
+        );
         assert_eq!(interpreter.eval("contract", &mut host).unwrap(), report);
         let Value::Object(report) = report else {
             panic!("report must be an object")

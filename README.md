@@ -19,66 +19,36 @@ services, embed semantic operations in a Rust host, and review revision-aware
 proposals. Scope is experimental: these are usable building blocks, not a complete
 autonomous development environment.
 
-## Try it
+## Start here
 
-Clone this repository and run these commands from its root. You need the Rust
-toolchain selected by `rust-toolchain.toml`; the first build downloads dependencies,
-including [Cell](https://github.com/nate-droid/cell) at `v0.0.2`.
-No model server, API key, or Wasm target is needed.
+From the repository root, in an interactive terminal:
 
 ```sh
-cargo run --locked
+cargo run
 ```
 
-At the prompt, paste:
+This launches **Scope**, the retained workbench editor, using the pinned Rust
+toolchain and default features. No package selection, feature flags, model server,
+API key, or Wasm target is required. The first build downloads dependencies,
+including Cell `v0.0.2`; the application does not contact a model on startup.
 
-```text
-:scope scratch new script
-:scope edit --commands
-print(2 + 3)
-:done
-:scope script run
-:scope quit
-```
+1. Press **F1**, search **New Script**, then Enter to create and select a scratch.
+2. Type `print(2 + 3)` in the editor.
+3. Press **Ctrl-S** to publish the draft to the authoritative in-memory scratch.
+4. Press **F5** to run that committed revision. Output and source/revision evidence
+   remain in the output pane; use F1 → **Focus output** to inspect it.
+5. Press **F3** to return to editing the same source. **Ctrl-Q** exits Scope.
 
-The run reports `print: 5` and `status: interpreter success`. Editing commits a
-revision to memory, not disk. Each Script run uses a fresh interpreter with no host
-providers or filesystem authority. Workspace access is read-only by default;
-explicitly opt into saves with `cargo run --locked -- --writable shell`.
+F1 discovers actions, F4 accepts workbench commands, and F2 temporarily opens the
+shell. Shell `quit` returns to the same workspace. Source text in the editor is
+Script, not a workbench command. Ctrl-S is **not a disk save**. Startup filesystem
+access is read-only; pure Script runs with no host providers or native authority.
+Agent compilation, discovery, and proposal acceptance do not grant authorization.
 
-In continuous Script context (`:scope script enter`), successful evaluations show
-only printed values and the final value. Failures retain detailed diagnostics.
-`:scope script evidence` inspects the host's latest retained evaluation, including
-its source snapshot, without executing again; semantic hosts also show their target,
-catalog, and returned envelopes. Evidence describes that recorded run, not the
-current scratch. `:scope script leave` restores the usual detailed run output.
-
-For a saved-file example:
-
-```sh
-cargo run --locked -p scope-script -- examples/workbench.scope
-```
-
-Expected output:
-
-```text
-{"name": "daily", "status": "ok", "total": 12}
-```
-
-On a terminal, `:scope edit` opens the multiline keyboard editor: Ctrl-S accepts;
-Ctrl-C or Escape cancels. The explicit `--commands` mode above also works with
-piped input. Follow the [Scope tutorial](TUTORIAL.md) for editing, rerunning,
-cancelling a draft, and inspecting source ownership.
-
-For retained editing with an inspector and output pane, run
-`cargo run --locked -- workspace .` in an interactive terminal. Follow the
-[workspace tutorial](TUTORIAL.md#interactive-workspace) for F1 actions, F5 execution,
-result history, F4 commands, and scratch switching. Ctrl-S commits in memory, never to disk.
-This is not a full IDE or an automatically authorized downstream runner.
-
-Want a longer, hands-on introduction? Try [Scope Script: A Weekend of Little
-Programs](docs/tutorials/SCOPE_SCRIPT_TUTORIAL.md), with runnable examples and a
-[field notebook](docs/tutorials/SCOPE_SCRIPT_FIELD_NOTES.md).
+The [canonical quickstart](docs/quickstart.md) explains the contexts, draft/run
+boundaries, shell transitions, and saved-file execution. `cargo run -- --help`
+shows the supported CLI; `cargo run -- --version` reports the binary version.
+The single recommended application binary is `scope` (`scope-workbench`).
 
 ## How it fits together
 
@@ -121,8 +91,8 @@ For tool authorization and proposal workflows, see the
 ## Status and development
 
 Public interfaces are developing. Agent/model integration, the browsing TUI, and
-research fixture hosts are optional. The retained `workspace` editor and the
-legacy browsing TUI are separate interfaces; neither is a full IDE. Discovery and
+research fixture hosts are optional. The default retained workbench and the
+legacy developer browsing TUI are separate interfaces; neither is a full IDE. Discovery and
 type compatibility do not establish semantic correctness or grant authority.
 There is no complete autonomous compile/test/review loop.
 

@@ -1,13 +1,15 @@
 //! Explicit, in-memory scratch editing authority. No App, filesystem or execution access.
 use std::{io, ops::Range};
 
-use crossterm::event::{Event, KeyEventKind};
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
     layout::Rect,
-    text::Line,
+    style::{Modifier, Style},
+    text::{Line, Span as RenderSpan},
     widgets::{Block, Borders, Paragraph},
 };
 use scope_terminal::DocumentEditor;
+use unicode_segmentation::UnicodeSegmentation;
 
 use super::{Pane, TuiContext};
 use crate::{
@@ -51,6 +53,7 @@ pub struct ScratchEditAccess<'a> {
     selected: bool,
 }
 impl<'a> ScratchEditAccess<'a> {
+    #[cfg(test)]
     pub(super) fn new(sources: &'a mut ScratchBuffers) -> Self {
         Self {
             sources,
@@ -124,7 +127,156 @@ struct Draft {
     text: TextBuffer,
     cursor: usize,
     preferred: Option<usize>,
+    editing: LocalEditing,
 }
+
+#[derive(Clone)]
+struct LocalState {
+    text: String,
+    cursor: usize,
+    anchor: Option<usize>,
+}
+
+#[derive(Default)]
+struct LocalEditing {
+    anchor: Option<usize>,
+    undo: Vec<LocalState>,
+    redo: Vec<LocalState>,
+    typing: bool,
+}
+
+impl Draft {
+    fn state(&self) -> LocalState {
+        LocalState {
+            text: self.text.as_str().into(),
+            cursor: self.cursor,
+            anchor: self.editing.anchor,
+        }
+    }
+
+    fn restore(&mut self, state: LocalState) {
+        self.text = TextBuffer::new(state.text);
+        self.cursor = state.cursor;
+        self.editing.anchor = state.anchor;
+        self.preferred = None;
+    }
+
+    fn selection(&self) -> Option<Range<usize>> {
+        self.editing
+            .anchor
+            .filter(|anchor| *anchor != self.cursor)
+            .map(|anchor| anchor.min(self.cursor)..anchor.max(self.cursor))
+    }
+
+    fn event(&mut self, event: Event) -> io::Result<Option<bool>> {
+        let key = match &event {
+            Event::Key(key) => Some(*key),
+            _ => None,
+        };
+        if let Some(key) = key
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('z' | 'y'))
+        {
+            self.editing.typing = false;
+            let redo = key.code == KeyCode::Char('y');
+            let state = if redo {
+                self.editing.redo.pop()
+            } else {
+                self.editing.undo.pop()
+            };
+            if let Some(state) = state {
+                let current = self.state();
+                if redo {
+                    self.editing.undo.push(current);
+                } else {
+                    self.editing.redo.push(current);
+                }
+                self.restore(state);
+            }
+            return Ok(None);
+        }
+        let plain = key.is_some_and(|key| {
+            !key.modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+        });
+        let navigation = plain
+            && key.is_some_and(|key| {
+                matches!(
+                    key.code,
+                    KeyCode::Left
+                        | KeyCode::Right
+                        | KeyCode::Up
+                        | KeyCode::Down
+                        | KeyCode::Home
+                        | KeyCode::End
+                )
+            });
+        let typing =
+            plain && key.is_some_and(|key| matches!(key.code, KeyCode::Char(c) if !c.is_control()));
+        let mutation = matches!(&event, Event::Paste(_))
+            || typing
+            || (plain
+                && key.is_some_and(|key| {
+                    matches!(
+                        key.code,
+                        KeyCode::Enter | KeyCode::Tab | KeyCode::Backspace | KeyCode::Delete
+                    )
+                }));
+        let before = self.state();
+        let had_selection = self.selection().is_some();
+        if navigation {
+            if key.unwrap().modifiers.contains(KeyModifiers::SHIFT) {
+                self.editing.anchor.get_or_insert(self.cursor);
+            } else {
+                self.editing.anchor = None;
+                if let Some(range) = before
+                    .anchor
+                    .filter(|anchor| *anchor != before.cursor)
+                    .map(|anchor| anchor.min(before.cursor)..anchor.max(before.cursor))
+                    && matches!(key.unwrap().code, KeyCode::Left | KeyCode::Right)
+                {
+                    self.cursor = if key.unwrap().code == KeyCode::Left {
+                        range.start
+                    } else {
+                        range.end
+                    };
+                    self.preferred = None;
+                    self.editing.typing = false;
+                    return Ok(None);
+                }
+            }
+        }
+        let deleting = plain
+            && key.is_some_and(|key| matches!(key.code, KeyCode::Backspace | KeyCode::Delete));
+        if mutation {
+            if let Some(range) = self.selection() {
+                self.replace(range.clone(), "")?;
+                self.cursor = range.start;
+            }
+            self.editing.anchor = None;
+        }
+        let mut preferred = self.preferred.take();
+        let result = if deleting && had_selection {
+            Ok(None)
+        } else {
+            scope_terminal::apply_document_event(self, event, &mut preferred)
+        };
+        self.preferred = preferred;
+        if self.text.as_str() != before.text {
+            if !(typing && self.editing.typing && !had_selection) {
+                self.editing.undo.push(before);
+                // History is disposable and bounded, not committed revision history.
+                if self.editing.undo.len() > 256 {
+                    self.editing.undo.remove(0);
+                }
+            }
+            self.editing.redo.clear();
+        }
+        self.editing.typing = typing && !had_selection;
+        result
+    }
+}
+
 impl DocumentEditor for Draft {
     fn text(&self) -> &str {
         self.text.as_str()
@@ -184,14 +336,13 @@ impl EditableScratchPane {
                 self.parked.push(self.draft.take().unwrap());
                 self.status = None;
             }
-            if self.draft.is_none() {
-                if let Some(index) = self
+            if self.draft.is_none()
+                && let Some(index) = self
                     .parked
                     .iter()
                     .position(|draft| draft.baseline.source.source_id == current.source.source_id)
-                {
-                    self.draft = Some(self.parked.remove(index));
-                }
+            {
+                self.draft = Some(self.parked.remove(index));
             }
         }
         if self.draft.is_none() {
@@ -202,6 +353,7 @@ impl EditableScratchPane {
                         baseline,
                         cursor: 0,
                         preferred: None,
+                        editing: LocalEditing::default(),
                     })
                 }
                 Err(error) => {
@@ -211,9 +363,33 @@ impl EditableScratchPane {
             }
         }
         let draft = self.draft.as_mut().unwrap();
-        let mut preferred = draft.preferred.take();
-        let result = scope_terminal::apply_document_event(draft, event, &mut preferred);
-        draft.preferred = preferred;
+        // Clean working text can follow a new committed revision. Dirty text must
+        // retain its exact baseline so publication still detects conflicts.
+        if draft.text.as_str() == draft.baseline.source.text.as_ref()
+            && let Ok(current) = access.snapshot()
+            && current.source.source_id == draft.baseline.source.source_id
+            && current != draft.baseline
+        {
+            draft.cursor = draft.cursor.min(current.source.text.len());
+            while !current.source.text.is_char_boundary(draft.cursor) {
+                draft.cursor -= 1;
+            }
+            draft.text = TextBuffer::new(current.source.text.as_ref());
+            draft.baseline = current;
+            draft.preferred = None;
+            draft.editing = LocalEditing::default();
+            draft.cursor = draft
+                .text
+                .as_str()
+                .grapheme_indices(true)
+                .map(|(i, _)| i)
+                .chain(std::iter::once(draft.text.as_str().len()))
+                .take_while(|i| *i <= draft.cursor)
+                .last()
+                .unwrap_or(0);
+            self.status = None;
+        }
+        let result = draft.event(event);
         match result {
             Ok(Some(false)) => {
                 self.draft = None;
@@ -228,7 +404,11 @@ impl EditableScratchPane {
                     self.status = Some(format!("{error}; draft retained — Ctrl-C cancels"))
                 }
             },
-            Ok(None) => {}
+            Ok(None) => {
+                if draft.text.as_str() != draft.baseline.source.text.as_ref() {
+                    self.status = None;
+                }
+            }
             Err(error) => self.status = Some(error.to_string()),
         }
         true
@@ -272,6 +452,10 @@ impl Pane for EditableScratchPane {
                 .iter()
                 .chain(self.parked.iter())
                 .find(|draft| draft.baseline.source.source_id == selected.source.source_id)
+                .filter(|draft| {
+                    draft.text.as_str() != draft.baseline.source.text.as_ref()
+                        || draft.baseline.source == selected.source
+                })
         });
         let bound = selected.map(|snapshot| BoundSource::Available(snapshot.source));
         let conflict = match (draft, &bound) {
@@ -298,16 +482,17 @@ impl Pane for EditableScratchPane {
             (_, None) => "UNAVAILABLE — no scratch owner supplied",
         };
         let title = format!(
-            "Scratch editor | {} | {} | Ctrl-S commit · Ctrl-C cancel | {}",
+            "Editor {} | {} | {} | Ctrl-S publish · F5 run · Ctrl-C discard",
             if ctx.is_focused() {
                 "FOCUSED"
             } else {
                 "unfocused"
             },
-            if draft.is_some() {
+            if draft.is_some_and(|draft| draft.text.as_str() != draft.baseline.source.text.as_ref())
+            {
                 "LOCAL DRAFT"
             } else {
-                "read-only snapshot"
+                "type to edit"
             },
             conflict
                 .or(self.status.as_deref())
@@ -346,19 +531,19 @@ impl Pane for EditableScratchPane {
             .map(|line| {
                 let mut width = 0;
                 let mut start = 0;
-                for (byte, ch) in line.char_indices() {
+                for (byte, ch) in line.grapheme_indices(true) {
                     let next = width + Line::raw(ch.to_string()).width();
                     if next > left {
                         break;
                     }
                     width = next;
-                    start = byte + ch.len_utf8();
+                    start = byte + ch.len();
                 }
                 // A viewport cutting a wide scalar leaves blank cells, not half a glyph.
                 let padding = if width < left {
-                    let ch = line[start..].chars().next();
+                    let ch = line[start..].graphemes(true).next();
                     if let Some(ch) = ch {
-                        start += ch.len_utf8();
+                        start += ch.len();
                         (width + Line::raw(ch.to_string()).width()).saturating_sub(left)
                     } else {
                         0
@@ -366,17 +551,38 @@ impl Pane for EditableScratchPane {
                 } else {
                     0
                 };
-                Line::raw(format!("{}{}", " ".repeat(padding), &line[start..]))
+                let line_offset = line.as_ptr() as usize - text.as_ptr() as usize;
+                let selection = draft.and_then(Draft::selection);
+                let mut spans = vec![RenderSpan::raw(" ".repeat(padding))];
+                spans.extend(
+                    line[start..]
+                        .grapheme_indices(true)
+                        .map(|(offset, grapheme)| {
+                            let byte = line_offset + start + offset;
+                            if selection
+                                .as_ref()
+                                .is_some_and(|range| range.contains(&byte))
+                            {
+                                RenderSpan::styled(
+                                    grapheme,
+                                    Style::default().add_modifier(Modifier::REVERSED),
+                                )
+                            } else {
+                                RenderSpan::raw(grapheme)
+                            }
+                        }),
+                );
+                Line::from(spans)
             })
             .collect();
         frame.render_widget(Paragraph::new(lines), inner);
-        if ctx.is_focused() {
-            if let Some((row, column)) = cursor {
-                frame.set_cursor_position((
-                    inner.x + (column - left) as u16,
-                    inner.y + (row - top) as u16,
-                ));
-            }
+        if ctx.is_focused()
+            && let Some((row, column)) = cursor
+        {
+            frame.set_cursor_position((
+                inner.x + (column - left) as u16,
+                inner.y + (row - top) as u16,
+            ));
         }
     }
 }
@@ -384,6 +590,94 @@ impl Pane for EditableScratchPane {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn local_key(
+        pane: &mut EditableScratchPane,
+        sources: &mut ScratchBuffers,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+    ) {
+        pane.handle_source_event(
+            Event::Key(crossterm::event::KeyEvent::new(code, modifiers)),
+            &mut ScratchEditAccess::new(sources),
+        );
+    }
+
+    #[test]
+    fn local_history_selection_and_publication_conflict() {
+        let mut sources = sources();
+        let mut pane = EditableScratchPane::new();
+        let none = KeyModifiers::NONE;
+        let ctrl = KeyModifiers::CONTROL;
+        let shift = KeyModifiers::SHIFT;
+        for c in ['a', 'b'] {
+            local_key(&mut pane, &mut sources, KeyCode::Char(c), none);
+        }
+        local_key(&mut pane, &mut sources, KeyCode::Char('z'), ctrl);
+        assert_eq!(pane.draft.as_ref().unwrap().text.as_str(), "é\n");
+        local_key(&mut pane, &mut sources, KeyCode::Char('y'), ctrl);
+        assert_eq!(pane.draft.as_ref().unwrap().cursor, 2);
+        local_key(&mut pane, &mut sources, KeyCode::End, none);
+        local_key(&mut pane, &mut sources, KeyCode::Down, shift);
+        local_key(&mut pane, &mut sources, KeyCode::Home, shift);
+        assert!(pane.draft.as_ref().unwrap().selection().is_some());
+        pane.handle_source_event(
+            Event::Paste("X\n👩‍💻".into()),
+            &mut ScratchEditAccess::new(&mut sources),
+        );
+        let replaced = pane.draft.as_ref().unwrap().text.as_str().to_owned();
+        local_key(&mut pane, &mut sources, KeyCode::Char('z'), ctrl);
+        assert!(pane.draft.as_ref().unwrap().selection().is_some());
+        local_key(&mut pane, &mut sources, KeyCode::Delete, none);
+        assert_eq!(pane.draft.as_ref().unwrap().text.as_str(), "abé");
+        local_key(&mut pane, &mut sources, KeyCode::Char('y'), ctrl);
+        assert_eq!(pane.draft.as_ref().unwrap().text.as_str(), "abé");
+        local_key(&mut pane, &mut sources, KeyCode::Char('z'), ctrl);
+        local_key(&mut pane, &mut sources, KeyCode::Char('y'), ctrl);
+        local_key(&mut pane, &mut sources, KeyCode::Char('s'), ctrl);
+        let published = sources.bound_source();
+        local_key(&mut pane, &mut sources, KeyCode::Char('z'), ctrl);
+        assert_eq!(sources.bound_source(), published);
+        let baseline = ScratchEditAccess::new(&mut sources).snapshot().unwrap();
+        ScratchEditAccess::new(&mut sources)
+            .commit(&baseline, "external")
+            .unwrap();
+        local_key(&mut pane, &mut sources, KeyCode::Char('s'), ctrl);
+        assert!(pane.status.as_ref().unwrap().contains("conflict"));
+        assert_ne!(pane.draft.as_ref().unwrap().text.as_str(), "external");
+        assert_ne!(replaced, "external");
+    }
+
+    #[test]
+    fn clean_external_refresh_drops_obsolete_local_history() {
+        let mut sources = sources();
+        let mut pane = EditableScratchPane::new();
+        local_key(
+            &mut pane,
+            &mut sources,
+            KeyCode::Char('a'),
+            KeyModifiers::NONE,
+        );
+        local_key(
+            &mut pane,
+            &mut sources,
+            KeyCode::Char('s'),
+            KeyModifiers::CONTROL,
+        );
+        let baseline = ScratchEditAccess::new(&mut sources).snapshot().unwrap();
+        ScratchEditAccess::new(&mut sources)
+            .commit(&baseline, "new 👩‍💻")
+            .unwrap();
+        local_key(
+            &mut pane,
+            &mut sources,
+            KeyCode::Char('z'),
+            KeyModifiers::CONTROL,
+        );
+        assert_eq!(pane.draft.as_ref().unwrap().text.as_str(), "new 👩‍💻");
+        assert!(pane.draft.as_ref().unwrap().editing.undo.is_empty());
+        assert!(!pane.has_dirty_draft());
+    }
     fn sources() -> ScratchBuffers {
         let mut sources = ScratchBuffers::default();
         let id = sources.create("test", "é\n");
@@ -475,6 +769,64 @@ mod tests {
         );
         assert_eq!(access.sources.selected().unwrap().text(), "other");
     }
+    #[test]
+    fn clean_draft_follows_committed_changes_before_typing() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut sources = sources();
+        let mut pane = EditableScratchPane::new();
+        pane.handle_source_event(
+            Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)),
+            &mut ScratchEditAccess::new(&mut sources),
+        );
+        let baseline = ScratchEditAccess::new(&mut sources).snapshot().unwrap();
+        let updated = ScratchEditAccess::new(&mut sources)
+            .commit(&baseline, "猫")
+            .unwrap();
+        let root = crate::test_support::TempWorkspace::new("clean-draft-refresh");
+        let app = crate::app::App::new(root.workspace()).unwrap();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 8)).unwrap();
+        terminal
+            .draw(|frame| {
+                pane.render(
+                    frame,
+                    frame.area(),
+                    &TuiContext::with_view_sources(&app, true, 0, Some(&sources)),
+                );
+            })
+            .unwrap();
+        let displayed: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(displayed.contains('猫'));
+        assert!(!displayed.contains('é'));
+        assert!(!displayed.contains("CONFLICT"));
+        // The old cursor was byte 2; refreshing must not split the new scalar.
+        pane.handle_source_event(
+            Event::Paste("new ".into()),
+            &mut ScratchEditAccess::new(&mut sources),
+        );
+        let draft = pane.draft.as_ref().unwrap();
+        assert_eq!(draft.baseline, updated);
+        assert_eq!(draft.text.as_str(), "new 猫");
+        assert_eq!(
+            ScratchEditAccess::new(&mut sources).snapshot().unwrap(),
+            updated
+        );
+        pane.handle_source_event(
+            Event::Key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)),
+            &mut ScratchEditAccess::new(&mut sources),
+        );
+        let published = ScratchEditAccess::new(&mut sources).snapshot().unwrap();
+        assert_eq!(published.source.source_id, baseline.source.source_id);
+        assert_eq!(published.version, updated.version + 1);
+        assert_eq!(published.source.text.as_ref(), "new 猫");
+    }
+
     #[test]
     fn draft_survives_render_and_conflict_then_cancels() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};

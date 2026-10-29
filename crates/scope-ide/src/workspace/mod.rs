@@ -147,6 +147,16 @@ impl Workspace {
         })
     }
 
+    /// Exclusively create through Cell's writable mount and return its revision.
+    /// Unix only; no durability guarantee. The parent must not have hostile writers.
+    pub fn create_document_source(
+        &self,
+        path: &ScopePath,
+        contents: &str,
+    ) -> Result<String, cell_capability_fs::FsError> {
+        self.fs.create_text(self.cell_path(path), contents)
+    }
+
     /// Revision-checked atomic replacement, preserving structured Cell failures.
     /// Conflict checking is best-effort, not atomic compare-and-swap.
     pub fn save_document_source(

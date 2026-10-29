@@ -38,6 +38,7 @@ pub struct AgentConfig {
     model: String,
     base_url: Option<String>,
     api_key: Option<String>,
+    launcher_binding: bool,
 }
 
 impl AgentConfig {
@@ -46,6 +47,7 @@ impl AgentConfig {
             model: model.into(),
             base_url: None,
             api_key: None,
+            launcher_binding: false,
         }
     }
 
@@ -54,12 +56,44 @@ impl AgentConfig {
             model: model.into(),
             base_url: Some(base_url.into()),
             api_key: None,
+            launcher_binding: false,
         }
     }
 
     pub fn with_api_key(mut self, api_key: impl Into<String>) -> Self {
         self.api_key = Some(api_key.into());
         self
+    }
+
+    pub(crate) fn enable_launcher_binding(mut self) -> Result<Self, String> {
+        let url = self
+            .base_url
+            .as_deref()
+            .ok_or("launcher binding requires a local endpoint")?;
+        let authority = url
+            .strip_prefix("http://")
+            .or_else(|| url.strip_prefix("https://"))
+            .ok_or("launcher binding requires an HTTP local endpoint")?
+            .split('/')
+            .next()
+            .unwrap_or("");
+        let local = ["localhost", "127.0.0.1", "[::1]"].iter().any(|host| {
+            authority == *host
+                || authority.strip_prefix(host).is_some_and(|rest| {
+                    rest.strip_prefix(':').is_some_and(|port| {
+                        !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())
+                    })
+                })
+        });
+        if !local || self.model.trim().is_empty() {
+            return Err("launcher binding requires a nonempty model and loopback endpoint".into());
+        }
+        self.launcher_binding = true;
+        Ok(self)
+    }
+
+    pub(crate) fn launcher_binding(&self) -> bool {
+        self.launcher_binding
     }
 
     pub fn model(&self) -> &str {

@@ -115,6 +115,17 @@ fn schema(s: &OperationSchema) -> Value {
     }
 }
 
+/// No installed providers or authority. Useful for pure evaluation and the CLI.
+pub struct NoHost;
+impl Host for NoHost {
+    fn operations(&mut self) -> Result<Value, ErrorKind> {
+        Ok(Value::Array(vec![]))
+    }
+    fn invoke(&mut self, _: &str, _: &str, _: Value) -> Result<Value, ErrorKind> {
+        Err(OperationError::UnknownOperation.into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,16 +216,5 @@ mod tests {
         );
         assert!(host.results.is_empty());
         assert_eq!(host.session.snapshot().unwrap().revision, revision);
-    }
-}
-
-/// No installed providers or authority. Useful for pure evaluation and the CLI.
-pub struct NoHost;
-impl Host for NoHost {
-    fn operations(&mut self) -> Result<Value, ErrorKind> {
-        Ok(Value::Array(vec![]))
-    }
-    fn invoke(&mut self, _: &str, _: &str, _: Value) -> Result<Value, ErrorKind> {
-        Err(OperationError::UnknownOperation.into())
     }
 }

@@ -1834,6 +1834,7 @@ dependencies = [
  "scope-types",
  "serde",
  "serde_json",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -1869,6 +1870,7 @@ name = "scope-terminal"
 version = "0.1.0"
 dependencies = [
  "crossterm",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -1885,6 +1887,7 @@ version = "0.1.0"
 dependencies = [
  "scope-ide",
  "scope-script",
+ "serde_json",
  "tempfile",
 ]
 

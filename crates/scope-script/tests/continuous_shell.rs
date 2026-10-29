@@ -43,7 +43,7 @@ fn reduction_hooks_preserve_snapshot_and_byte_ranges_without_execution() {
             };
             let expected = scope_script::reduction::reduce(&scope_script::runner::Snapshot {
                 identity: snapshot.source_id.clone(),
-                revision: snapshot.revision_id.clone(),
+                revision: snapshot.revision_id,
                 text: text.into(),
             })
             .unwrap();

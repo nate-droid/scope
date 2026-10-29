@@ -18,13 +18,24 @@ pub struct PureRunRecord {
     pub outcome: Result<Value, Error>,
 }
 
-/// A pure workbench: no target, session, installed providers, or persistent bindings.
+/// Pure Script execution with no native authority. Agent inspection/proposals
+/// are separately opt-in and never install interpreter host capabilities.
 #[derive(Default)]
 pub struct WorkbenchRunner {
     pub records: Vec<PureRunRecord>,
+    #[cfg(feature = "agent")]
+    agent: Option<crate::workbench_agent::AgentBinding>,
 }
 
 impl WorkbenchRunner {
+    /// Install the Script read binding only with explicit host authorization.
+    /// Endpoint opt-in and independent edit authorization remain launcher-owned.
+    #[cfg(feature = "agent")]
+    pub fn with_agent_reads(mut self) -> Self {
+        self.agent = Some(crate::workbench_agent::AgentBinding::new());
+        self
+    }
+
     pub fn run(&mut self, source: &ScratchBuffer) -> &PureRunRecord {
         let source = Snapshot {
             identity: source.evaluation_source_id().clone(),
@@ -43,6 +54,16 @@ impl WorkbenchRunner {
 }
 
 impl ReadOnlyCommand for WorkbenchRunner {
+    #[cfg(feature = "agent")]
+    fn allow_app_agent_fallback(&self) -> bool {
+        false
+    }
+
+    #[cfg(feature = "agent")]
+    fn semantic_agent(&mut self) -> Option<scope_ide::cli::SemanticAgentBinding<'_>> {
+        self.agent.as_mut().map(|agent| agent.binding())
+    }
+
     fn reduce_script_snapshot(
         &self,
         snapshot: scope_language::SourceSnapshot,

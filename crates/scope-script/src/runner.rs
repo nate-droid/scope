@@ -368,7 +368,7 @@ pub(crate) fn reduce_snapshot(
 ) -> Result<scope_ide::cli::ScriptReduction, String> {
     let candidate = crate::reduction::reduce(&Snapshot {
         identity: snapshot.source_id.clone(),
-        revision: snapshot.revision_id.clone(),
+        revision: snapshot.revision_id,
         text: snapshot.text.to_string(),
     })
     .map_err(|refusal| {

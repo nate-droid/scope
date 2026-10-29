@@ -25,11 +25,20 @@ must be contained by actual dispatch policy, source checks and capability policy
 
 ## Run the optional model integration
 
-Enable `scope-ide`'s dependency feature `agent` explicitly (or `agent,tui` for
-both surfaces). A downstream `--features agent` requires a forwarding feature,
-for example `agent = ["scope-ide/agent"]`; dependency features are not inherited
-as downstream CLI flags. Without `agent`, model commands/options report an
+Enable the optional build feature with `--features agent` before Cargo's `--`.
+The default `scope-workbench` package forwards this feature to `scope-ide/agent`:
+
+```sh
+cargo run --locked -p scope-workbench --features agent -- shell
+```
+
+At the shell prompt use `agent <request>` or `ask <request>`; there is no
+`--agent` runtime switch. Reads are allowed by default without `--allow-read`.
+Runtime model options cannot enable support in a binary built without the feature.
+Other downstream hosts need their own forwarding feature, for example
+`agent = ["scope-ide/agent"]`. Without `agent`, model commands/options report an
 explicit enablement error rather than changing ordinary shell behavior.
+For a one-shot request using the standalone CLI:
 
 ```sh
 cargo run --locked -p scope-ide --features agent -- --workspace . agent --open README.md 'summarize this file'

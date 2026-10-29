@@ -761,9 +761,10 @@ fn scratch_file_lifecycle_uses_same_collection_and_explicit_discard() {
     root.write_file("copy.txt", "other");
     let app = App::new(root.workspace()).unwrap();
     let mut output = Vec::new();
-    run_shell(app, agent_config(), &b":scope scratch new mock\n:scope scratch open source.txt\n:scope scratch replace 1 1 1 9 changed\n:scope scratch close\n:scope scratch reload\n:scope scratch show\n:scope scratch reload-discard\n:scope scratch show\n:scope scratch replace 1 1 1 9 saved\n:scope scratch save-as missing.txt\n:scope scratch save-as copy.txt\n:scope scratch close\n:scope scratch list\n:scope scratch discard\n:scope scratch show\nquit\n"[..], &mut output).unwrap();
+    run_shell(app, agent_config(), &b":scope scratch new mock\n:scope scratch open source.txt\n:scope scratch replace 1 1 1 9 changed\n:scope scratch close\n:scope scratch reload\n:scope scratch show\n:scope scratch reload-discard\n:scope scratch show\n:scope scratch replace 1 1 1 9 saved\n:scope scratch save-as missing-parent/file.txt\n:scope scratch save-as copy.txt\n:scope scratch close\n:scope scratch list\n:scope scratch discard\n:scope scratch show\nquit\n"[..], &mut output).unwrap();
     let output = String::from_utf8(output).unwrap();
-    assert_eq!(output.matches("error:").count(), 4);
+    assert_eq!(output.matches("error:").count(), 4, "{output}");
+    assert!(output.contains("create-text") && output.contains("NotFound"));
     assert!(output.contains("scratch 1 opened: source.txt"));
     assert!(output.contains("changed"));
     assert!(output.contains("baseline"));
@@ -773,7 +774,7 @@ fn scratch_file_lifecycle_uses_same_collection_and_explicit_discard() {
     assert!(output.contains("no scratch buffer selected"));
     assert_eq!(root.read_file("source.txt"), "baseline");
     assert_eq!(root.read_file("copy.txt"), "saved");
-    assert!(!root.root().join("missing.txt").exists());
+    assert!(!root.host_path_exists("missing-parent"));
 }
 
 #[test]
@@ -840,7 +841,7 @@ fn buffer_alias_lifecycle_protects_dirty_edits_and_failed_save_as() {
         .build()
         .unwrap();
     let mut output = Vec::new();
-    run_shell(app, agent_config(), &b":scope session mock\nbefore\n:scope open source.txt\n:scope edit\n:delete 8\n:insert changed\n:done\n:scope reload\n:scope close\n:scope save-as missing.txt\n:scope show\n:scope buffers\n:scope save\n:scope reload\n:scope edit\n:delete 7\n:insert copied\n:done\n:scope save-as copy.txt\n:scope buffers\n:scope close\n:scope show\nafter\n:scope quit\n"[..], &mut output).unwrap();
+    run_shell(app, agent_config(), &b":scope session mock\nbefore\n:scope open source.txt\n:scope edit\n:delete 8\n:insert changed\n:done\n:scope reload\n:scope close\n:scope save-as missing-parent/file.txt\n:scope show\n:scope buffers\n:scope save\n:scope reload\n:scope edit\n:delete 7\n:insert copied\n:done\n:scope save-as copy.txt\n:scope buffers\n:scope close\n:scope show\nafter\n:scope quit\n"[..], &mut output).unwrap();
     let output = String::from_utf8(output).unwrap();
     assert_eq!(
         output
@@ -848,7 +849,7 @@ fn buffer_alias_lifecycle_protects_dirty_edits_and_failed_save_as() {
             .count(),
         2
     );
-    assert!(output.contains("new files are unsupported"));
+    assert!(output.contains("create-text") && output.contains("NotFound"));
     assert!(output.contains("buffer 0 source.txt dirty\n    1 | changed\n"));
     assert!(output.contains("dirty version=1 destination=source.txt"));
     assert!(output.contains("clean version=3 destination=copy.txt"));

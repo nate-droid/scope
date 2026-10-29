@@ -1,9 +1,9 @@
 //! In-memory scratch documents with explicit, revision-checked persistence.
 //!
-//! Destinations must already exist: the current Workspace checked-save API cannot
-//! create files. Binding only observes a file; promotion explicitly authorizes
-//! replacing its observed contents. Replacement is atomic, but revision checking
-//! is best-effort rather than an atomic compare-and-swap.
+//! Binding and promotion require existing files; Save As can exclusively create
+//! a new file through Cell. Replacement is atomic, but revision checking is
+//! best-effort rather than an atomic compare-and-swap. Creation requires a
+//! non-hostile parent directory and makes no fsync/durability guarantee.
 
 use scope_language::{EvaluationRequest, RevisionId, SourceId};
 
@@ -374,7 +374,8 @@ impl ScratchBuffers {
         Ok(id)
     }
 
-    /// Save As observes an existing destination and commits the binding only after success.
+    /// Save As checks an existing destination or exclusively creates a missing one.
+    /// The binding and clean state are committed only after successful persistence.
     pub fn save_as_selected(
         &mut self,
         workspace: &Workspace,
@@ -400,10 +401,13 @@ impl ScratchBuffers {
         }) {
             return buffer.save(workspace);
         }
-        let file = workspace
-            .read_document_source(&path)
-            .map_err(ScratchError::Destination)?;
-        let revision = checked_save(workspace, &path, buffer.text(), &file.revision)?;
+        let revision = match workspace.read_document_source(&path) {
+            Ok(file) => checked_save(workspace, &path, buffer.text(), &file.revision)?,
+            Err(error) if error.kind == cell_capability_fs::FsErrorKind::NotFound => workspace
+                .create_document_source(&path, buffer.text())
+                .map_err(ScratchError::Filesystem)?,
+            Err(error) => return Err(ScratchError::Destination(error)),
+        };
         buffer.destination = Some(Destination {
             root: workspace.root().to_owned(),
             path,
@@ -495,6 +499,82 @@ mod tests {
     };
     use std::sync::{Arc, Mutex};
 
+    #[cfg(unix)]
+    #[test]
+    fn save_as_new_file_preserves_authority_identity_and_revision() {
+        let root = TempWorkspace::new("save_as_new");
+        let workspace = root.workspace();
+        let readonly = Workspace::read_only(workspace.root()).unwrap();
+        let mut buffers = ScratchBuffers::default();
+        let id = buffers.create("text", "α\r\n雪\n");
+        let identity = buffers.selected().unwrap().evaluation_source_id().clone();
+        assert!(buffers.save_as_selected(&readonly, "new.txt").is_err());
+        assert!(!root.host_path_exists("new.txt"));
+        assert!(buffers.selected().unwrap().is_dirty());
+        assert!(buffers.selected().unwrap().destination_path().is_none());
+        for path in ["../escape.txt", "/escape.txt", "absent/child.txt"] {
+            assert!(buffers.save_as_selected(&workspace, path).is_err());
+            assert!(buffers.selected().unwrap().destination_path().is_none());
+        }
+        buffers.save_as_selected(&workspace, "new.txt").unwrap();
+        let buffer = buffers.selected().unwrap();
+        assert_eq!(buffer.id(), id);
+        assert_eq!(buffer.evaluation_source_id(), &identity);
+        assert_eq!(buffer.version(), 0);
+        assert!(!buffer.is_dirty());
+        assert_eq!(root.read_file("new.txt"), "α\r\n雪\n");
+        let path = ScopePath::new("new.txt").unwrap();
+        assert_eq!(
+            buffer.destination_revision(),
+            Some(
+                workspace
+                    .read_document_source(&path)
+                    .unwrap()
+                    .revision
+                    .as_str()
+            )
+        );
+        // The exclusive primitive must not overwrite a winner in the read/create gap.
+        let error = workspace
+            .create_document_source(&path, "overwrite")
+            .unwrap_err();
+        assert_eq!(error.kind, cell_capability_fs::FsErrorKind::AlreadyExists);
+        assert_eq!(root.read_file("new.txt"), "α\r\n雪\n");
+        root.write_file("new.txt", "external");
+        assert!(buffers.selected_mut().unwrap().save(&workspace).is_err());
+        assert_eq!(root.read_file("new.txt"), "external");
+        assert_eq!(buffers.selected().unwrap().destination_path(), Some(&path));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_as_new_file_rejects_symlinks_and_preserves_old_binding() {
+        let root = TempWorkspace::new("save_as_symlink");
+        root.write_file("old.txt", "old");
+        std::os::unix::fs::symlink("missing.txt", root.root().join("dangling.txt")).unwrap();
+        std::os::unix::fs::symlink("/tmp", root.root().join("outside")).unwrap();
+        let workspace = root.workspace();
+        let mut buffers = ScratchBuffers::default();
+        buffers
+            .open(&workspace, &LanguageRegistry::default(), "old.txt")
+            .unwrap();
+        let old_revision = buffers
+            .selected()
+            .unwrap()
+            .destination_revision()
+            .unwrap()
+            .to_owned();
+        for path in ["dangling.txt", "outside/scope-save-as-escape.txt"] {
+            assert!(buffers.save_as_selected(&workspace, path).is_err());
+            let buffer = buffers.selected().unwrap();
+            assert_eq!(buffer.destination_path().unwrap().as_str(), "old.txt");
+            assert_eq!(buffer.destination_revision(), Some(old_revision.as_str()));
+            assert_eq!(buffer.text(), "old");
+            assert!(!buffer.is_dirty());
+        }
+        assert!(!root.host_path_exists("missing.txt"));
+    }
+
     #[test]
     fn workspace_lifecycle_and_failed_save_recovery() {
         let root = TempWorkspace::new("workspace_buffers");
@@ -573,6 +653,45 @@ mod tests {
         buffers.close_selected(false).unwrap();
         assert!(buffers.selected().is_err());
         assert!(buffers.open(&workspace, &registry, "../escape").is_err());
+    }
+
+    #[test]
+    fn existing_file_save_as_requires_write_authority_and_retains_conflict_baseline() {
+        let root = TempWorkspace::new("existing_save_as_authority");
+        root.write_file("copy.txt", "original destination");
+        let workspace = root.workspace();
+        let readonly = Workspace::read_only(workspace.root()).unwrap();
+        let mut buffers = buffers("committed source");
+        assert!(buffers.save_as_selected(&readonly, "copy.txt").is_err());
+        assert_eq!(root.read_file("copy.txt"), "original destination");
+        assert!(buffers.selected().unwrap().destination_path().is_none());
+        assert!(buffers.selected().unwrap().is_dirty());
+
+        // This explicit destination operation authorizes checked replacement.
+        buffers.save_as_selected(&workspace, "copy.txt").unwrap();
+        assert_eq!(root.read_file("copy.txt"), "committed source");
+        let baseline = buffers
+            .selected()
+            .unwrap()
+            .destination_revision()
+            .unwrap()
+            .to_owned();
+        buffers
+            .selected_mut()
+            .unwrap()
+            .apply_edit(TextEdit::insert(Position::new(0, 0), "edited "))
+            .unwrap();
+        root.write_file("copy.txt", "external writer");
+        assert!(matches!(
+            buffers.save_as_selected(&workspace, "copy.txt"),
+            Err(ScratchError::Workspace(WorkspaceError::Conflict { .. }))
+        ));
+        assert_eq!(root.read_file("copy.txt"), "external writer");
+        let buffer = buffers.selected().unwrap();
+        assert_eq!(buffer.destination_revision(), Some(baseline.as_str()));
+        assert_eq!(buffer.destination_path().unwrap().as_str(), "copy.txt");
+        assert_eq!(buffer.text(), "edited committed source");
+        assert!(buffer.is_dirty());
     }
 
     fn buffers(source: &str) -> ScratchBuffers {

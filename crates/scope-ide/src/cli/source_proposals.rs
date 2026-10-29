@@ -643,13 +643,16 @@ mod tests {
         assert_eq!(buffers.get(owner).unwrap().text(), "let mut n=8; n");
         assert_eq!(buffers.selected().unwrap().text(), "other");
 
-        let mut blocked = Proposals::default();
-        blocked.controller =
-            SourceEditController::with_validation_contract(scope_language::ValidationContract {
-                id: "required".into(),
-                origin: scope_language::ExpectationOrigin::User("test".into()),
-                checks: std::collections::BTreeMap::new(),
-            });
+        let mut blocked = Proposals {
+            controller: SourceEditController::with_validation_contract(
+                scope_language::ValidationContract {
+                    id: "required".into(),
+                    origin: scope_language::ExpectationOrigin::User("test".into()),
+                    checks: std::collections::BTreeMap::new(),
+                },
+            ),
+            ..Default::default()
+        };
         let mut baseline = ScratchBuffers::default();
         baseline.create("scope-script", original);
         let mut output = Vec::new();

@@ -680,7 +680,7 @@ pub(crate) fn read_line_with(
     let mut viewport = InlineViewport::new()?;
     history.reset_navigation();
     let mut input = Input::default();
-    viewport.render(&input, &prompt, output)?;
+    viewport.render(&input, prompt, output)?;
     loop {
         match event::read()? {
             Event::Key(key) => {
@@ -693,22 +693,22 @@ pub(crate) fn read_line_with(
                         return Ok(Some(line));
                     }
                     Action::Eof => {
-                        viewport.finish(None, &prompt, output)?;
+                        viewport.finish(None, prompt, output)?;
                         return Ok(None);
                     }
                     Action::Cancel => {
-                        viewport.finish(Some("^C"), &prompt, output)?;
+                        viewport.finish(Some("^C"), prompt, output)?;
                         viewport = InlineViewport::new()?;
-                        viewport.render(&input, &prompt, output)?;
+                        viewport.render(&input, prompt, output)?;
                     }
-                    Action::Continue => viewport.render(&input, &prompt, output)?,
+                    Action::Continue => viewport.render(&input, prompt, output)?,
                 }
             }
             Event::Paste(text) => {
                 input.insert(&scope_terminal::sanitize_paste(&text));
-                viewport.render(&input, &prompt, output)?;
+                viewport.render(&input, prompt, output)?;
             }
-            Event::Resize(_, _) => viewport.render(&input, &prompt, output)?,
+            Event::Resize(_, _) => viewport.render(&input, prompt, output)?,
             _ => {}
         }
     }

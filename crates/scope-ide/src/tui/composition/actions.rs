@@ -14,6 +14,8 @@ pub enum WorkspaceAction {
         version: u64,
     },
     NewScript,
+    CommandPrompt(String),
+    SelectDocument(u64),
     Focus(String),
     PreviousPane,
     CommitDraft,
@@ -153,10 +155,92 @@ impl WorkspaceTui {
         add(
             WorkspaceAction::NewScript,
             "scratch.new-script".into(),
-            "New Script scratch (select)".into(),
+            "New Script (select and edit)".into(),
             None,
             None,
         );
+        for (id, label, command) in [
+            (
+                "document.open",
+                "Open File — enter workspace-relative path",
+                ":scope open ",
+            ),
+            (
+                "document.switch",
+                "Switch Document — list open documents",
+                ":scope buffers",
+            ),
+            (
+                "document.save",
+                "Save committed document — publish draft first",
+                ":scope save",
+            ),
+            (
+                "document.save-as",
+                "Save As — authorized destination; publish first",
+                ":scope save-as ",
+            ),
+            (
+                "document.ask",
+                "Ask Agent — committed active source, read only",
+                ":scope document-ask ",
+            ),
+            (
+                "document.propose",
+                "Propose Edit — committed active source, explicit review",
+                ":scope document-propose ",
+            ),
+            (
+                "document.review",
+                "Review source proposal — enter proposal ID",
+                ":scope source-review ",
+            ),
+            (
+                "document.accept",
+                "Accept reviewed source proposal — enter proposal ID",
+                ":scope source-accept ",
+            ),
+            (
+                "document.reject",
+                "Reject source proposal — enter proposal ID",
+                ":scope source-reject ",
+            ),
+            (
+                "workspace.return",
+                "Return to Workbench (leave editor; retain draft)",
+                "",
+            ),
+        ] {
+            add(
+                WorkspaceAction::CommandPrompt(command.into()),
+                id.into(),
+                label.into(),
+                None,
+                None,
+            );
+        }
+        for source in sources.list() {
+            let name = source
+                .destination_path()
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| "Untitled Script".into());
+            add(
+                WorkspaceAction::SelectDocument(source.id()),
+                format!("document.select.{}", source.id()),
+                format!(
+                    "Switch Document: {name} [{}] revision {}{}",
+                    source.id(),
+                    source.version(),
+                    if source.is_dirty() {
+                        " • unsaved"
+                    } else {
+                        ""
+                    }
+                ),
+                None,
+                None,
+            );
+        }
         for id in self.visible_focus_ids() {
             add(
                 WorkspaceAction::Focus(id.clone()),
@@ -185,7 +269,7 @@ impl WorkspaceTui {
         add(
             WorkspaceAction::CommitDraft,
             "editor.commit".into(),
-            "Commit focused editor draft".into(),
+            "Publish editor draft to document (in memory; not Save)".into(),
             Some("Ctrl-S"),
             (!editable).then(|| "focus an editable pane first".into()),
         );
@@ -293,6 +377,23 @@ impl WorkspaceTui {
             return Err(reason);
         }
         match action {
+            WorkspaceAction::CommandPrompt(command) => {
+                if command.is_empty() {
+                    self.focus_named("output")?;
+                } else {
+                    self.command_line = Some(command);
+                }
+            }
+            WorkspaceAction::SelectDocument(id) => {
+                sources.select(id).map_err(|e| e.to_string())?;
+                if let Some(editor) = self
+                    .visible_focus_ids()
+                    .into_iter()
+                    .find(|id| self.instances.get(id).is_some_and(|i| i.editable))
+                {
+                    self.focus_named(&editor)?;
+                }
+            }
             WorkspaceAction::Downstream {
                 id,
                 scratch,
@@ -345,6 +446,13 @@ impl WorkspaceTui {
             }
             WorkspaceAction::NewScript => {
                 sources.create("scope-script", "");
+                if let Some(editor) = self.visible_focus_ids().into_iter().find(|id| {
+                    self.instances
+                        .get(id)
+                        .is_some_and(|instance| instance.editable)
+                }) {
+                    self.focus_named(&editor)?;
+                }
             }
             WorkspaceAction::Focus(id) => self.focus_named(&id)?,
             WorkspaceAction::PreviousPane => self.focus_named("last")?,

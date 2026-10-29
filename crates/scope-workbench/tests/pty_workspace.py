@@ -98,9 +98,12 @@ class Workspace:
             os.environ['TERM'] = 'xterm-256color'
             os.environ['XDG_STATE_HOME'] = self.workspace.name
             os.environ.pop('SCOPE_HISTORY_FILE', None)
-            os.chdir(self.workspace.name)
+            cargo_root = os.environ.get('SCOPE_PTY_CARGO_ROOT')
+            os.chdir(cargo_root if cargo_root else self.workspace.name)
             fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack('HHHH', 44, 180, 0, 0))
-            os.execv(str(binary), [str(binary), 'workspace'])
+            if cargo_root:
+                os.execvp('cargo', ['cargo', 'run'])
+            os.execv(str(binary), [str(binary)])
         self.query_pending = b''
         self.wire = bytearray()
         self.commands = 0
@@ -238,12 +241,14 @@ class WorkspaceTests(unittest.TestCase):
         # Canceling a searched action is isolated from both editor and shell.
         ui.send(b'\x1bOP')
         ui.send(b'New Script')
-        self.assertIn('New Script scratch (select)', ui.screen.text())
+        self.assertIn('New Script (select and edit)', ui.screen.text())
         ui.send(b'\x1b')
         editor_focused()
         self.assertIn(f'Selected scratch {original}', ui.screen.text())
         editor_text = '\n'.join(line[:90] for line in ui.screen.text().splitlines()[1:35])
         self.assertNotIn('New Script', editor_text)
+        # Creation from output must return directly to the existing editor.
+        ui.action('Focus output')
         ui.action('New Script')
         editor_focused()
         selected = re.search(r'Selected scratch (\d+)', ui.screen.text()).group(1)
@@ -322,7 +327,13 @@ class WorkspaceTests(unittest.TestCase):
         ui.action('Focus output')
         recovery = output_lines()
         revisions.add(re.search(r'revision RevisionId\((\d+)\)', recovery).group(1))
-        self.assertEqual(len(revisions), 4)
+        self.assertEqual(revisions, {'1', '2', '3', '4'})
+        identities = {
+            re.search(r'SourceId\((\d+)\) revision', result).group(1)
+            for result in (success, failure, parse_failure, recovery)
+        }
+        self.assertEqual(len(identities), 1)
+        self.assertIn(f'Selected scratch {selected}', ui.screen.text())
         self.assertIn('Result 4/4', recovery)
         self.assertIn('final: 43', recovery)
         self.assertIn('status: interpreter success', recovery)
@@ -355,7 +366,8 @@ class WorkspaceTests(unittest.TestCase):
         self.assertTrue(restored & termios.ICANON)
         self.assertTrue(restored & termios.ECHO)
         print(f'\nDirect PTY evidence: commands={ui.commands}, picker actions={ui.actions}, '
-              f'retained results=4, observed script revisions={sorted(revisions)}, '
+              f'scratch={selected}, source={sorted(identities)}, retained results=4, '
+                            f'observed script revisions={sorted(revisions)}, '
               f'alt-screen enters={ui.wire.count(bytes.fromhex("1b5b3f3130343968"))}, '
               f'leaves={ui.wire.count(bytes.fromhex("1b5b3f313034396c"))}')
 

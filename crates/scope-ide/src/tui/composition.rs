@@ -543,6 +543,49 @@ impl WorkspaceTui {
         self.output.source_edit_controller()
     }
 
+    fn document_pending(
+        &self,
+        line: &str,
+        sources: &crate::scratch::ScratchBuffers,
+    ) -> Option<String> {
+        let command = line.strip_prefix(":scope ")?.trim();
+        let name = command.split_whitespace().next()?;
+        if !matches!(name, "document-ask" | "document-propose") {
+            return None;
+        }
+        if name == "document-propose" && self.draft_blocker().is_some() {
+            return None;
+        }
+        let source = sources.selected().ok()?;
+        Some(format!(
+            "Pending {name} — source {:?}, revision {} (committed)\nUI waits synchronously until dispatch returns; input and cancellation unavailable.\nNo progress updates; request may still fail validation.",
+            source.id(),
+            source.version(),
+        ))
+    }
+
+    fn render_document_pending(
+        &mut self,
+        frame: &mut ratatui::Frame<'_>,
+        app: &App,
+        sources: Option<&crate::scratch::ScratchBuffers>,
+        status: &str,
+    ) {
+        let areas =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(6)]).split(frame.area());
+        self.render_optional_sources(frame, areas[0], app, sources);
+        frame.render_widget(
+            Paragraph::new(status)
+                .wrap(ratatui::widgets::Wrap { trim: false })
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("document agent"),
+                ),
+            areas[1],
+        );
+    }
+
     fn submit_command(
         &mut self,
         line: &str,
@@ -561,8 +604,16 @@ impl WorkspaceTui {
             None => {
                 let execution = line.strip_prefix(":scope ").is_some_and(|command| {
                     let words: Vec<_> = command.split_whitespace().collect();
-                    matches!(words.first(), Some(&"downstream" | &"source-accept"))
-                        || words.starts_with(&["agent", "edit"])
+                    matches!(
+                        words.first(),
+                        Some(
+                            &"downstream"
+                                | &"source-accept"
+                                | &"document-propose"
+                                | &"save"
+                                | &"save-as"
+                        )
+                    ) || words.starts_with(&["agent", "edit"])
                         || words.as_slice() == ["script", "run"]
                         || host.as_deref().is_some_and(|host| {
                             host.compositions().iter().any(|entry| {
@@ -622,7 +673,7 @@ impl WorkspaceTui {
         let mut terminal = Some(TerminalSession::enter()?);
         loop {
             terminal.as_mut().unwrap().draw(|frame| {
-                let output_height = (frame.area().height / 3).max(1).min(8);
+                let output_height = (frame.area().height / 3).clamp(1, 8);
                 let areas = Layout::vertical([
                     Constraint::Min(0),
                     Constraint::Length(output_height),
@@ -705,6 +756,20 @@ impl WorkspaceTui {
                 }
                 if self.command_line.is_some() {
                     if let Some(line) = self.command_event(&input) {
+                        if let Some(status) = self.document_pending(
+                            &line,
+                            sources.as_deref().unwrap_or(&fallback_sources),
+                        ) {
+                            // Flush an honest waiting frame before synchronous dispatch blocks input.
+                            terminal.as_mut().unwrap().draw(|frame| {
+                                self.render_document_pending(
+                                    frame,
+                                    app,
+                                    sources.as_deref(),
+                                    &status,
+                                );
+                            })?;
+                        }
                         self.submit_command(
                             &line,
                             app,

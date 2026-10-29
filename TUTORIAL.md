@@ -1,7 +1,11 @@
-# Scope tutorial
+# Scope shell and workflow reference
+
+Start with the [canonical quickstart](docs/quickstart.md) for the normal `cargo run`
+workbench. This longer reference explicitly launches the shell for its transcripts.
+The retained workspace is now the default, not an optional launch mode.
 
 This tutorial covers the no-host Script loop, revising scratch source, and the
-optional retained workspace. Shell transcripts go at the Scope prompt; `cargo`
+retained workspace. Shell transcripts go at the Scope prompt; `cargo`
 commands go in your system terminal. Do not paste the Markdown fences.
 
 For direct code entry with automatic pure evaluation, start with the short
@@ -9,6 +13,7 @@ For direct code entry with automatic pure evaluation, start with the short
 workflow below remains available.
 
 - [Start and inspect](#start-and-inspect)
+- [Enable the optional agent](#enable-the-optional-agent)
 - [In-memory Script loop](#in-memory-script-loop)
 - [Loops and reusable computations](#loops-and-reusable-computations)
 - [Editing and rerunning](#editing-and-rerunning)
@@ -18,16 +23,17 @@ workflow below remains available.
 
 Run commands from the Scope repository root. See [development](docs/development.md)
 for toolchain and dependency setup; the first build may download dependencies.
-No model server, API key, or Wasm target is needed for the default shell.
+No model server, API key, or Wasm target is needed for this shell workflow.
 
 ## Start and inspect
 
 ```sh
-cargo run --locked
+cargo run --locked -- shell
 ```
 
 The default entry point uses package `scope-workbench`, binary `scope`, depending on
-`scope-ide` and `scope-script`. No arguments starts the workbench shell in the current directory, including with piped
+`scope-ide` and `scope-script`. No arguments starts the retained workbench editor.
+Explicit `shell` starts the shell in the current directory, including with piped
 input. Startup requires an existing workspace and does not create directories.
 Workspace access defaults to read-only. In-memory editing is not permission to
 save: opt in with `cargo run --locked -- --writable shell` to enable workspace writes.
@@ -61,9 +67,36 @@ providers, and the active session. The stock build has Scope Simple analysis
 operations or interactive evaluators. `:scope inspect` discovers eligible reads
 for an open App document; an empty list is not a missing authorization grant.
 
+## Enable the optional agent
+
+Agent support is compiled out by default. Enable it with Cargo's `--features agent`
+**before** the `--` that separates build options from Scope options:
+
+```sh
+cargo run --locked -p scope-workbench --features agent -- \
+  --agent-model qwen3-30b-a3b \
+  --agent-base-url http://localhost:1234/v1 \
+  shell
+```
+
+Start your OpenAI-compatible model server first. At the Scope prompt, use
+`agent summarize this project` (or `ask summarize this project`). For a one-shot
+request, replace `shell` above with `agent 'summarize this project'`.
+
+There is no `--agent` switch: `agent` is a command. No `--allow-read` flag is
+needed; workspace access is read-only by default. Enabling the feature does not
+grant write authority. Source and tool feedback may be sent to the configured
+model endpoint; see the [Agents guide](docs/agents.md) for policy details.
+
+For the standalone CLI, use `-p scope-ide --features agent` instead. Add
+`--offline` to Cargo only if dependencies are already cached. Running
+`target/debug/scope` directly uses whichever features were compiled into that
+binary; rebuild it with `cargo build --locked -p scope-workbench --features agent`
+if needed. Runtime model flags cannot enable a missing build feature.
+
 ## In-memory Script loop
 
-If you used `quit` above, start `cargo run --locked` again. Paste this exact
+If you used `quit` above, start `cargo run --locked -- shell` again. Paste this exact
 sequence at the shell prompt (the script is also saved as
 [`examples/workbench.scope`](examples/workbench.scope)):
 
@@ -145,7 +178,7 @@ for capture, return-value, typing, and budget details.
 
 ## Editing and rerunning
 
-Start `cargo run --locked` in a terminal (or use your existing shell). For this
+Start `cargo run --locked -- shell` in a terminal (or use your existing shell). For this
 exercise, create a **new** scratch at the shell prompt with
 `:scope scratch new script`, then `:scope edit`.
 
@@ -239,12 +272,12 @@ the editor, and leaves the semantic target unbound. Nothing runs or saves.
 ### Edit, run, inspect, correct
 
 Press **F1**, type `New Script`, then Enter to invoke **New Script scratch
-(select)**. This explicitly selects a new `scope-script` scratch; the semantic
+(select and edit)**. This explicitly selects a new `scope-script` scratch; the semantic
 target stays unchanged. No shell command entry is needed for this loop.
 F1 filters action labels and stable IDs; Up/Down selects, Enter invokes, and
 Escape cancels without inserting text or leaving the workspace. Disabled actions
-show their reason. Creation leaves focus where it was; use **Focus editor** if
-necessary.
+show their reason. Creation focuses the first visible authorized editor, even
+when invoked from output. It never grants editing authority to a read-only pane.
 
 In the editor, type or bracketed-paste this tested Script syntax:
 
@@ -253,7 +286,9 @@ print("script雪😀"); 42
 ```
 
 Press **Ctrl-S** to commit to the selected scratch in memory, then **F5** to run.
-Neither key saves to disk. The editor keeps its cursor and focus, so typing can
+Typing changes only local working text; Ctrl-S publishes the whole draft as one
+scratch revision (unchanged text adds no revision). Neither key saves to disk or
+marks source semantically validated. The editor keeps its cursor and focus, so typing can
 resume immediately. An uncommitted change blocks execution rather than being
 silently committed or run.
 
@@ -280,6 +315,41 @@ can fail before any prints execute. Error details scroll with the result.
 F4 → `:scope script run` remains supported and uses the separate command
 transcript. F1 → **Show command transcript** returns to that view; direct history
 is still retained. F5 never invokes a bound semantic target.
+
+### Local editing, selection and history
+
+In the focused workspace editor, **Ctrl-Z** undoes and **Ctrl-Y** redoes local
+edits. This is bounded, disposable working-text history, not scratch revision
+history: undo/redo does not publish a revision, save a file or change a retained
+result. Ctrl-S still publishes the whole changed draft as one scratch revision;
+use it explicitly after undo/redo if you want to publish the resulting text.
+
+Use **Shift-Left/Right/Up/Down** or **Shift-Home/End** to extend a selection.
+Typing or pasting replaces the selection; **Delete** or **Backspace** removes
+it. Unshifted navigation clears selection (Left/Right collapse it to the
+corresponding edge). Left/Right movement and ordinary character deletion respect
+extended Unicode grapheme clusters, such as a letter plus combining accent or a
+joined emoji, rather than stepping through their individual code points.
+
+A clean editor follows newer committed source on redraw and refreshes its baseline
+before the next edit; that external refresh resets local undo/redo history.
+Unpublished text never refreshes automatically: if another operation changes its
+baseline, Ctrl-S reports a conflict and retains the draft. There is no automatic
+rebase or merge. **Ctrl-C discards local working text**, including its local
+history; it is not Copy. Copy any work you need to keep using your terminal's
+copy facility **before** discarding, especially when resolving a conflict.
+Proposal acceptance is blocked while any editor draft is dirty, including parked
+drafts; publishing a draft instead makes older proposals stale. No automatic
+proposal acceptance is involved.
+
+Shift selection requires the terminal to send distinct modified-key sequences;
+some terminal emulators or OS shortcuts intercept Shift-arrows/Home/End. The
+editor does not provide a system clipboard copy binding. Bracketed paste requires
+terminal support and must reach the focused editor: it inserts source literally,
+including multiline and colon-leading text, replacing any selection rather than
+executing commands. Without bracketed-paste framing, pasted input may be decoded
+as individual keys; do not assume equivalent literal insertion or undo grouping.
+F4 command input has its separate single-line limitations below.
 
 ### Switch scratches without confusing the target
 
@@ -317,7 +387,9 @@ Script runner has no downstream authority, even with a target bound.
 | `pane 1`, `pane 2`, … | One-based visible pane index; invalid/hidden targets report errors. |
 | F6 / Shift-F6 | Next / previous visible pane. |
 | F7 | Cycle workspace and editor-only layout; not scratch tabs. |
-| Ctrl-S / Ctrl-C in editor | Commit / cancel draft; neither writes disk. |
+| Ctrl-S / Ctrl-C in editor | Commit / discard draft; neither writes disk. Ctrl-C is not Copy. |
+| Ctrl-Z / Ctrl-Y in editor | Undo / redo local edits, not committed revisions. |
+| Shift-arrows / Shift-Home / Shift-End in editor | Extend selection; typing/paste replaces it, Delete/Backspace removes it. |
 | Up / Down, PageUp / PageDown with output focused | Scroll current structured result or command transcript independently of editor. |
 | F2 or Escape outside command input | Suspend workspace for the normal shell; `:scope quit` returns. |
 | Ctrl-Q outside command input | Exit workspace. |
@@ -354,7 +426,7 @@ cargo run --locked -- --workspace . meta --max-entries 10000 --max-depth 64
 
 `open` and `shell` are aliases. An explicit workspace **without a command** lists
 files (`cargo run --locked -- .` or `cargo run --locked -- --workspace .`); only the no-argument
-invocation defaults to the shell. Put workspace options before the command.
+invocation defaults to the retained workbench. Put workspace options before the command.
 Metadata budgets follow `meta`: entries must be positive; depth may be zero.
 The defaults are 10,000 entries and depth 64.
 

@@ -434,10 +434,24 @@ Evaluation never saves/switches/reset sessions; saving never evaluates. Missing 
 wrong-language sessions fail without fallback. Interpreter mutations before failed
 evaluation may remain. Capture is not extraction from interpreter state.
 
-Save As/promotion require an **existing regular file** and write authority. No
-unchecked create fallback exists. Conflicts leave source dirty/usable; inspect
-before deliberately rebinding the baseline. Checked replacement is best-effort,
-not atomic compare-and-swap, a multi-file transaction or fsync durability guarantee.
+Promotion requires an **existing regular file**. Save As checks an existing
+regular file's observed revision, or exclusively creates a missing destination
+through Cell's public `Workspace::create_text`. Both require existing write
+authority; neither grants permissions or creates parent directories. Only
+`NotFound` permits the create attempt, which never replaces a competing entry
+(including a dangling symlink). The binding and clean state change only after
+success; subsequent Save uses the returned revision. Conflicts leave source
+usable; inspect before deliberately rebinding the baseline. Checked replacement
+is best-effort, not atomic compare-and-swap or a multi-file transaction.
+
+Exclusive creation is Unix-only and has no fsync durability guarantee. Cell's
+contract requires a parent without hostile writers: interference with the named
+temporary source can invalidate content/revision guarantees. This is not a
+hostile-directory transaction. The pinned Cell `v0.0.2` (`86145d1`) already exposes
+this API; the locally inspected newer `31f760f` source has the same contract, so
+no dependency upgrade or direct host-filesystem fallback is needed. Retained
+editor Save/Save As still refuse any dirty draft (including parked drafts);
+publish remains separate from persistence and approvals are unchanged.
 
 ### Workspace editing
 

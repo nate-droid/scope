@@ -25,10 +25,12 @@ fn parse_transition(line: &str) -> Result<(&str, &str, &str), SemanticOperationE
                 .enumerate()
                 .all(|(i, c)| c.is_ascii_alphabetic() || c == b'_' || (i > 0 && c.is_ascii_digit()))
     };
-    if let [from, "->", to, "on", event] = words.as_slice() {
-        if valid_name(from) && valid_name(to) && valid_name(event) {
-            return Ok((from, to, event));
-        }
+    if let [from, "->", to, "on", event] = words.as_slice()
+        && valid_name(from)
+        && valid_name(to)
+        && valid_name(event)
+    {
+        return Ok((from, to, event));
     }
     Err(SemanticOperationError::UnsupportedOperation(
         "only `FROM -> TO on EVENT` transitions with ASCII identifiers are supported; guards, actions, and other constructs are unsupported".into(),

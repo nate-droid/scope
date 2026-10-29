@@ -1432,8 +1432,10 @@ fn candidate_source_expectations_and_host_state_each_restore_dispatch_eligibilit
 #[test]
 fn evaluation_only_does_not_install_source_or_allocate_a_proposal() {
     for candidate in ["wrong", "new"] {
-        let mut budgets = EditBudgets::default();
-        budgets.model_invocations = 1;
+        let budgets = EditBudgets {
+            model_invocations: 1,
+            ..Default::default()
+        };
         let (result, model, controller, target) =
             refinement_run(vec![semantic_call("evaluate", candidate)], budgets, true);
         assert_eq!(result.outcome, EditOutcome::OperationBudgetExhausted);
@@ -1612,8 +1614,10 @@ fn generic_evaluation_evidence_is_invalidated_by_changed_source() {
 fn generic_evaluation_transport_budget_is_not_no_progress() {
     let mut model = script(vec![tool("read", 0), tool("read", 1)]);
     let (mut session, calls) = session(vec![generic_evaluation("Violated")]);
-    let mut budgets = EditBudgets::default();
-    budgets.model_invocations = 1;
+    let budgets = EditBudgets {
+        model_invocations: 1,
+        ..Default::default()
+    };
     let result = run(&mut model, &mut session, true, budgets);
     assert_eq!(result.outcome, EditOutcome::OperationBudgetExhausted);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -1623,15 +1627,17 @@ fn generic_evaluation_transport_budget_is_not_no_progress() {
 #[test]
 fn generic_satisfied_without_contract_advances_at_inspection_limit() {
     let mut value = generic_evaluation("Satisfied");
-    if let ToolValue::Object(fields) = &mut value {
-        if let Some(ToolValue::Object(evaluation)) = fields.get_mut("evaluation") {
-            evaluation.remove("contract_id");
-        }
+    if let ToolValue::Object(fields) = &mut value
+        && let Some(ToolValue::Object(evaluation)) = fields.get_mut("evaluation")
+    {
+        evaluation.remove("contract_id");
     }
     let mut model = script(vec![tool("read", 0), tool("edit", 0)]);
     let (mut session, calls) = session(vec![value, proposal()]);
-    let mut budgets = EditBudgets::default();
-    budgets.inspections = 1;
+    let budgets = EditBudgets {
+        inspections: 1,
+        ..Default::default()
+    };
     let result = run(&mut model, &mut session, true, budgets);
     assert_eq!(result.outcome, EditOutcome::ProposalReady);
     assert_eq!(calls.load(Ordering::SeqCst), 2);

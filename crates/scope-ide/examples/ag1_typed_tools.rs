@@ -164,12 +164,12 @@ Only listed tools exist. Discovery is not authorization; the host may deny any c
             // baseline guidance. Retain the actual delivered system text here.
             if baseline {
                 for event in &mut events {
-                    if event["event"] == "request" {
-                        if let Some(messages) = event["messages"].as_array_mut() {
-                            for message in messages {
-                                if message["role"] == "system" {
-                                    message["content"] = json!(BASELINE);
-                                }
+                    if event["event"] == "request"
+                        && let Some(messages) = event["messages"].as_array_mut()
+                    {
+                        for message in messages {
+                            if message["role"] == "system" {
+                                message["content"] = json!(BASELINE);
                             }
                         }
                     }

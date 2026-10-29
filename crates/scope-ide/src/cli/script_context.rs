@@ -138,11 +138,11 @@ impl ScriptContext {
         if !line.is_char_boundary(cursor) {
             return Vec::new();
         }
-        if line.starts_with(':') {
+        if let Some(stripped) = line.strip_prefix(':') {
             if line.starts_with(":scope") {
                 return super::complete_commands(line, cursor, true).unwrap_or_default();
             }
-            let expanded = format!(":scope {}", &line[1..]);
+            let expanded = format!(":scope {}", stripped);
             return super::complete_commands(&expanded, cursor + 6, true)
                 .unwrap_or_default()
                 .into_iter()
@@ -242,39 +242,37 @@ impl ScriptContext {
             writeln!(output, "Pending Script input canceled.")?;
             return Ok(None);
         }
-        if trimmed.starts_with(':') {
+        if let Some(stripped) = trimmed.strip_prefix(':') {
             let command = if trimmed == ":run" {
                 ":scope script run".to_owned()
             } else if trimmed == ":scope" || trimmed.starts_with(":scope ") {
                 trimmed.to_owned()
             } else {
-                format!(":scope {}", &trimmed[1..])
+                format!(":scope {}", stripped)
             };
             if command == ":scope script run" && self.pending.is_some() {
                 return Err(
                     "incomplete Script input pending; finish it or :cancel before :run".into(),
                 );
             }
-            if command == ":scope show" {
-                if let Some((id, version, draft)) = &self.pending {
-                    let source = scratches.selected()?;
-                    if source.language_id() != "scope-script"
-                        || id != source.evaluation_source_id()
-                        || *version != source.version()
-                    {
-                        return Err(
-                            "pending Script source changed; :cancel before continuing".into()
-                        );
-                    }
-                    writeln!(output, "Committed Script source:")?;
-                    writeln!(output, "{}", source.text())?;
-                    writeln!(
-                        output,
-                        "Pending Script snapshot (not committed; not evaluated):"
-                    )?;
-                    writeln!(output, "{draft}")?;
-                    return Ok(None);
+            if command == ":scope show"
+                && let Some((id, version, draft)) = &self.pending
+            {
+                let source = scratches.selected()?;
+                if source.language_id() != "scope-script"
+                    || id != source.evaluation_source_id()
+                    || *version != source.version()
+                {
+                    return Err("pending Script source changed; :cancel before continuing".into());
                 }
+                writeln!(output, "Committed Script source:")?;
+                writeln!(output, "{}", source.text())?;
+                writeln!(
+                    output,
+                    "Pending Script snapshot (not committed; not evaluated):"
+                )?;
+                writeln!(output, "{draft}")?;
+                return Ok(None);
             }
             return Ok(Some(command));
         }
@@ -282,10 +280,10 @@ impl ScriptContext {
         if source.language_id() != "scope-script" {
             return Err("selected scratch is not scope-script".into());
         }
-        if let Some((id, version, _)) = &self.pending {
-            if id != source.evaluation_source_id() || *version != source.version() {
-                return Err("pending Script source changed; :cancel before continuing".into());
-            }
+        if let Some((id, version, _)) = &self.pending
+            && (id != source.evaluation_source_id() || *version != source.version())
+        {
+            return Err("pending Script source changed; :cancel before continuing".into());
         }
         let mut snapshot = if let Some((_, _, draft)) = &self.pending {
             format!("{draft}\n")

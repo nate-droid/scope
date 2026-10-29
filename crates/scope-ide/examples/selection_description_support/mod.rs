@@ -7,6 +7,10 @@ use scope_language::{
 use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[allow(
+    dead_code,
+    reason = "shared example consumers do not all use the sample source"
+)]
 pub const SOURCE: &str = "let answer = 42\nlet count = 7\n";
 #[derive(Default)]
 pub struct DeclarationLanguage {

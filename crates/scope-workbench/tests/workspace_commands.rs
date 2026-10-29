@@ -36,7 +36,7 @@ fn workspace_commands_use_existing_runner_and_retain_revision_output_and_sources
         runner.records[0].outcome.as_ref().unwrap(),
         &Value::Integer(42)
     );
-    let original_revision = runner.records[0].source.revision.clone();
+    let original_revision = runner.records[0].source.revision;
     sources
         .selected_mut()
         .unwrap()
@@ -72,5 +72,5 @@ fn normal_executable_advertises_workspace() {
         .output()
         .unwrap();
     assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("workspace [path]"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("workspace [ROOT]"));
 }

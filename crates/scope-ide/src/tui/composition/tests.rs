@@ -14,6 +14,77 @@ impl Pane for Counter {
         true
     }
 }
+#[test]
+fn document_actions_reuse_command_bar_and_existing_selection() {
+    let root = TempWorkspace::new("document-actions");
+    let mut app = App::new(root.workspace()).unwrap();
+    let (mut ui, _, _) = fixture();
+    let mut sources = crate::scratch::ScratchBuffers::default();
+    let first = sources.create("scope-script", "1");
+    sources.create("scope-script", "2");
+    let actions = ui.actions(&sources, false);
+    for (id, expected) in [
+        ("document.open", ":scope open "),
+        ("document.save", ":scope save"),
+        ("document.ask", ":scope document-ask "),
+        ("document.propose", ":scope document-propose "),
+    ] {
+        let action = actions.iter().find(|a| a.id == id).unwrap().action.clone();
+        ui.invoke_action(action, &mut app, &mut sources, None)
+            .unwrap();
+        assert_eq!(ui.command_line.as_deref(), Some(expected));
+    }
+    ui.invoke_action(
+        WorkspaceAction::SelectDocument(first),
+        &mut app,
+        &mut sources,
+        None,
+    )
+    .unwrap();
+    assert_eq!(sources.selected().unwrap().id(), first);
+    assert_eq!(sources.selected().unwrap().text(), "1");
+}
+
+#[test]
+fn document_pending_is_scoped_to_selected_committed_revision_and_visible() {
+    let root = TempWorkspace::new("document-pending");
+    let app = App::new(root.workspace()).unwrap();
+    let (mut ui, _, _) = fixture();
+    let mut sources = crate::scratch::ScratchBuffers::default();
+    assert!(
+        ui.document_pending(":scope document-ask explain", &sources)
+            .is_none()
+    );
+    sources.create("scope-script", "old");
+    let selected = sources.create("scope-script", "current");
+    for name in ["document-ask", "document-propose"] {
+        let status = ui
+            .document_pending(&format!(":scope {name} explain"), &sources)
+            .unwrap();
+        assert!(status.contains(&format!("source {selected:?}, revision 0 (committed)")));
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(110, 20)).unwrap();
+        terminal
+            .draw(|frame| ui.render_document_pending(frame, &app, Some(&sources), &status))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let text: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
+        assert!(text.contains(&format!("Pending {name}")));
+        assert!(text.contains("UI waits synchronously"));
+        assert!(text.contains("input and cancellation unavailable"));
+        assert!(text.contains("No progress updates"));
+        assert_eq!(sources.selected().unwrap().text(), "current");
+    }
+    for line in [
+        ":scope document-ask-extra x",
+        ":scope ask x",
+        ":scope save",
+        "help",
+    ] {
+        assert!(ui.document_pending(line, &sources).is_none(), "{line}");
+    }
+}
+
 fn fixture() -> (WorkspaceTui, Rc<Cell<usize>>, Rc<Cell<usize>>) {
     let mut ui = WorkspaceTui::new();
     let a = Rc::new(Cell::new(0));
@@ -343,7 +414,10 @@ fn view_event_operation_reads_committed_revision_and_paste_is_not_a_command() {
     h.event(Event::Paste("draft ".into()));
     h.key(KeyCode::F(6), event::KeyModifiers::NONE);
     h.key(KeyCode::F(5), event::KeyModifiers::NONE);
-    assert_eq!(a.borrow().operations.as_slice(), &[original.clone()]);
+    assert_eq!(
+        a.borrow().operations.as_slice(),
+        std::slice::from_ref(&original)
+    );
 
     let paste = Event::Paste(":scope line 1 \"not a command\"\nF5\u{1b}[15~".into());
     assert_eq!(h.event(paste.clone()), WorkspaceInput::Ignored);
@@ -909,6 +983,21 @@ impl ReadOnlyCommand for DirectScriptHost {
 }
 
 #[test]
+fn new_script_focuses_visible_authorized_editor_without_binding_or_running() {
+    let root = TempWorkspace::new("new-script-focus");
+    let mut h = EditableWorkspace::new(&root, true);
+    let bound = h.sources.bound_source();
+    h.ui.focus_named("observer").unwrap();
+    h.ui.invoke_action(WorkspaceAction::NewScript, &mut h.app, &mut h.sources, None)
+        .unwrap();
+    assert_eq!(h.ui.focused(), Some("editor"));
+    assert_eq!(h.sources.selected().unwrap().language_id(), "scope-script");
+    assert_eq!(h.sources.selected().unwrap().text(), "");
+    assert_eq!(h.sources.bound_source(), bound);
+    assert!(h.ui.results.is_empty());
+}
+
+#[test]
 fn workspace_action_direct_run_requires_opt_in_and_live_script_selection() {
     let root = TempWorkspace::new("composition-action-authority");
     let mut h = EditableWorkspace::new(&root, true);
@@ -967,6 +1056,34 @@ fn workspace_action_direct_run_requires_opt_in_and_live_script_selection() {
     assert!(error.contains("no live selected scratch"), "{error}");
     assert_eq!(host.calls.len(), 1);
     assert_eq!(h.ui.results.len(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn save_as_new_file_refuses_selected_and_parked_dirty_drafts() {
+    for parked in [false, true] {
+        let root = TempWorkspace::new("save-as-draft-guard");
+        let mut h = EditableWorkspace::new(&root, true);
+        h.event(Event::Paste("unpublished".into()));
+        if parked {
+            h.sources.create("text", "other committed");
+            h.render();
+        }
+        let selected = h.sources.selected().unwrap().id();
+        let committed = h.sources.selected().unwrap().text().to_owned();
+        h.ui.submit_command(
+            ":scope save-as new.txt",
+            &mut h.app,
+            &mut h.session,
+            None,
+            &mut h.sources,
+        );
+        assert!(!root.host_path_exists("new.txt"));
+        assert!(!h.ui.output_errors.is_empty());
+        assert_eq!(h.sources.selected().unwrap().id(), selected);
+        assert_eq!(h.sources.selected().unwrap().text(), committed);
+        assert!(h.sources.selected().unwrap().destination_path().is_none());
+    }
 }
 
 #[test]
@@ -1250,6 +1367,10 @@ fn discovered_downstream(h: &EditableWorkspace) -> ActionInfo {
 #[derive(Default)]
 struct DownstreamActionHost {
     deny: bool,
+    #[expect(
+        clippy::type_complexity,
+        reason = "Record downstream invocation arguments directly in this test fixture"
+    )]
     calls: Vec<(
         String,
         String,
