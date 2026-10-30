@@ -92,6 +92,11 @@ impl WorkspaceCommandOutput {
         &self.transcript
     }
 
+    #[cfg(feature = "tui")]
+    pub(crate) fn append(&mut self, bytes: &[u8]) {
+        self.transcript.extend_from_slice(bytes);
+    }
+
     pub fn clear(&mut self) {
         self.transcript.clear();
     }
@@ -136,6 +141,7 @@ impl WorkspaceCommandOutput {
         request: &str,
         host: Option<&mut dyn ReadOnlyCommand>,
         sources: &ScratchBuffers,
+        observer: &mut dyn FnMut(&crate::agent::AgentTurn),
     ) -> Result<(), Box<dyn std::error::Error>> {
         use std::io::Write;
         let source = sources.selected()?;
@@ -184,7 +190,7 @@ impl WorkspaceCommandOutput {
                 &mut self.transcript,
             )
         } else {
-            let outcome = super::run_retained_scratch_agent(
+            let outcome = super::retained_agent::run_retained_scratch_agent_observed(
                 source,
                 binding.service,
                 model,
@@ -195,6 +201,8 @@ impl WorkspaceCommandOutput {
                     authorize: binding.authorize,
                     trace: binding.trace,
                 },
+                &crate::agent::AgentCancellationToken::default(),
+                observer,
             )?;
             (binding.observe)(&outcome);
             write!(self.transcript, "{}", outcome.activity_summary())?;
@@ -229,6 +237,48 @@ impl WorkspaceCommandOutput {
         host: Option<&mut dyn ReadOnlyCommand>,
         sources: &mut ScratchBuffers,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        self.submit_inner(
+            line,
+            app,
+            session,
+            host,
+            sources,
+            #[cfg(feature = "agent")]
+            &mut |_| {},
+        )
+    }
+
+    /// Synchronous lifecycle observations; callbacks cannot service in-flight input.
+    #[cfg(feature = "agent")]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Explicit borrowed execution and presentation owners"
+    )]
+    pub fn submit_observed(
+        &mut self,
+        line: &str,
+        app: &mut App,
+        session: &mut InteractiveSession,
+        host: Option<&mut dyn ReadOnlyCommand>,
+        sources: &mut ScratchBuffers,
+        observer: &mut dyn FnMut(&crate::agent::AgentTurn),
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.submit_inner(line, app, session, host, sources, observer)
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Explicit borrowed execution and presentation owners"
+    )]
+    fn submit_inner(
+        &mut self,
+        line: &str,
+        app: &mut App,
+        session: &mut InteractiveSession,
+        host: Option<&mut dyn ReadOnlyCommand>,
+        sources: &mut ScratchBuffers,
+        #[cfg(feature = "agent")] observer: &mut dyn FnMut(&crate::agent::AgentTurn),
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if !line.starts_with(":scope ") || line.contains(['\n', '\r']) {
             return Err("workspace submission requires one explicit :scope command line".into());
         }
@@ -249,7 +299,14 @@ impl WorkspaceCommandOutput {
             if request.trim().is_empty() {
                 return Err("document agent request must not be empty".into());
             }
-            return self.submit_document_agent(name == "document-propose", &request, host, sources);
+            return self.submit_document_agent(
+                name == "document-propose",
+                &request,
+                host,
+                sources,
+                #[cfg(feature = "agent")]
+                observer,
+            );
         }
         // Only the explicitly opted-in stock route requires document aliases.
         // Embedded hosts retain the existing dispatcher, including contracted

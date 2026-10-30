@@ -1,3 +1,6 @@
+/// Host-published, sanitized agent lifecycle observations (no execution authority).
+#[cfg(feature = "agent")]
+pub mod agent_turns;
 /// Reviewable full replacements produced by revision-bound operations.
 pub mod editing;
 pub mod inspection;

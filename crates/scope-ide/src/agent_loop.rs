@@ -4,7 +4,10 @@ pub mod edit;
 #[cfg(test)]
 #[path = "agent_loop_tests.rs"]
 mod tests;
-use super::AgentError;
+use super::{
+    AgentCancellationToken, AgentError, AgentEvidence, AgentFailure, AgentModelResponseOutcome,
+    AgentSourceBinding, AgentState, AgentToolOutcome, AgentTurn,
+};
 use crate::tool::{
     AgentSession, ToolArguments, ToolCall, ToolCatalogEntry, ToolDefinition, ToolEffect, ToolError,
     ToolResult, ToolValue,
@@ -34,6 +37,10 @@ pub struct AgentWorkflowContext<'a, 'session> {
     remaining_bytes: usize,
     used_bytes: usize,
     stop: &'a mut Option<AgentStop>,
+    cancellation: &'a AgentCancellationToken,
+    turn: &'a mut AgentTurn,
+    callback: &'a mut dyn FnMut(&AgentTurn),
+    request_ordinal: usize,
 }
 
 impl AgentWorkflowContext<'_, '_> {
@@ -51,6 +58,9 @@ impl AgentWorkflowContext<'_, '_> {
         }
         self.remaining_bytes -= bytes;
         self.used_bytes += bytes;
+        self.turn
+            .charge_bytes(bytes)
+            .expect("workflow byte accounting");
         true
     }
 
@@ -61,6 +71,9 @@ impl AgentWorkflowContext<'_, '_> {
             tool: call.name.clone(),
             message: "workflow run budget exhausted".into(),
         };
+        if self.cancellation.is_cancelled() {
+            *self.stop = Some(AgentStop::Cancelled);
+        }
         if self.stop.is_some() {
             return Err(exhausted());
         }
@@ -69,6 +82,18 @@ impl AgentWorkflowContext<'_, '_> {
             return Err(exhausted());
         }
         *self.calls += 1;
+        self.turn
+            .transition(AgentState::ToolRunning {
+                request_ordinal: self.request_ordinal,
+                call_ordinal: *self.calls,
+                name: call.name.clone(),
+            })
+            .expect("inner tool start transition");
+        (self.callback)(self.turn);
+        if self.cancellation.is_cancelled() {
+            *self.stop = Some(AgentStop::Cancelled);
+            return Err(exhausted());
+        }
         let bytes = to_json(ToolValue::Object(call.arguments.clone()))
             .to_string()
             .len();
@@ -81,6 +106,20 @@ impl AgentWorkflowContext<'_, '_> {
                 let allowed = (self.policy)(definition, call);
                 definition.effect == ToolEffect::Read && allowed
             });
+        self.turn
+            .record(AgentEvidence::Tool {
+                ordinal: *self.calls,
+                name: call.name.clone(),
+                request_ordinal: self.request_ordinal,
+                outcome: AgentToolOutcome::from_result(&result),
+                output: result.as_ref().ok().map(|r| r.value.clone()),
+            })
+            .expect("inner tool evidence");
+        (self.callback)(self.turn);
+        if self.cancellation.is_cancelled() {
+            *self.stop = Some(AgentStop::Cancelled);
+            return Err(exhausted());
+        }
         let bytes = match &result {
             Ok(result) => to_json(result.value.clone()).to_string().len(),
             Err(error) => error.to_string().len(),
@@ -121,6 +160,17 @@ Only listed tools exist. Discovery is not authorization; the host may deny any c
 /// Injectable text model; implementations may be deterministic and need no network.
 /// Messages include assistant decisions and host feedback in conversation order.
 pub trait DecisionModel {
+    /// Explicit non-secret model identifier for retained lifecycle snapshots.
+    /// Never derived from arbitrary trace settings, endpoints, or credentials.
+    fn model_identity(&self) -> Option<String> {
+        None
+    }
+
+    /// Explicit non-secret provider/adapter identifier, never an endpoint or key.
+    fn provider_identity(&self) -> Option<String> {
+        None
+    }
+
     /// Non-secret generation settings exposed by the adapter, not HTTP metadata.
     fn trace_settings(&self) -> Option<Value> {
         None
@@ -132,7 +182,7 @@ pub trait DecisionModel {
 /// Finite count and UTF-8 byte budgets, not wall-clock or billing guarantees.
 /// Limits are checked before model requests and before tool dispatch. A provider
 /// or model call must terminate itself; this synchronous runner cannot cancel it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AgentLimits {
     pub max_decisions: usize,
     pub max_tool_calls: usize,
@@ -156,9 +206,10 @@ impl Default for AgentLimits {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AgentStop {
     Completed,
+    Cancelled,
     DecisionBudget,
     ToolBudget,
     MalformedBudget,
@@ -168,14 +219,28 @@ pub enum AgentStop {
 
 /// A budget stop is not a successful completion. Counts include denied/unknown
 /// tool attempts, and malformed decisions consume the decision budget too.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct AgentRun {
+    pub turn: AgentTurn,
     pub content: String,
     pub stop: AgentStop,
     pub decisions: usize,
     pub tool_calls: usize,
     pub malformed: usize,
 }
+
+// Preserve outcome equality across independent executions (e.g. traced versus
+// ordinary runs). Turn identity and retained evidence are compared explicitly.
+impl PartialEq for AgentRun {
+    fn eq(&self, other: &Self) -> bool {
+        self.content == other.content
+            && self.stop == other.stop
+            && self.decisions == other.decisions
+            && self.tool_calls == other.tool_calls
+            && self.malformed == other.malformed
+    }
+}
+impl Eq for AgentRun {}
 
 /// Safe default at the dispatch layer, not a sandbox for native providers.
 pub fn read_only_policy(definition: &ToolDefinition, _call: &ToolCall) -> bool {
@@ -341,6 +406,20 @@ fn to_json(value: ToolValue) -> Value {
     }
 }
 
+fn push_lifecycle_message(
+    messages: &mut Vec<Message>,
+    role: &str,
+    content: String,
+    limits: AgentLimits,
+    turn: &mut AgentTurn,
+) -> Result<(), AgentStop> {
+    let bytes = content.len();
+    push_message(messages, role, content, limits)?;
+    turn.charge_bytes(bytes)
+        .expect("conversation byte accounting");
+    Ok(())
+}
+
 fn push_message(
     messages: &mut Vec<Message>,
     role: &str,
@@ -357,6 +436,7 @@ fn push_message(
     if content.len() > limits.max_conversation_bytes.saturating_sub(used) {
         return Err(AgentStop::ConversationBudget);
     }
+
     messages.push(Message {
         role: role.into(),
         content,
@@ -388,7 +468,83 @@ pub fn run_session_traced<W: std::io::Write>(
     policy: impl FnMut(&ToolDefinition, &ToolCall) -> bool,
     trace: &mut super::ProtocolTrace<W>,
 ) -> Result<AgentRun, AgentError> {
-    let result = run_session_inner(
+    run_session_traced_observed(
+        model,
+        session,
+        request,
+        limits,
+        policy,
+        trace,
+        None,
+        &AgentCancellationToken::default(),
+        &mut |_| {},
+    )
+}
+
+fn run_session_inner(
+    model: &mut (impl DecisionModel + ?Sized),
+    session: &mut AgentSession<'_>,
+    request: &str,
+    limits: AgentLimits,
+    policy: impl FnMut(&ToolDefinition, &ToolCall) -> bool,
+    observer: Option<&mut dyn FnMut(Value)>,
+    workflows: &mut [&mut dyn AgentWorkflow],
+) -> Result<AgentRun, AgentError> {
+    run_session_observed_inner(
+        model,
+        session,
+        request,
+        limits,
+        policy,
+        observer,
+        workflows,
+        None,
+        &AgentCancellationToken::default(),
+        &mut |_| {},
+    )
+}
+
+/// Live sanitized lifecycle notifications, including a terminal snapshot on errors.
+/// Cancellation is checked around blocking calls, never interrupts them.
+pub fn run_session_observed(
+    model: &mut (impl DecisionModel + ?Sized),
+    session: &mut AgentSession<'_>,
+    request: &str,
+    limits: AgentLimits,
+    policy: impl FnMut(&ToolDefinition, &ToolCall) -> bool,
+    source_binding: Option<AgentSourceBinding>,
+    cancellation: &AgentCancellationToken,
+    callback: &mut dyn FnMut(&AgentTurn),
+) -> Result<AgentRun, AgentError> {
+    run_session_observed_inner(
+        model,
+        session,
+        request,
+        limits,
+        policy,
+        None,
+        &mut [],
+        source_binding,
+        cancellation,
+        callback,
+    )
+}
+
+/// Raw opt-in trace plus typed live snapshots through the same authoritative loop.
+/// The trace can contain secrets; lifecycle serialization omits raw inputs/outputs.
+#[allow(clippy::too_many_arguments)]
+pub fn run_session_traced_observed<W: std::io::Write>(
+    model: &mut (impl DecisionModel + ?Sized),
+    session: &mut AgentSession<'_>,
+    request: &str,
+    limits: AgentLimits,
+    policy: impl FnMut(&ToolDefinition, &ToolCall) -> bool,
+    trace: &mut super::ProtocolTrace<W>,
+    source_binding: Option<AgentSourceBinding>,
+    cancellation: &AgentCancellationToken,
+    callback: &mut dyn FnMut(&AgentTurn),
+) -> Result<AgentRun, AgentError> {
+    let result = run_session_observed_inner(
         model,
         session,
         request,
@@ -396,6 +552,9 @@ pub fn run_session_traced<W: std::io::Write>(
         policy,
         Some(&mut |event| trace.record(&event)),
         &mut [],
+        source_binding,
+        cancellation,
+        callback,
     );
     trace.record(&match &result {
         Ok(run) => json!({"event":"outcome", "stop":format!("{:?}", run.stop), "content":run.content, "decisions":run.decisions, "tool_calls":run.tool_calls, "malformed":run.malformed}),
@@ -404,7 +563,76 @@ pub fn run_session_traced<W: std::io::Write>(
     result
 }
 
-fn run_session_inner(
+#[allow(clippy::too_many_arguments)]
+fn run_session_observed_inner(
+    model: &mut (impl DecisionModel + ?Sized),
+    session: &mut AgentSession<'_>,
+    request: &str,
+    limits: AgentLimits,
+    policy: impl FnMut(&ToolDefinition, &ToolCall) -> bool,
+    observer: Option<&mut dyn FnMut(Value)>,
+    workflows: &mut [&mut dyn AgentWorkflow],
+    source_binding: Option<AgentSourceBinding>,
+    cancellation: &AgentCancellationToken,
+    callback: &mut dyn FnMut(&AgentTurn),
+) -> Result<AgentRun, AgentError> {
+    let mut lifecycle = Lifecycle {
+        turn: AgentTurn::new(model.model_identity(), source_binding, limits),
+        cancellation,
+        callback,
+    };
+    lifecycle
+        .turn
+        .bind_provider_identity(model.provider_identity())
+        .expect("initial provider binding");
+    (lifecycle.callback)(&lifecycle.turn);
+    let mut result = execute_session(
+        model,
+        session,
+        request,
+        limits,
+        policy,
+        observer,
+        workflows,
+        &mut lifecycle,
+    );
+    let state = match &result {
+        Ok(run) => match run.stop {
+            AgentStop::Completed => AgentState::Completed,
+            AgentStop::Cancelled => AgentState::Cancelled,
+            stop => AgentState::BudgetExhausted(stop),
+        },
+        Err(error) => AgentState::Failed(AgentFailure::from_error(error)),
+    };
+    lifecycle.update(state);
+    if let Ok(run) = &mut result {
+        run.turn = lifecycle.turn;
+    }
+    result
+}
+
+struct Lifecycle<'a> {
+    turn: AgentTurn,
+    cancellation: &'a AgentCancellationToken,
+    callback: &'a mut dyn FnMut(&AgentTurn),
+}
+impl Lifecycle<'_> {
+    fn update(&mut self, state: AgentState) {
+        self.turn
+            .transition(state)
+            .expect("runner lifecycle transition");
+        (self.callback)(&self.turn);
+    }
+    fn record(&mut self, evidence: AgentEvidence) {
+        self.turn
+            .record(evidence)
+            .expect("runner lifecycle evidence");
+        (self.callback)(&self.turn);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_session(
     model: &mut (impl DecisionModel + ?Sized),
     session: &mut AgentSession<'_>,
     request: &str,
@@ -412,6 +640,7 @@ fn run_session_inner(
     mut policy: impl FnMut(&ToolDefinition, &ToolCall) -> bool,
     mut observer: Option<&mut dyn FnMut(Value)>,
     workflows: &mut [&mut dyn AgentWorkflow],
+    lifecycle: &mut Lifecycle<'_>,
 ) -> Result<AgentRun, AgentError> {
     macro_rules! emit {
         ($event:expr $(,)?) => {
@@ -421,12 +650,22 @@ fn run_session_inner(
         };
     }
     let mut run = AgentRun {
+        turn: lifecycle.turn.clone(),
         content: String::new(),
         stop: AgentStop::DecisionBudget,
         decisions: 0,
         tool_calls: 0,
         malformed: 0,
     };
+    macro_rules! cancelled {
+        () => {
+            if lifecycle.cancellation.is_cancelled() {
+                run.stop = AgentStop::Cancelled;
+                return Ok(run);
+            }
+        };
+    }
+    cancelled!();
     let mut messages = Vec::new();
     let mut catalog = session.catalog();
     let mut definitions = Vec::new();
@@ -449,7 +688,9 @@ fn run_session_inner(
         json!({"kind":"request", "request":request, "catalog":to_json(catalog.to_value())})
             .to_string();
     for (role, content) in [("system", PROTOCOL.to_owned()), ("user", initial)] {
-        if let Err(stop) = push_message(&mut messages, role, content, limits) {
+        if let Err(stop) =
+            push_lifecycle_message(&mut messages, role, content, limits, &mut lifecycle.turn)
+        {
             run.stop = stop;
             return Ok(run);
         }
@@ -458,17 +699,41 @@ fn run_session_inner(
         return Ok(run);
     }
     while run.decisions < limits.max_decisions {
+        cancelled!();
+        lifecycle.update(AgentState::Deciding {
+            request_ordinal: run.decisions + 1,
+        });
+        cancelled!();
         run.decisions += 1;
+        lifecycle.record(AgentEvidence::Decision {
+            ordinal: run.decisions,
+        });
         emit!(json!({"event":"request", "ordinal":run.decisions,
             "messages":messages.iter().map(|m| json!({"role":m.role,"content":m.content})).collect::<Vec<_>>(),
             "max_tokens":limits.max_tokens_per_decision, "settings":model.trace_settings()}));
+        cancelled!();
         let response = model.decide(&messages, limits.max_tokens_per_decision);
+        lifecycle.record(AgentEvidence::ModelResponse {
+            ordinal: run.decisions,
+            outcome: match &response {
+                Ok(_) => AgentModelResponseOutcome::Returned,
+                Err(_) => AgentModelResponseOutcome::Error(AgentFailure::Model),
+            },
+            response_bytes: response.as_ref().ok().map(|text| text.len()),
+        });
         match &response {
             Ok(text) => emit!(json!({"event":"response", "ordinal":run.decisions,"raw":text})),
             Err(error) => emit!(json!({"event":"response", "ordinal":run.decisions,"error":error})),
         }
+        cancelled!();
         let text = response.map_err(AgentError::Chat)?;
-        if let Err(stop) = push_message(&mut messages, "assistant", text.clone(), limits) {
+        if let Err(stop) = push_lifecycle_message(
+            &mut messages,
+            "assistant",
+            text.clone(),
+            limits,
+            &mut lifecycle.turn,
+        ) {
             run.stop = stop;
             return Ok(run);
         }
@@ -498,6 +763,13 @@ fn run_session_inner(
                 };
                 let supplied_argument_keys = call.arguments.keys().cloned().collect::<Vec<_>>();
                 run.tool_calls += 1;
+                let call_ordinal = run.tool_calls;
+                lifecycle.update(AgentState::ToolRunning {
+                    request_ordinal: run.decisions,
+                    call_ordinal,
+                    name: name.clone(),
+                });
+                cancelled!();
                 let result = if let Some(index) = definitions
                     .iter()
                     .position(|definition| definition.name == name)
@@ -517,12 +789,23 @@ fn run_session_inner(
                                 .saturating_sub(messages.iter().map(|m| m.content.len()).sum()),
                             used_bytes: 0,
                             stop: &mut stop,
+                            cancellation: lifecycle.cancellation,
+                            turn: &mut lifecycle.turn,
+                            callback: lifecycle.callback,
+                            request_ordinal: run.decisions,
                         };
                         let result = workflows[index].execute(call, &mut context);
                         limits.max_conversation_bytes = limits
                             .max_conversation_bytes
                             .saturating_sub(context.used_bytes);
                         if let Some(stop) = stop {
+                            lifecycle.record(AgentEvidence::Tool {
+                                request_ordinal: run.decisions,
+                                ordinal: call_ordinal,
+                                name: name.clone(),
+                                outcome: AgentToolOutcome::from_result(&result),
+                                output: result.as_ref().ok().map(|r| r.value.clone()),
+                            });
                             run.stop = stop;
                             return Ok(run);
                         }
@@ -531,6 +814,14 @@ fn run_session_inner(
                 } else {
                     session.invoke_with_call_policy(call, &mut policy)
                 };
+                lifecycle.record(AgentEvidence::Tool {
+                    request_ordinal: run.decisions,
+                    ordinal: call_ordinal,
+                    name: name.clone(),
+                    outcome: AgentToolOutcome::from_result(&result),
+                    output: result.as_ref().ok().map(|result| result.value.clone()),
+                });
+                cancelled!();
                 match result {
                     Ok(result) => {
                         json!({"kind":"tool_result", "call":run.tool_calls, "name":name, "ok":true, "value":to_json(result.value)})
@@ -565,6 +856,9 @@ fn run_session_inner(
             }
             Err(error) => {
                 run.malformed += 1;
+                lifecycle.record(AgentEvidence::Malformed {
+                    ordinal: run.decisions,
+                });
                 if run.malformed > limits.max_malformed {
                     run.stop = AgentStop::MalformedBudget;
                     return Ok(run);
@@ -572,7 +866,13 @@ fn run_session_inner(
                 json!({"kind":"protocol_error", "category":error.category(), "error":error.to_string(), "instruction":error.correction()})
             }
         };
-        let retained = push_message(&mut messages, "user", feedback.to_string(), limits);
+        let retained = push_lifecycle_message(
+            &mut messages,
+            "user",
+            feedback.to_string(),
+            limits,
+            &mut lifecycle.turn,
+        );
         emit!(
             json!({"event":"feedback", "ordinal":run.decisions, "envelope":feedback, "retained":retained.is_ok()}),
         );

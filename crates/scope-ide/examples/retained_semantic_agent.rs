@@ -23,6 +23,10 @@ mod demo {
         language::{InteractiveSession, LanguageRegistry},
         scratch::ScratchBuffers,
         text::TextRange,
+        tool::{
+            AgentSession, ToolCall,
+            agent_turns::{AgentTurnStore, AgentTurnToolProvider},
+        },
         workspace::Workspace,
     };
     use scope_language::*;
@@ -121,7 +125,14 @@ mod demo {
                 authorization.operation.id == "inspect"
                     && authorization.source.language == "retained-notes"
             };
+        let store = AgentTurnStore::new();
+        let mut publication = None;
         let mut observe = |result: &RetainedScratchAgentRun<'_>| {
+            publication = Some(
+                store
+                    .publish(&result.run.turn)
+                    .map(|()| result.run.turn.id()),
+            );
             eprintln!(
                 "Host attribution: {:?}, revision {:?}, stop {:?}",
                 result.source.id, result.source.version, result.run.stop
@@ -148,6 +159,17 @@ mod demo {
             )),
             std::io::stdout(),
         )?;
+        // Inspection uses an ordinary read-only tool session, with no UI or runner authority.
+        let turn_id = publication.ok_or("No retained agent turn was observed")??;
+        let mut inspection = AgentSession::builder()
+            .provider(AgentTurnToolProvider::new(store.clone()))
+            .build()?;
+        let result = inspection.invoke(
+            ToolCall::new("scope.agent.get").with_argument("id", turn_id.to_string().into()),
+        )?;
+        // Published snapshots omit native result outputs; trusted in-process evidence
+        // on result.run.turn in the observer retains those outputs.
+        println!("Sanitized retained turn: {result:?}");
         println!(
             "After shell exit (still caller-owned): {:?}",
             sources.bound_source()

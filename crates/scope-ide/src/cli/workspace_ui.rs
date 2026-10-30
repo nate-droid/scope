@@ -18,7 +18,8 @@ pub struct WorkspaceConfig {
     pub bind_selected: bool,
     pub focus: String,
     pub layout: Option<View>,
-    /// Rendering-only inspector; input and edit callbacks are not installed.
+    /// Inspector with focused read-only view input; source-edit and legacy mutable
+    /// callbacks are not forwarded. Global shortcuts remain owned by Scope.
     pub inspector: Option<Box<dyn Pane>>,
 }
 impl Default for WorkspaceConfig {
@@ -34,6 +35,7 @@ impl Default for WorkspaceConfig {
         }
     }
 }
+/// Forwards presentation and read-only view input, never mutable pane callbacks.
 struct SuppliedInspector(Box<dyn Pane>);
 impl Pane for SuppliedInspector {
     fn id(&self) -> &'static str {
@@ -46,6 +48,10 @@ impl Pane for SuppliedInspector {
         ctx: &TuiContext<'_>,
     ) {
         self.0.render(frame, area, ctx)
+    }
+
+    fn handle_view_event(&mut self, event: crossterm::event::Event, ctx: &TuiContext<'_>) -> bool {
+        self.0.handle_view_event(event, ctx)
     }
 }
 
@@ -191,6 +197,123 @@ pub(super) fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct InputInspector(std::rc::Rc<std::cell::RefCell<Vec<crossterm::event::Event>>>);
+
+    impl Pane for InputInspector {
+        fn id(&self) -> &'static str {
+            "supplied-input-inspector"
+        }
+
+        fn render(
+            &self,
+            _frame: &mut ratatui::Frame<'_>,
+            _area: ratatui::layout::Rect,
+            _ctx: &TuiContext<'_>,
+        ) {
+        }
+
+        fn handle_view_event(
+            &mut self,
+            event: crossterm::event::Event,
+            ctx: &TuiContext<'_>,
+        ) -> bool {
+            assert!(ctx.is_focused());
+            assert_eq!(
+                ctx.selected_source().unwrap().source.text.as_ref(),
+                "retained source"
+            );
+            assert!(matches!(
+                ctx.bound_semantic_source(),
+                Some(BoundSource::Available(_))
+            ));
+            let consumed = matches!(event, crossterm::event::Event::Paste(_));
+            self.0.borrow_mut().push(event);
+            consumed
+        }
+
+        fn handle_source_event(
+            &mut self,
+            _event: crossterm::event::Event,
+            _access: &mut crate::tui::ScratchEditAccess<'_>,
+        ) -> bool {
+            panic!("supplied inspector must not receive source-edit access");
+        }
+
+        fn handle_key(
+            &mut self,
+            _key: crossterm::event::KeyEvent,
+            _ctx: &mut crate::tui::TuiContextMut<'_>,
+        ) -> bool {
+            panic!("supplied inspector must not receive legacy mutable access");
+        }
+    }
+
+    #[test]
+    fn configured_supplied_inspector_receives_only_focused_read_only_input() {
+        use crate::tui::WorkspaceInput;
+        use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+
+        let root = crate::test_support::TempWorkspace::new("supplied-inspector-input");
+        let mut app = App::new(root.workspace()).unwrap();
+        let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let config = WorkspaceConfig {
+            content: "retained source".into(),
+            bind_selected: true,
+            focus: "inspector".into(),
+            inspector: Some(Box::new(InputInspector(events.clone()))),
+            ..WorkspaceConfig::default()
+        };
+        let mut sources = configured_sources(&app, &config).unwrap();
+        let before_text = sources.selected().unwrap().text().to_owned();
+        let before_version = sources.selected().unwrap().version();
+        let mut ui = build_configured(config).unwrap();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, 40)).unwrap();
+        terminal
+            .draw(|frame| ui.render_with_sources(frame, frame.area(), &app, &sources))
+            .unwrap();
+        let paste = Event::Paste(":scope save\n雪".into());
+        let key = Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(
+            ui.handle_event_with_sources(paste.clone(), &mut app, &mut sources),
+            WorkspaceInput::Handled
+        );
+        // A declined event must not fall through to the supplied mutable callback.
+        assert_eq!(
+            ui.handle_event_with_sources(key.clone(), &mut app, &mut sources),
+            WorkspaceInput::Ignored
+        );
+        assert_eq!(*events.borrow(), vec![paste.clone(), key.clone()]);
+        assert_eq!(sources.selected().unwrap().text(), before_text);
+        assert_eq!(sources.selected().unwrap().version(), before_version);
+        ui.focus_named("editor").unwrap();
+        ui.handle_event_with_sources(key, &mut app, &mut sources);
+        assert_eq!(events.borrow().len(), 2);
+        ui.focus_named("inspector").unwrap();
+        for (code, modifiers, expected) in [
+            (KeyCode::F(1), KeyModifiers::NONE, WorkspaceInput::Handled),
+            (KeyCode::F(4), KeyModifiers::NONE, WorkspaceInput::Handled),
+            (KeyCode::F(2), KeyModifiers::NONE, WorkspaceInput::Shell),
+            (
+                KeyCode::Char('q'),
+                KeyModifiers::CONTROL,
+                WorkspaceInput::Quit,
+            ),
+        ] {
+            assert_eq!(
+                ui.handle_event_with_sources(
+                    Event::Key(KeyEvent::new(code, modifiers)),
+                    &mut app,
+                    &mut sources
+                ),
+                expected
+            );
+        }
+        assert_eq!(events.borrow().len(), 2);
+        assert_eq!(sources.selected().unwrap().text(), before_text);
+        assert_eq!(sources.selected().unwrap().version(), before_version);
+    }
 
     #[test]
     fn downstream_startup_uses_owned_sources_and_existing_layout_validation() {

@@ -1,0 +1,23 @@
+{
+  "authorizations": 1,
+  "callbacks": 8,
+  "error": null,
+  "fresh": true,
+  "kernel_checked": true,
+  "mode": "real",
+  "passed": true,
+  "publish_errors": 0,
+  "scope_agent_get_matches": true,
+  "semantic_success_count": 1,
+  "source_revision": 0,
+  "source_unchanged": true,
+  "state": "Completed",
+  "stop": "Completed",
+  "terminal_snapshot_deserialized": true,
+  "usage": {
+    "conversation_bytes": 9679,
+    "decisions": 2,
+    "malformed": 0,
+    "tool_calls": 1
+  }
+}

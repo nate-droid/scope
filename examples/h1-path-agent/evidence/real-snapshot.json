@@ -1,0 +1,113 @@
+{
+  "evidence": [
+    {
+      "Decision": {
+        "ordinal": 1
+      }
+    },
+    {
+      "Tool": {
+        "name": "language.language.path.inspect_example",
+        "ordinal": 1,
+        "outcome": "Success",
+        "request_ordinal": 1
+      }
+    },
+    {
+      "Decision": {
+        "ordinal": 2
+      }
+    }
+  ],
+  "id": 1,
+  "limits": {
+    "max_conversation_bytes": 196608,
+    "max_decisions": 3,
+    "max_malformed": 1,
+    "max_message_bytes": 65536,
+    "max_tokens_per_decision": 320,
+    "max_tool_calls": 1
+  },
+  "model_identity": "qwen3-30b-a3b",
+  "source_binding": {
+    "identity": {
+      "identity": "0",
+      "kind": "scratch_buffer"
+    },
+    "language": "language.path",
+    "revision": 0
+  },
+  "state": "Completed",
+  "transitions": [
+    {
+      "call_ordinal": null,
+      "from": "Ready",
+      "ordinal": 1,
+      "request_ordinal": 1,
+      "to": {
+        "Deciding": {
+          "request_ordinal": 1
+        }
+      },
+      "trigger": "ModelRequested",
+      "turn_id": 1
+    },
+    {
+      "call_ordinal": 1,
+      "from": {
+        "Deciding": {
+          "request_ordinal": 1
+        }
+      },
+      "ordinal": 2,
+      "request_ordinal": 1,
+      "to": {
+        "ToolRunning": {
+          "call_ordinal": 1,
+          "name": "language.language.path.inspect_example",
+          "request_ordinal": 1
+        }
+      },
+      "trigger": "ToolRequested",
+      "turn_id": 1
+    },
+    {
+      "call_ordinal": null,
+      "from": {
+        "ToolRunning": {
+          "call_ordinal": 1,
+          "name": "language.language.path.inspect_example",
+          "request_ordinal": 1
+        }
+      },
+      "ordinal": 3,
+      "request_ordinal": 2,
+      "to": {
+        "Deciding": {
+          "request_ordinal": 2
+        }
+      },
+      "trigger": "ModelRequested",
+      "turn_id": 1
+    },
+    {
+      "call_ordinal": null,
+      "from": {
+        "Deciding": {
+          "request_ordinal": 2
+        }
+      },
+      "ordinal": 4,
+      "request_ordinal": 2,
+      "to": "Completed",
+      "trigger": "Completed",
+      "turn_id": 1
+    }
+  ],
+  "usage": {
+    "conversation_bytes": 9679,
+    "decisions": 2,
+    "malformed": 0,
+    "tool_calls": 1
+  }
+}

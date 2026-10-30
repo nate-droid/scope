@@ -8,7 +8,8 @@ use crate::app::App;
 
 mod composition;
 pub use composition::{
-    ActionInfo, DownstreamAction, View, WorkspaceAction, WorkspaceInput, WorkspaceTui,
+    ActionInfo, DownstreamAction, DownstreamPrompt, DownstreamPromptChoice, View, WorkspaceAction,
+    WorkspaceInput, WorkspaceTui,
 };
 mod pane;
 mod panes;

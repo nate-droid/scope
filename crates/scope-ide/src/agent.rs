@@ -11,6 +11,14 @@ pub use crate::tool::{
 pub use cell_capability_openai::Message as DecisionMessage;
 use cell_capability_openai::{ChatRequest, Message, OpenAiChat};
 
+#[path = "agent_lifecycle.rs"]
+mod lifecycle;
+pub use lifecycle::{
+    AgentBudgetUsage, AgentCancellationToken, AgentEvidence, AgentFailure, AgentLifecycleError,
+    AgentModelResponseOutcome, AgentSourceBinding, AgentSourceIdentity, AgentState,
+    AgentToolOutcome, AgentTransition, AgentTrigger, AgentTurn,
+};
+
 #[path = "agent_loop.rs"]
 mod decision;
 #[path = "agent_trace.rs"]
@@ -25,7 +33,8 @@ pub use decision::edit::{
 };
 pub use decision::{
     AgentLimits, AgentRun, AgentStop, AgentWorkflow, AgentWorkflowContext, DecisionModel,
-    read_only_policy, run_session, run_session_traced, run_session_with_workflows,
+    read_only_policy, run_session, run_session_observed, run_session_traced,
+    run_session_traced_observed, run_session_with_workflows,
 };
 pub use trace::ProtocolTrace;
 
@@ -257,6 +266,14 @@ impl CellAgent {
 }
 
 impl DecisionModel for CellAgent {
+    fn provider_identity(&self) -> Option<String> {
+        Some("cell-capability-openai".into())
+    }
+
+    fn model_identity(&self) -> Option<String> {
+        Some(self.model.clone())
+    }
+
     fn trace_settings(&self) -> Option<serde_json::Value> {
         Some(serde_json::json!({"model":self.model, "temperature":DEFAULT_TEMPERATURE}))
     }

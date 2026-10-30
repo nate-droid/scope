@@ -50,6 +50,25 @@ pub struct DownstreamAction {
     pub args: Vec<String>,
 }
 
+/// Contextual input requested at action invocation, never at registration time.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DownstreamPrompt {
+    pub label: String,
+    pub choices: Vec<DownstreamPromptChoice>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DownstreamPromptChoice {
+    pub label: String,
+    pub args: Vec<String>,
+}
+
+pub(super) struct PendingPrompt {
+    pub(super) action: WorkspaceAction,
+    pub(super) prompt: DownstreamPrompt,
+    pub(super) selected: usize,
+}
+
 #[derive(Default)]
 pub(super) struct Picker {
     query: String,
@@ -414,20 +433,38 @@ impl WorkspaceTui {
                     .iter()
                     .find(|a| a.id == id)
                     .ok_or("unknown downstream action")?;
-                let line = format!(
-                    ":scope downstream {} {} {}",
-                    entry.namespace,
-                    entry.command,
-                    entry.args.join(" ")
-                );
-                sources
-                    .bind_semantic_target(Some(scratch))
-                    .map_err(|e| e.to_string())?;
-                self.output_errors.push_str(&format!("Downstream {}: scratch {scratch}, source {source:?}, language {language}, committed revision {version} (historical attribution; not semantic approval)\n", entry.id));
-                self.show_result = false;
-                self.output
-                    .submit(&line, app, &mut InteractiveSession::new(), host, sources)
-                    .map_err(|e| e.to_string())?;
+                let host = host.as_deref_mut().ok_or("no downstream host installed")?;
+                if let Some(prompt) = host.downstream_action_prompt(&id, selected)? {
+                    if prompt.choices.is_empty() {
+                        return Err("downstream prompt has no available choices".into());
+                    }
+                    self.pending_prompt = Some(PendingPrompt {
+                        action: WorkspaceAction::Downstream {
+                            id,
+                            scratch,
+                            source,
+                            language,
+                            version,
+                        },
+                        prompt,
+                        selected: 0,
+                    });
+                    self.command_line = Some(String::new());
+                } else {
+                    let args = entry.args.clone();
+                    self.dispatch_downstream(
+                        &WorkspaceAction::Downstream {
+                            id,
+                            scratch,
+                            source,
+                            language,
+                            version,
+                        },
+                        args,
+                        sources,
+                        host,
+                    )?;
+                }
             }
             WorkspaceAction::RunScript => {
                 let record = host
@@ -490,6 +527,92 @@ impl WorkspaceTui {
             }
         }
         Ok(())
+    }
+
+    fn dispatch_downstream(
+        &mut self,
+        action: &WorkspaceAction,
+        args: Vec<String>,
+        sources: &mut ScratchBuffers,
+        host: &mut dyn ReadOnlyCommand,
+    ) -> Result<(), String> {
+        let info = self
+            .actions(sources, false)
+            .into_iter()
+            .find(|i| &i.action == action)
+            .ok_or("downstream action source changed; rediscover the action")?;
+        if let Some(reason) = info.disabled_reason {
+            return Err(reason);
+        }
+        let WorkspaceAction::Downstream {
+            id,
+            scratch,
+            source,
+            language,
+            version,
+        } = action
+        else {
+            return Err("not a downstream action".into());
+        };
+        let entry = self
+            .downstream_actions
+            .iter()
+            .find(|a| &a.id == id)
+            .ok_or("unknown downstream action")?;
+        sources
+            .bind_semantic_target(Some(*scratch))
+            .map_err(|e| e.to_string())?;
+        self.show_result = false;
+        self.output_errors.push_str(&format!("Downstream {id}: scratch {scratch}, source {source:?}, language {language}, committed revision {version} (historical attribution; not semantic approval)\n"));
+        let refs: Vec<_> = args.iter().map(String::as_str).collect();
+        let mut output = Vec::new();
+        let result = host.invoke_downstream_with_proposals(
+            &entry.namespace,
+            &entry.command,
+            &refs,
+            Some(sources.selected().map_err(|e| e.to_string())?),
+            self.output.source_edit_controller(),
+            &mut output,
+        );
+        self.output.append(&output);
+        match result {
+            Ok(crate::cli::DownstreamOutcome::Handled) => {}
+            Ok(crate::cli::DownstreamOutcome::Unhandled) => {
+                self.output.append(b"unhandled downstream command\n")
+            }
+            Err(error) => self.output.append(format!("{error}\n").as_bytes()),
+        }
+        Ok(())
+    }
+
+    pub(super) fn submit_prompt(
+        &mut self,
+        text: String,
+        sources: &mut ScratchBuffers,
+        host: Option<&mut dyn ReadOnlyCommand>,
+    ) -> Result<(), String> {
+        let pending = self.pending_prompt.take().ok_or("no pending prompt")?;
+        if text.trim().is_empty() {
+            return Err("prompt input must not be empty".into());
+        }
+        let WorkspaceAction::Downstream { id, .. } = &pending.action else {
+            unreachable!()
+        };
+        let mut args = self
+            .downstream_actions
+            .iter()
+            .find(|a| &a.id == id)
+            .ok_or("unknown downstream action")?
+            .args
+            .clone();
+        args.extend(pending.prompt.choices[pending.selected].args.clone());
+        args.push(text);
+        self.dispatch_downstream(
+            &pending.action,
+            args,
+            sources,
+            host.ok_or("no downstream host installed")?,
+        )
     }
 
     pub(super) fn result_text(&self, sources: Option<&ScratchBuffers>) -> Option<String> {

@@ -1367,6 +1367,7 @@ fn discovered_downstream(h: &EditableWorkspace) -> ActionInfo {
 #[derive(Default)]
 struct DownstreamActionHost {
     deny: bool,
+    prompt: bool,
     #[expect(
         clippy::type_complexity,
         reason = "Record downstream invocation arguments directly in this test fixture"
@@ -1383,6 +1384,26 @@ struct DownstreamActionHost {
 }
 
 impl ReadOnlyCommand for DownstreamActionHost {
+    fn downstream_action_prompt(
+        &mut self,
+        _: &str,
+        _: &crate::scratch::ScratchBuffer,
+    ) -> Result<Option<DownstreamPrompt>, String> {
+        Ok(self.prompt.then(|| DownstreamPrompt {
+            label: "Enter candidate".into(),
+            choices: vec![
+                DownstreamPromptChoice {
+                    label: "First goal".into(),
+                    args: vec!["goal-1".into()],
+                },
+                DownstreamPromptChoice {
+                    label: "Second goal".into(),
+                    args: vec!["goal-2".into()],
+                },
+            ],
+        }))
+    }
+
     fn downstream_namespaces(&self) -> &[&str] {
         &["native"]
     }
@@ -1646,4 +1667,301 @@ fn downstream_action_dirty_selected_and_parked_drafts_reject_before_binding() {
         assert!(h.ui.output.bytes().is_empty());
         assert!(h.ui.output_errors.is_empty());
     }
+}
+
+#[test]
+fn downstream_prompt_selects_goal_and_preserves_exact_text() {
+    let root = TempWorkspace::new("downstream-prompt-exact");
+    let mut h = EditableWorkspace::new(&root, true);
+    h.ui.register_downstream_action(downstream_test_action())
+        .unwrap();
+    let mut host = DownstreamActionHost {
+        prompt: true,
+        ..Default::default()
+    };
+    h.ui.invoke_action(
+        discovered_downstream(&h).action,
+        &mut h.app,
+        &mut h.sources,
+        Some(&mut host),
+    )
+    .unwrap();
+    assert!(host.calls.is_empty());
+    h.ui.command_event(&Event::Key(KeyEvent::new(
+        KeyCode::Down,
+        event::KeyModifiers::NONE,
+    )));
+    assert_eq!(h.ui.pending_prompt.as_ref().unwrap().selected, 1);
+    let text = "  lambda x => x\n \"quoted\" \\  ";
+    h.ui.command_event(&Event::Paste(text.into()));
+    let line =
+        h.ui.command_event(&Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            event::KeyModifiers::NONE,
+        )))
+        .unwrap();
+    h.ui.submit_prompt(line, &mut h.sources, Some(&mut host))
+        .unwrap();
+    assert_eq!(
+        host.calls[0].2,
+        vec!["summary", "--readonly", "goal-2", text]
+    );
+    assert!(h.ui.pending_prompt.is_none());
+}
+
+#[test]
+fn downstream_prompt_cancel_empty_dirty_and_stale_never_dispatch() {
+    for change in [
+        "escape",
+        "control-c",
+        "empty",
+        "dirty",
+        "revision",
+        "selection",
+        "closure",
+    ] {
+        let root = TempWorkspace::new("downstream-prompt-guard");
+        let mut h = EditableWorkspace::new(&root, true);
+        h.render();
+        h.ui.register_downstream_action(downstream_test_action())
+            .unwrap();
+        let mut host = DownstreamActionHost {
+            prompt: true,
+            ..Default::default()
+        };
+        h.ui.invoke_action(
+            discovered_downstream(&h).action,
+            &mut h.app,
+            &mut h.sources,
+            Some(&mut host),
+        )
+        .unwrap();
+        let bound = h.sources.semantic_target_id();
+        match change {
+            "escape" | "control-c" => {
+                let (code, modifiers) = if change == "escape" {
+                    (KeyCode::Esc, event::KeyModifiers::NONE)
+                } else {
+                    (KeyCode::Char('c'), event::KeyModifiers::CONTROL)
+                };
+                h.ui.command_event(&Event::Key(KeyEvent::new(code, modifiers)));
+                assert!(h.ui.pending_prompt.is_none());
+                assert!(h.ui.command_line.is_none());
+            }
+            _ => {
+                match change {
+                    "dirty" => {
+                        h.event(Event::Paste("draft".into()));
+                    }
+                    "revision" => {
+                        h.event(Event::Paste("new".into()));
+                        h.control('s');
+                    }
+                    "selection" => {
+                        h.sources.create("text", "another");
+                    }
+                    "closure" => {
+                        h.sources.close_selected(true).unwrap();
+                    }
+                    _ => {}
+                }
+                let text = if change == "empty" {
+                    " \n "
+                } else {
+                    "candidate"
+                };
+                assert!(
+                    h.ui.submit_prompt(text.into(), &mut h.sources, Some(&mut host))
+                        .is_err(),
+                    "{change}"
+                );
+            }
+        }
+        assert!(host.calls.is_empty(), "{change}");
+        assert_eq!(h.sources.semantic_target_id(), bound, "{change}");
+    }
+}
+
+#[test]
+fn downstream_prompt_footer_reserves_wrapped_candidate_space() {
+    use ratatui::{Terminal, backend::TestBackend};
+    for width in [1, 20, 80, 120] {
+        let mut ui = WorkspaceTui::new();
+        assert_eq!(ui.footer_height(), 1);
+        ui.pending_prompt = Some(actions::PendingPrompt {
+            action: WorkspaceAction::Help,
+            prompt: DownstreamPrompt {
+                label: "Long contextual label ".repeat(40),
+                choices: vec![DownstreamPromptChoice {
+                    label: "Goal context ".repeat(40),
+                    args: vec![],
+                }],
+            },
+            selected: 0,
+        });
+        assert_eq!(ui.footer_height(), 4);
+        ui.command_line = Some(format!("{}\nTAIL", "proof ".repeat(80)));
+        let mut terminal = Terminal::new(TestBackend::new(width, 4)).unwrap();
+        terminal
+            .draw(|frame| ui.render_footer(frame, frame.area()))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let candidate = (2..4)
+            .flat_map(|y| (0..width).map(move |x| (x, y)))
+            .map(|(x, y)| buffer[(x, y)].symbol())
+            .collect::<String>();
+        if width >= 20 {
+            assert!(candidate.contains("TAIL"), "{width}: {candidate}");
+        }
+        assert!(!candidate.contains("context"));
+        // Resizing to a tiny viewport must neither panic nor let metadata take input rows.
+        let mut tiny = Terminal::new(TestBackend::new(width, 1)).unwrap();
+        tiny.draw(|frame| ui.render_footer(frame, frame.area()))
+            .unwrap();
+        ui.pending_prompt = None;
+        ui.command_line = None;
+        assert_eq!(ui.footer_height(), 1);
+    }
+}
+
+/// A deterministic authorized host: no backend or live agent is involved.
+#[derive(Default)]
+struct ProposalHandoffHost {
+    calls: usize,
+}
+impl ReadOnlyCommand for ProposalHandoffHost {
+    fn invoke_downstream_with_proposals(
+        &mut self,
+        _: &str,
+        _: &str,
+        _: &[&str],
+        target: Option<&crate::scratch::ScratchBuffer>,
+        proposals: &mut crate::source_edit::SourceEditController,
+        output: &mut dyn std::io::Write,
+    ) -> Result<crate::cli::DownstreamOutcome, crate::cli::DownstreamError> {
+        self.calls += 1;
+        let id = proposals
+            .propose(
+                target.unwrap(),
+                vec![crate::text::TextEdit::insert(
+                    crate::text::Position::new(0, 0),
+                    "proof ",
+                )],
+                Some("authorized test proposal".into()),
+            )
+            .unwrap();
+        writeln!(
+            output,
+            "Review with :scope source-proposal {}; accept with :scope source-accept {}",
+            id.0, id.0
+        )
+        .unwrap();
+        Ok(crate::cli::DownstreamOutcome::Handled)
+    }
+    fn invoke(
+        &mut self,
+        _: &crate::document::Document,
+        _: crate::text::TextRange,
+        _: &str,
+        _: &mut dyn std::io::Write,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        panic!("no document authority")
+    }
+}
+
+#[test]
+fn downstream_proposal_handoff_retains_pending_for_explicit_review_and_accept() {
+    use crate::proposal::{ProposalId, ProposalStatus};
+    let root = TempWorkspace::new("downstream-proposal-handoff");
+    let mut h = EditableWorkspace::new(&root, true);
+    h.ui.register_downstream_action(downstream_test_action())
+        .unwrap();
+    let action = discovered_downstream(&h).action;
+    let original = h.sources.bound_source();
+    let mut host = ProposalHandoffHost::default();
+    h.ui.invoke_action(action, &mut h.app, &mut h.sources, Some(&mut host))
+        .unwrap();
+    assert_eq!(host.calls, 1);
+    assert_eq!(h.sources.bound_source(), original);
+    let controller = h.ui.source_edit_controller();
+    assert_eq!(
+        controller.get(ProposalId(1)).unwrap().status(),
+        ProposalStatus::Pending
+    );
+    assert_eq!(
+        controller
+            .preview(ProposalId(1), h.sources.selected().unwrap())
+            .unwrap(),
+        "proof original"
+    );
+    h.ui.submit_command(
+        ":scope source-proposal 1",
+        &mut h.app,
+        &mut h.session,
+        None,
+        &mut h.sources,
+    );
+    assert_eq!(h.sources.bound_source(), original);
+    h.ui.submit_command(
+        ":scope source-accept 1",
+        &mut h.app,
+        &mut h.session,
+        None,
+        &mut h.sources,
+    );
+    assert_eq!(h.sources.selected().unwrap().text(), "proof original");
+    assert_eq!(
+        h.ui.source_edit_controller()
+            .get(ProposalId(1))
+            .unwrap()
+            .status(),
+        ProposalStatus::Applied
+    );
+}
+
+#[test]
+fn downstream_proposal_handoff_blocks_dirty_drafts_and_stale_acceptance() {
+    use crate::proposal::{ProposalId, ProposalStatus};
+    let root = TempWorkspace::new("downstream-proposal-freshness");
+    let mut h = EditableWorkspace::new(&root, true);
+    h.ui.register_downstream_action(downstream_test_action())
+        .unwrap();
+    let action = discovered_downstream(&h).action;
+    let mut host = ProposalHandoffHost::default();
+    h.event(Event::Paste("draft ".into()));
+    assert!(
+        h.ui.invoke_action(action, &mut h.app, &mut h.sources, Some(&mut host))
+            .is_err()
+    );
+    assert_eq!(host.calls, 0);
+    assert!(h.ui.source_edit_controller().list().next().is_none());
+    h.render();
+    assert!(h.pane_text("editor").contains("draft original"));
+    h.control('s');
+    let action = discovered_downstream(&h).action;
+    h.ui.invoke_action(action, &mut h.app, &mut h.sources, Some(&mut host))
+        .unwrap();
+    h.event(Event::Paste("new ".into()));
+    h.control('s');
+    let current = h.sources.bound_source();
+    h.ui.submit_command(
+        ":scope source-accept 1",
+        &mut h.app,
+        &mut h.session,
+        None,
+        &mut h.sources,
+    );
+    assert_eq!(h.sources.bound_source(), current);
+    assert_eq!(
+        h.ui.source_edit_controller()
+            .get(ProposalId(1))
+            .unwrap()
+            .status(),
+        ProposalStatus::Pending
+    );
+    assert!(
+        h.ui.source_edit_controller()
+            .preview(ProposalId(1), h.sources.selected().unwrap())
+            .is_err()
+    );
 }

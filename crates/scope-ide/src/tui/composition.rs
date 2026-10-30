@@ -41,11 +41,15 @@ fn render_propagates_optional_source_owner() {
     assert_eq!(observed.get(), 1);
 }
 mod actions;
+#[cfg(feature = "agent")]
+mod progress;
 #[cfg(test)]
 mod tests;
 use super::{Pane, TuiContext, TuiContextMut, session::TerminalSession};
 use crate::{app::App, cli::ReadOnlyCommand, language::InteractiveSession};
-pub use actions::{ActionInfo, DownstreamAction, WorkspaceAction};
+pub use actions::{
+    ActionInfo, DownstreamAction, DownstreamPrompt, DownstreamPromptChoice, WorkspaceAction,
+};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -191,6 +195,7 @@ pub struct WorkspaceTui {
     focused: Option<String>,
     last_focused: Option<String>,
     command_line: Option<String>,
+    pending_prompt: Option<actions::PendingPrompt>,
     output: crate::cli::workspace_command::WorkspaceCommandOutput,
     output_errors: String,
     output_scroll: u16,
@@ -521,11 +526,33 @@ impl WorkspaceTui {
 
     // Returns a submission only on Enter. All command editing is isolated from panes.
     fn command_event(&mut self, input: &Event) -> Option<String> {
+        if let Some(pending) = self.pending_prompt.as_mut()
+            && let Event::Key(key) = input
+            && key.kind == KeyEventKind::Press
+        {
+            match key.code {
+                KeyCode::Up => {
+                    pending.selected = pending.selected.saturating_sub(1);
+                    return None;
+                }
+                KeyCode::Down => {
+                    pending.selected = (pending.selected + 1).min(pending.prompt.choices.len() - 1);
+                    return None;
+                }
+                KeyCode::Char('c') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                    self.pending_prompt = None;
+                    self.command_line = None;
+                    return None;
+                }
+                _ => {}
+            }
+        }
         let line = self.command_line.as_mut()?;
         match input {
             Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
                 KeyCode::Esc | KeyCode::F(4) => {
                     self.command_line = None;
+                    self.pending_prompt = None;
                 }
                 KeyCode::Enter => return self.command_line.take(),
                 KeyCode::Backspace => {
@@ -618,6 +645,30 @@ impl WorkspaceTui {
         host: Option<&mut dyn ReadOnlyCommand>,
         sources: &mut crate::scratch::ScratchBuffers,
     ) {
+        self.submit_command_inner(
+            line,
+            app,
+            session,
+            host,
+            sources,
+            #[cfg(feature = "agent")]
+            &mut |_| {},
+        );
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Keep borrowed dispatch owners explicit"
+    )]
+    fn submit_command_inner(
+        &mut self,
+        line: &str,
+        app: &mut App,
+        session: &mut InteractiveSession,
+        host: Option<&mut dyn ReadOnlyCommand>,
+        sources: &mut crate::scratch::ScratchBuffers,
+        #[cfg(feature = "agent")] observer: &mut dyn FnMut(&crate::agent::AgentTurn),
+    ) {
         self.show_result = false;
         let result = match PaneAction::parse(line) {
             Some(PaneAction::Focus(name)) => self.focus_named(&name),
@@ -651,14 +702,57 @@ impl WorkspaceTui {
                 if let Some(reason) = blocker {
                     Err(reason)
                 } else {
-                    self.output
-                        .submit(line, app, session, host, sources)
-                        .map_err(|e| e.to_string())
+                    #[cfg(feature = "agent")]
+                    let result = self
+                        .output
+                        .submit_observed(line, app, session, host, sources, observer);
+                    #[cfg(not(feature = "agent"))]
+                    let result = self.output.submit(line, app, session, host, sources);
+                    result.map_err(|e| e.to_string())
                 }
             }
         };
         if let Err(error) = result {
             self.output_errors.push_str(&format!("{error}\n"));
+        }
+    }
+
+    fn footer_height(&self) -> u16 {
+        if self.pending_prompt.is_some() { 4 } else { 1 }
+    }
+
+    fn render_footer(&self, frame: &mut ratatui::Frame<'_>, area: Rect) {
+        use ratatui::widgets::Wrap;
+
+        if let Some(pending) = &self.pending_prompt {
+            // Reserve input space independently of contextual metadata, even on tiny terminals.
+            let input_height = area.height.min(2);
+            let metadata_height = area.height.saturating_sub(input_height);
+            let areas = Layout::vertical([
+                Constraint::Length(metadata_height.min(1)),
+                Constraint::Length(metadata_height.saturating_sub(1)),
+                Constraint::Length(input_height),
+            ])
+            .split(area);
+            frame.render_widget(Paragraph::new(pending.prompt.label.as_str()), areas[0]);
+            frame.render_widget(
+                Paragraph::new(format!(
+                    "↑/↓ select • Esc/Ctrl-C cancel • {}",
+                    pending.prompt.choices[pending.selected].label,
+                )),
+                areas[1],
+            );
+            let candidate = format!("> {}", self.command_line.as_deref().unwrap_or_default());
+            let paragraph = Paragraph::new(candidate).wrap(Wrap { trim: false });
+            let scroll = paragraph
+                .line_count(areas[2].width)
+                .saturating_sub(areas[2].height as usize)
+                .min(u16::MAX as usize) as u16;
+            frame.render_widget(paragraph.scroll((scroll, 0)), areas[2]);
+        } else {
+            frame.render_widget(Paragraph::new(self.command_line.as_ref()
+                .map(|s| format!("> {s}"))
+                .unwrap_or_else(|| "F1 actions • F5 run • F3 previous pane • F4 command • F6 focus • F7 layout • F2/Esc shell • Ctrl-Q exit".into())), area);
         }
     }
 
@@ -701,7 +795,7 @@ impl WorkspaceTui {
                 let areas = Layout::vertical([
                     Constraint::Min(0),
                     Constraint::Length(output_height),
-                    Constraint::Length(1),
+                    Constraint::Length(self.footer_height()),
                 ])
                 .split(frame.area());
                 self.output_area = (areas[1].width > 0 && areas[1].height > 0).then_some(areas[1]);
@@ -715,24 +809,20 @@ impl WorkspaceTui {
                         Style::default()
                     });
                 frame.render_widget(
-                    Paragraph::new(self.result_text(sources.as_deref()).unwrap_or_else(|| self.output_text()))
-                        .block(block)
-                        .scroll((self.output_scroll, 0)),
+                    Paragraph::new(
+                        self.result_text(sources.as_deref())
+                            .unwrap_or_else(|| self.output_text()),
+                    )
+                    .block(block)
+                    .scroll((self.output_scroll, 0)),
                     areas[1],
                 );
-                frame.render_widget(
-                    Paragraph::new(
-                        self.command_line
-                            .as_ref()
-                            .map(|s| format!("> {s}"))
-                            .unwrap_or_else(|| {
-                                "F1 actions • F5 run • F3 previous pane • F4 command • F6 focus • F7 layout • F2/Esc shell • Ctrl-Q exit"
-                                    .into()
-                            }),
-                    ),
-                    areas[2],
+                self.render_footer(frame, areas[2]);
+                self.render_picker(
+                    frame,
+                    sources.as_deref().unwrap_or(&fallback_sources),
+                    command.as_ref().is_some_and(|h| h.supports_direct_script()),
                 );
-                self.render_picker(frame, sources.as_deref().unwrap_or(&fallback_sources), command.as_ref().is_some_and(|h| h.supports_direct_script()));
             })?;
             if event::poll(std::time::Duration::from_millis(250))? {
                 let input = event::read()?;
@@ -780,6 +870,21 @@ impl WorkspaceTui {
                 }
                 if self.command_line.is_some() {
                     if let Some(line) = self.command_event(&input) {
+                        if self.pending_prompt.is_some() {
+                            if let Err(error) = self.submit_prompt(
+                                line,
+                                sources.as_deref_mut().unwrap_or(&mut fallback_sources),
+                                command
+                                    .as_mut()
+                                    .map(|h| &mut **h as &mut dyn ReadOnlyCommand),
+                            ) {
+                                self.show_result = false;
+                                self.output_errors.push_str(&format!("{error}\n"));
+                            }
+                            continue;
+                        }
+                        #[cfg(feature = "agent")]
+                        let mut background = None;
                         if let Some(status) = self.document_pending(
                             &line,
                             sources.as_deref().unwrap_or(&fallback_sources),
@@ -792,9 +897,15 @@ impl WorkspaceTui {
                                     sources.as_deref(),
                                     &status,
                                 );
+                                #[cfg(feature = "agent")]
+                                {
+                                    background = Some(frame.buffer_mut().clone());
+                                }
                             })?;
                         }
-                        self.submit_command(
+                        #[cfg(feature = "agent")]
+                        let mut draw_error = None;
+                        self.submit_command_inner(
                             &line,
                             app,
                             session,
@@ -802,7 +913,25 @@ impl WorkspaceTui {
                                 .as_mut()
                                 .map(|host| &mut **host as &mut dyn ReadOnlyCommand),
                             sources.as_deref_mut().unwrap_or(&mut fallback_sources),
+                            #[cfg(feature = "agent")]
+                            &mut |turn| {
+                                if draw_error.is_some() {
+                                    return;
+                                }
+                                if let Err(error) = terminal.as_mut().unwrap().draw(|frame| {
+                                    if let Some(buffer) = &background {
+                                        frame.buffer_mut().merge(buffer);
+                                    }
+                                    progress::render(frame, turn);
+                                }) {
+                                    draw_error = Some(error);
+                                }
+                            },
                         );
+                        #[cfg(feature = "agent")]
+                        if let Some(error) = draw_error {
+                            return Err(error.into());
+                        }
                     }
                     continue;
                 }

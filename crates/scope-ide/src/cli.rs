@@ -14,6 +14,7 @@ mod retained_agent;
 #[cfg(feature = "agent")]
 pub use retained_agent::{
     RetainedScratchAgentConfig, RetainedScratchAgentRun, run_retained_scratch_agent,
+    run_retained_scratch_agent_observed,
 };
 mod buffer_editor;
 mod script_context;
@@ -557,6 +558,17 @@ pub trait ReadOnlyCommand {
         Vec::new()
     }
 
+    /// Resolve contextual choices against the live pinned source when invoked.
+    /// Choice arguments follow fixed action arguments; exact entered text is last.
+    #[cfg(feature = "tui")]
+    fn downstream_action_prompt(
+        &mut self,
+        _id: &str,
+        _target: &crate::scratch::ScratchBuffer,
+    ) -> Result<Option<crate::tui::DownstreamPrompt>, String> {
+        Ok(None)
+    }
+
     /// Bounded declarative workflows exposed only as `:scope NAME COMMAND`.
     /// Registrations are validated and snapshotted before the shell starts.
     fn compositions(&self) -> &[composition::Composition] {
@@ -602,6 +614,27 @@ pub trait ReadOnlyCommand {
     ) -> Result<DownstreamOutcome, DownstreamError> {
         Ok(DownstreamOutcome::Unhandled)
     }
+    /// Workspace F1 downstream dispatch with the retained proposal registry.
+    /// The target is an invocation-local immutable live-memory borrow. Registration
+    /// grants no authority: hosts must authorize semantic/agent operations themselves.
+    /// Proposals remain pending until explicit review/accept through the existing
+    /// source commands; no mutable source, workspace, or save interface is supplied.
+    /// Keep proposals bound to this target's exact identity, revision, and text.
+    /// Existing hosts retain their downstream behavior by default. Shell downstream
+    /// dispatch continues to use `invoke_downstream` without this handoff.
+    #[cfg(feature = "tui")]
+    fn invoke_downstream_with_proposals(
+        &mut self,
+        namespace: &str,
+        command: &str,
+        args: &[&str],
+        semantic_target: Option<&crate::scratch::ScratchBuffer>,
+        _proposals: &mut crate::source_edit::SourceEditController,
+        output: &mut dyn Write,
+    ) -> Result<DownstreamOutcome, DownstreamError> {
+        self.invoke_downstream(namespace, command, args, semantic_target, output)
+    }
+
     /// Whether this host explicitly supports target-free, structured Script execution.
     fn supports_direct_script(&self) -> bool {
         false

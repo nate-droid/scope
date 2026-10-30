@@ -5,6 +5,10 @@ model loop, approval, proposals, and sensitive evidence. For build/features see
 [Development](development.md); for language registration, sessions, and component
 execution see [Integration](integration.md).
 
+For typed decision-loop state, read-only turn inspection, cancellation boundaries,
+and the H1 coverage assessment, see [Typed agent turns](agent-lifecycle.md).
+The [real Path exercise](h1-experiment.md) includes a reproducible local-model harness.
+
 ## Choose an agent surface
 
 | Surface | Feature | Authority and purpose |

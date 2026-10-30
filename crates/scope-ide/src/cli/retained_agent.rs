@@ -4,11 +4,14 @@
 //! Language services and models are trusted host implementations, not sandboxed code.
 use crate::{
     agent::{
-        AgentError, AgentLimits, AgentRun, DecisionModel, ProtocolTrace, read_only_policy,
-        run_session_traced,
+        AgentCancellationToken, AgentError, AgentEvidence, AgentLimits, AgentRun,
+        AgentSourceBinding, AgentSourceIdentity, AgentToolOutcome, AgentTurn, DecisionModel,
+        ProtocolTrace, read_only_policy, run_session_traced_observed,
     },
     scratch::ScratchBuffer,
-    source_edit::{PermittedEditScope, SourceEditController, SourceSnapshot, SourceTarget},
+    source_edit::{
+        PermittedEditScope, SourceEditController, SourceId, SourceSnapshot, SourceTarget,
+    },
     tool::{
         AgentSession, ToolCall, ToolDefinition, ToolError, ToolProvider, ToolResult, ToolValue,
         semantic::{SemanticAuthorization, SemanticToolProvider},
@@ -40,6 +43,7 @@ pub struct RetainedScratchAgentConfig<'a> {
 pub struct RetainedScratchAgentRun<'a> {
     pub run: AgentRun,
     pub source: SourceSnapshot<'a>,
+    evaluation_source_id: scope_language::SourceId,
     /// Sensitive protocol capture, bounded by `limits.max_conversation_bytes`.
     /// When truncated, the final JSONL record may be incomplete.
     pub trace_jsonl: Vec<u8>,
@@ -48,56 +52,64 @@ pub struct RetainedScratchAgentRun<'a> {
 }
 
 impl RetainedScratchAgentRun<'_> {
-    /// Compact presentation derived only from complete retained feedback records.
+    /// Compare process-local buffer identity plus tagged ID, revision, and language.
+    /// The serialized typed binding remains owner-local and cannot distinguish owners;
+    /// freshness additionally requires the private, non-serialized evaluation identity.
+    pub fn source_is_fresh(&self, current: &ScratchBuffer) -> bool {
+        &self.evaluation_source_id == current.evaluation_source_id()
+            && self
+                .run
+                .turn
+                .source_binding()
+                .is_some_and(|binding| *binding == source_binding(current.snapshot()))
+    }
+
+    /// Compact presentation of authoritative lifecycle evidence only.
     /// Never displays arguments, returned values, prompts, or model claims.
     pub fn activity_summary(&self) -> String {
+        let turn = &self.run.turn;
+        let usage = turn.usage();
         let mut text = format!(
-            "Agent activity: {:?}, committed revision {} — {:?}\nDecisions: {}; tool attempts: {}.\n",
-            self.source.id,
-            self.source.version,
-            self.run.stop,
-            self.run.decisions,
-            self.run.tool_calls,
+            "Agent activity: {:?} — {:?}\nDecisions: {}; tool attempts: {}.\n",
+            turn.source_binding(),
+            turn.state(),
+            usage.decisions,
+            usage.tool_calls,
         );
         let mut records = 0;
-        for line in self.trace_jsonl.split(|byte| *byte == b'\n') {
-            let Ok(event) = serde_json::from_slice::<serde_json::Value>(line) else {
-                continue;
-            };
-            if event["event"] != "feedback" || event["envelope"]["kind"] != "tool_result" {
-                continue;
+        for evidence in turn.evidence() {
+            if let AgentEvidence::Tool { name, outcome, .. } = evidence {
+                let name: String = name
+                    .chars()
+                    .take(120)
+                    .flat_map(char::escape_default)
+                    .collect();
+                let status = if *outcome == AgentToolOutcome::Success {
+                    "returned successfully"
+                } else {
+                    "failed or denied (not evidence of execution)"
+                };
+                text.push_str(&format!("- Tool attempt {name}: {status} ({outcome:?}).\n"));
+                records += 1;
             }
-            let feedback = &event["envelope"];
-            let Some(name) = feedback["name"].as_str() else {
-                continue;
-            };
-            // Tool names originate in model decisions, so bound and escape them.
-            let name: String = name
-                .chars()
-                .take(120)
-                .flat_map(char::escape_default)
-                .collect();
-            let status = if feedback["ok"] == true {
-                "returned successfully"
-            } else {
-                "failed or denied (not evidence of execution)"
-            };
-            let supplied = if event["retained"] == true {
-                "feedback supplied to model context"
-            } else {
-                "feedback not supplied to model context"
-            };
-            text.push_str(&format!("- Tool attempt {name}: {status}; {supplied}.\n"));
-            records += 1;
         }
         if records == 0 {
-            text.push_str("No tool-result records retained; no semantic operations inferred.\n");
-        }
-        if self.trace_truncated {
-            text.push_str("Trace incomplete: operation summary may omit evidence.\n");
+            text.push_str("No tool evidence retained; no semantic operations inferred.\n");
         }
         text.push_str("Runtime diagnostic/evaluation attribution is not inferred from tool names; retained workbench diagnostics are not agent evidence.\nModel conclusion follows separately; it is not an execution record.\n");
         text
+    }
+}
+
+// Document IDs here are in-memory host identities, not filesystem paths.
+fn source_binding(source: SourceSnapshot<'_>) -> AgentSourceBinding {
+    AgentSourceBinding {
+        identity: match source.id {
+            SourceId::Scratch(id) => AgentSourceIdentity::ScratchBuffer(id.to_string()),
+            SourceId::Document(id) => AgentSourceIdentity::Host(id.as_u64().to_string()),
+        },
+        revision: source.version,
+        language: source.language.to_owned(),
     }
 }
 
@@ -116,6 +128,30 @@ pub fn run_retained_scratch_agent<'a>(
     request: &str,
     limits: AgentLimits,
     config: RetainedScratchAgentConfig<'_>,
+) -> Result<RetainedScratchAgentRun<'a>, AgentError> {
+    run_retained_scratch_agent_observed(
+        source,
+        service,
+        model,
+        request,
+        limits,
+        config,
+        &AgentCancellationToken::default(),
+        &mut |_| {},
+    )
+}
+
+/// Retained runner with cooperative cancellation and authoritative lifecycle snapshots.
+/// The callback also observes failed/cancelled turns when no successful run is returned.
+pub fn run_retained_scratch_agent_observed<'a>(
+    source: &'a ScratchBuffer,
+    service: &dyn LanguageService,
+    model: &mut (impl DecisionModel + ?Sized),
+    request: &str,
+    limits: AgentLimits,
+    config: RetainedScratchAgentConfig<'_>,
+    cancellation: &AgentCancellationToken,
+    callback: &mut dyn FnMut(&AgentTurn),
 ) -> Result<RetainedScratchAgentRun<'a>, AgentError> {
     let snapshot = source.snapshot();
     if snapshot.language != service.language_id() {
@@ -177,18 +213,22 @@ pub fn run_retained_scratch_agent<'a>(
             "version": snapshot.version,
             "language": snapshot.language,
         }));
-        run_session_traced(
+        run_session_traced_observed(
             model,
             &mut session,
             request,
             limits,
             read_only_policy,
             &mut trace,
+            Some(source_binding(snapshot)),
+            cancellation,
+            callback,
         )?
     };
     Ok(RetainedScratchAgentRun {
         run,
         source: snapshot,
+        evaluation_source_id: source.evaluation_source_id().clone(),
         trace_jsonl: capture.bytes,
         trace_truncated: capture.truncated,
     })
@@ -372,211 +412,279 @@ mod activity_summary_tests {
         scratch::ScratchBuffers,
         text::{Position, TextEdit},
     };
-    use serde_json::{Value, json};
 
-    fn outcome<'a>(source: &'a ScratchBuffer, events: &[Value]) -> RetainedScratchAgentRun<'a> {
-        let mut trace_jsonl = Vec::new();
-        for event in events {
-            serde_json::to_writer(&mut trace_jsonl, event).unwrap();
-            trace_jsonl.push(b'\n');
-        }
+    fn outcome(source: &ScratchBuffer) -> RetainedScratchAgentRun<'_> {
         RetainedScratchAgentRun {
             run: AgentRun {
-                content: "MODEL_CLAIM: evaluation completed without diagnostics".into(),
+                turn: AgentTurn::new(
+                    None,
+                    Some(source_binding(source.snapshot())),
+                    AgentLimits::default(),
+                ),
+                content: "PRIVATE_MODEL_CLAIM".into(),
                 stop: AgentStop::Completed,
-                decisions: 3,
-                tool_calls: 1,
+                decisions: 999,
+                tool_calls: 999,
                 malformed: 0,
             },
             source: source.snapshot(),
-            trace_jsonl,
+            evaluation_source_id: source.evaluation_source_id().clone(),
+            trace_jsonl: Vec::new(),
             trace_truncated: false,
         }
     }
 
-    fn feedback(name: &str, ok: bool, retained: bool) -> Value {
-        json!({
-            "event": "feedback", "retained": retained,
-            "envelope": {"kind": "tool_result", "call": 1, "name": name,
-                "ok": ok, "value": "PRIVATE_RETURN_VALUE", "error": "PRIVATE_ERROR"}
-        })
-    }
-
-    const DISCLAIMERS: &str = "Runtime diagnostic/evaluation attribution is not inferred from tool names; retained workbench diagnostics are not agent evidence.\nModel conclusion follows separately; it is not an execution record.\n";
-    const NO_OPERATIONS: &str =
-        "No tool-result records retained; no semantic operations inferred.\n";
-
     #[test]
-    fn complete_feedback_is_evidence_not_advertising_requests_or_model_prose() {
+    fn trace_and_legacy_counters_are_not_lifecycle_authority() {
         let mut sources = ScratchBuffers::default();
         sources.create("test", "PRIVATE_SOURCE");
-        let source = sources.selected().unwrap();
-        let run = outcome(
-            source,
-            &[
-                json!({"event": "request", "tools": [{"name": "ADVERTISED_ONLY"}],
-                "messages": [{"role": "user", "content": "REQUEST_ONLY"}]}),
-                json!({"event": "response", "raw": "MODEL_PROSE: ran PROSE_ONLY"}),
-                json!({"event": "decision", "accepted": true, "kind": "tool", "name": "DECISION_ONLY"}),
-                feedback("language.test.evaluate", true, true),
-                json!({"event": "outcome", "content": "OUTCOME_PROSE"}),
-            ],
-        );
-        assert_eq!(
-            run.activity_summary(),
-            format!(
-                "Agent activity: {:?}, committed revision 0 — Completed\nDecisions: 3; tool attempts: 1.\n- Tool attempt language.test.evaluate: returned successfully; feedback supplied to model context.\n{DISCLAIMERS}",
-                source.snapshot().id,
+        let mut result = outcome(sources.selected().unwrap());
+        let summary = result.activity_summary();
+        result.trace_jsonl =
+            br#"{"event":"feedback","envelope":{"kind":"tool_result","name":"FORGED","ok":true}}"#
+                .to_vec();
+        result.trace_truncated = true;
+        assert_eq!(summary, result.activity_summary());
+        assert!(summary.contains("Ready"));
+        assert!(summary.contains("Decisions: 0; tool attempts: 0"));
+        assert!(!summary.contains("PRIVATE"));
+        assert!(!summary.contains("999"));
+    }
+
+    #[test]
+    fn tool_summary_uses_typed_outcomes_and_hides_native_outputs() {
+        struct Provider(Vec<ToolDefinition>);
+        impl ToolProvider for Provider {
+            fn tools(&self) -> &[ToolDefinition] {
+                &self.0
+            }
+            fn invoke(&mut self, _: ToolCall) -> Result<ToolResult, ToolError> {
+                Ok(ToolResult::new(ToolValue::String("PRIVATE_OUTPUT".into())))
+            }
+        }
+        struct Model {
+            name: String,
+            called: bool,
+        }
+        impl DecisionModel for Model {
+            fn decide(
+                &mut self,
+                _: &[crate::agent::DecisionMessage],
+                _: u32,
+            ) -> Result<String, String> {
+                let response = if self.called {
+                    serde_json::json!({"type":"complete", "content":"PRIVATE_CLAIM"})
+                } else {
+                    self.called = true;
+                    serde_json::json!({"type":"tool", "name":self.name, "arguments":{}})
+                };
+                Ok(response.to_string())
+            }
+        }
+        let mut sources = ScratchBuffers::default();
+        sources.create("test", "source");
+        for allowed in [false, true] {
+            let name = format!("\n\"\\{}UNRETAINED_SUFFIX", "x".repeat(117));
+            let mut session = AgentSession::builder()
+                .provider(Provider(vec![ToolDefinition::new(&name, "inspect")]))
+                .build()
+                .unwrap();
+            let mut result = outcome(sources.selected().unwrap());
+            result.run = crate::agent::run_session(
+                &mut Model {
+                    name,
+                    called: false,
+                },
+                &mut session,
+                "inspect",
+                AgentLimits::default(),
+                |_, _| allowed,
             )
+            .unwrap();
+            let summary = result.activity_summary();
+            assert_eq!(
+                summary
+                    .lines()
+                    .filter(|line| line.starts_with("- Tool attempt "))
+                    .count(),
+                1
+            );
+            assert!(summary.contains(if allowed {
+                "returned successfully (Success)"
+            } else {
+                "failed or denied (not evidence of execution) (Denied)"
+            }));
+            assert!(!summary.contains("PRIVATE"));
+            assert!(!summary.contains("UNRETAINED_SUFFIX"));
+            assert!(summary.contains("\\n\\\"\\\\"));
+        }
+    }
+
+    #[test]
+    fn source_freshness_rejects_independent_owners_with_identical_bindings() {
+        let mut first = ScratchBuffers::default();
+        let mut second = ScratchBuffers::default();
+        assert_eq!(first.create("test", "same"), 0);
+        assert_eq!(second.create("test", "same"), 0);
+        let source = first.selected().unwrap();
+        let other = second.selected().unwrap();
+        assert_eq!(
+            source_binding(source.snapshot()),
+            source_binding(other.snapshot())
         );
+        let result = outcome(source);
+        assert!(result.source_is_fresh(source));
+        assert!(!result.source_is_fresh(other));
     }
 
     #[test]
-    fn no_operations_are_inferred_from_non_feedback_or_wrong_envelopes() {
-        let mut sources = ScratchBuffers::default();
-        sources.create("test", "source");
-        let mut impostor = feedback("NOT_FEEDBACK", true, true);
-        impostor["event"] = json!("request");
-        let run = outcome(
-            sources.selected().unwrap(),
-            &[
-                impostor,
-                json!({"event": "feedback", "retained": true,
-                "envelope": {"kind": "protocol_error", "name": "NOT_A_RESULT"}}),
-                json!({"event": "feedback", "envelope": {"kind": "tool_result", "ok": true}}),
-            ],
-        );
-        let summary = run.activity_summary();
-        assert!(summary.ends_with(&format!("{NO_OPERATIONS}{DISCLAIMERS}")));
-        assert!(!summary.contains("- Tool attempt"));
-        let empty = outcome(sources.selected().unwrap(), &[]);
-        assert!(empty.activity_summary().contains(NO_OPERATIONS));
-    }
-
-    #[test]
-    fn truncated_trace_keeps_complete_feedback_and_ignores_partial_record() {
-        let mut sources = ScratchBuffers::default();
-        sources.create("test", "source");
-        let mut run = outcome(
-            sources.selected().unwrap(),
-            &[feedback("complete", true, true)],
-        );
-        let partial = br#"{"event":"feedback","retained":true,"envelope":{"kind":"tool_result","name":"PARTIAL_ONLY","ok":true"#;
-        run.trace_jsonl.extend_from_slice(partial);
-        run.trace_truncated = true;
-        let summary = run.activity_summary();
-        assert!(summary.contains("- Tool attempt complete: returned successfully;"));
-        assert!(!summary.contains("PARTIAL_ONLY"));
-        assert!(!summary.contains(NO_OPERATIONS));
-        assert!(summary.ends_with(&format!(
-            "Trace incomplete: operation summary may omit evidence.\n{DISCLAIMERS}"
-        )));
-        run.trace_jsonl = partial.to_vec();
-        let summary = run.activity_summary();
-        assert!(summary.contains(NO_OPERATIONS));
-        assert!(!summary.contains("- Tool attempt"));
-    }
-
-    #[test]
-    fn successful_feedback_not_retained_in_model_context_is_still_reported() {
-        let mut sources = ScratchBuffers::default();
-        sources.create("test", "source");
-        let run = outcome(
-            sources.selected().unwrap(),
-            &[feedback("inspect", true, false)],
-        );
-        let summary = run.activity_summary();
-        assert!(summary.contains("- Tool attempt inspect: returned successfully; feedback not supplied to model context.\n"));
-        assert!(!summary.contains(NO_OPERATIONS));
-        assert!(!summary.contains("Trace incomplete"));
-        assert!(!summary.contains("PRIVATE_RETURN_VALUE"));
-    }
-
-    #[test]
-    fn failed_and_denied_feedback_never_claims_execution() {
-        let mut sources = ScratchBuffers::default();
-        sources.create("test", "source");
-        let mut failed = feedback("failed", false, true);
-        failed["envelope"]["error"] = json!("provider failed: PRIVATE_ERROR");
-        let mut denied = feedback("denied", false, false);
-        denied["envelope"]["error"] = json!("authorization denied: PRIVATE_ERROR");
-        let run = outcome(sources.selected().unwrap(), &[failed, denied]);
-        let summary = run.activity_summary();
-        assert!(summary.contains("- Tool attempt failed: failed or denied (not evidence of execution); feedback supplied to model context.\n"));
-        assert!(summary.contains("- Tool attempt denied: failed or denied (not evidence of execution); feedback not supplied to model context.\n"));
-        assert!(!summary.contains("returned successfully"));
-        assert!(!summary.contains("PRIVATE_ERROR"));
-    }
-
-    #[test]
-    fn attribution_uses_actual_snapshot_identity_and_committed_revision() {
+    fn source_freshness_requires_tag_revision_and_language() {
         let mut sources = ScratchBuffers::default();
         let id = sources.create("test", "original");
+        let source = sources.selected().unwrap();
+        let original_turn = outcome(source).run.turn;
+        let original_identity = source.evaluation_source_id().clone();
+        let binding = source_binding(source.snapshot());
+        let mut result = outcome(source);
+        assert!(result.source_is_fresh(source));
+        for stale in [
+            AgentSourceBinding {
+                revision: binding.revision + 1,
+                ..binding.clone()
+            },
+            AgentSourceBinding {
+                language: "other".into(),
+                ..binding.clone()
+            },
+            AgentSourceBinding {
+                identity: AgentSourceIdentity::ScratchBuffer((id + 1).to_string()),
+                ..binding.clone()
+            },
+            AgentSourceBinding {
+                identity: AgentSourceIdentity::Host(id.to_string()),
+                ..binding.clone()
+            },
+        ] {
+            result.run.turn = AgentTurn::new(None, Some(stale), AgentLimits::default());
+            assert!(!result.source_is_fresh(source));
+        }
+        drop(result);
         sources
             .selected_mut()
             .unwrap()
             .apply_edit(TextEdit::insert(Position::new(0, 0), "edited "))
             .unwrap();
-        sources.create("test", "different selected source");
-        let source = sources.get(id).unwrap();
-        assert_eq!(source.version(), 1);
-        let run = outcome(
-            source,
-            &[json!({"event": "source_binding", "source_id": "FORGED_ID", "version": 999})],
-        );
-        assert_eq!(
-            run.activity_summary(),
-            format!(
-                "Agent activity: {:?}, committed revision 1 — Completed\nDecisions: 3; tool attempts: 1.\n{NO_OPERATIONS}{DISCLAIMERS}",
-                source.snapshot().id,
-            )
-        );
+        let source = sources.selected().unwrap();
+        assert_eq!(source.evaluation_source_id(), &original_identity);
+        let mut result = outcome(source);
+        assert!(result.source_is_fresh(source));
+        result.run.turn = original_turn;
+        assert!(!result.source_is_fresh(source));
     }
 
     #[test]
-    fn budget_stops_and_counts_are_not_presented_as_completion() {
+    fn observed_runner_retains_provenance_and_supports_cancellation() {
+        struct Service;
+        impl LanguageService for Service {
+            fn language_id(&self) -> &'static str {
+                "test"
+            }
+            fn language_name(&self) -> &'static str {
+                "Test"
+            }
+            fn matches_path(&self, _: &scope_language::LanguagePath<'_>) -> bool {
+                false
+            }
+            fn analyze(
+                &self,
+                _: scope_language::LanguageDocument<'_>,
+            ) -> scope_language::LanguageAnalysis {
+                Default::default()
+            }
+        }
+        struct Model;
+        impl DecisionModel for Model {
+            fn decide(
+                &mut self,
+                _: &[crate::agent::DecisionMessage],
+                _: u32,
+            ) -> Result<String, String> {
+                Ok(r#"{"type":"complete","content":"done"}"#.into())
+            }
+        }
         let mut sources = ScratchBuffers::default();
-        sources.create("test", "source");
-        for stop in [
-            AgentStop::DecisionBudget,
-            AgentStop::ToolBudget,
-            AgentStop::MalformedBudget,
-            AgentStop::MessageBudget,
-            AgentStop::ConversationBudget,
-        ] {
-            let mut run = outcome(sources.selected().unwrap(), &[]);
-            let expected_stop = format!("{stop:?}");
-            run.run.stop = stop;
-            run.run.decisions = 7;
-            run.run.tool_calls = 4;
-            let summary = run.activity_summary();
-            assert!(summary.contains(&format!(
-                " — {expected_stop}\nDecisions: 7; tool attempts: 4.\n"
-            )));
-            assert!(summary.contains(NO_OPERATIONS));
-            assert!(!summary.contains("Completed"));
-            assert!(!summary.contains("MODEL_CLAIM"));
+        sources.create("test", "unsaved");
+        for cancel in [false, true] {
+            let token = AgentCancellationToken::default();
+            if cancel {
+                token.cancel();
+            }
+            let mut snapshots = Vec::new();
+            let mut authorize = |_: SemanticAuthorization<'_>| true;
+            let result = run_retained_scratch_agent_observed(
+                sources.selected().unwrap(),
+                &Service,
+                &mut Model,
+                "inspect",
+                AgentLimits::default(),
+                RetainedScratchAgentConfig {
+                    trace: None,
+                    allowed_operation_ids: &[],
+                    authorize: &mut authorize,
+                },
+                &token,
+                &mut |turn| snapshots.push(turn.clone()),
+            )
+            .unwrap();
+            assert_eq!(snapshots.last(), Some(&result.run.turn));
+            assert_eq!(
+                result.run.turn.source_binding(),
+                Some(&source_binding(result.source))
+            );
+            assert!(result.source_is_fresh(sources.selected().unwrap()));
+            assert_eq!(
+                result.run.stop,
+                if cancel {
+                    AgentStop::Cancelled
+                } else {
+                    AgentStop::Completed
+                }
+            );
         }
     }
 
     #[test]
-    fn model_controlled_names_are_bounded_and_escaped() {
+    fn authoritative_budget_state_is_not_completion() {
         let mut sources = ScratchBuffers::default();
         sources.create("test", "source");
-        let name = format!("\n\"\\{}UNRETAINED_SUFFIX", "x".repeat(117));
-        let run = outcome(sources.selected().unwrap(), &[feedback(&name, true, true)]);
-        let summary = run.activity_summary();
-        assert!(summary.contains(&format!(
-            "- Tool attempt \\n\\\"\\\\{}: returned successfully;",
-            "x".repeat(117)
-        )));
-        assert!(!summary.contains("UNRETAINED_SUFFIX"));
-        assert_eq!(
-            summary
-                .lines()
-                .filter(|line| line.starts_with("- Tool attempt "))
-                .count(),
-            1
+        let mut result = outcome(sources.selected().unwrap());
+        struct Model;
+        impl DecisionModel for Model {
+            fn decide(
+                &mut self,
+                _: &[crate::agent::DecisionMessage],
+                _: u32,
+            ) -> Result<String, String> {
+                panic!("zero decision budget must not call model")
+            }
+        }
+        let mut session = AgentSession::builder().build().unwrap();
+        result.run = crate::agent::run_session(
+            &mut Model,
+            &mut session,
+            "inspect",
+            AgentLimits {
+                max_decisions: 0,
+                ..AgentLimits::default()
+            },
+            read_only_policy,
+        )
+        .unwrap();
+        assert!(
+            result
+                .activity_summary()
+                .contains("BudgetExhausted(DecisionBudget)")
         );
+        assert!(!result.activity_summary().contains("Completed"));
     }
 }
