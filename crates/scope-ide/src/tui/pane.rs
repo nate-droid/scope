@@ -142,6 +142,18 @@ pub trait Pane {
 
     fn render(&self, frame: &mut ratatui::Frame<'_>, area: Rect, ctx: &TuiContext<'_>);
 
+    /// Requests that the host open a literal workspace-relative document path.
+    /// Called only while focused, after global shortcuts and before pane input.
+    /// The default declines. This is not a command: the host applies ordinary
+    /// document-open authorization and draft preservation, then focuses the editor.
+    fn workspace_document_request(
+        &mut self,
+        _event: &crossterm::event::Event,
+        _ctx: &TuiContext<'_>,
+    ) -> Option<String> {
+        None
+    }
+
     /// Receives focused source input only after explicit `register_editable` opt-in.
     /// This capability exposes no application, execution, or filesystem access.
     fn handle_source_event(

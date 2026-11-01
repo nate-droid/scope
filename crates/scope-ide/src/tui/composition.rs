@@ -490,6 +490,27 @@ impl WorkspaceTui {
         {
             let instance = self.instances.get_mut(id).unwrap();
             let inner = Block::default().borders(Borders::ALL).inner(*area);
+            if let Some(path) = instance.pane.workspace_document_request(
+                &input,
+                &TuiContext::with_view_sources(app, true, instance.scroll, sources.as_deref()),
+            ) {
+                self.show_result = false;
+                let result = sources
+                    .as_deref_mut()
+                    .ok_or_else(|| "no workspace source owner available".to_owned())
+                    .and_then(|sources| {
+                        sources
+                            .open(app.workspace(), app.languages(), &path)
+                            .map_err(|error| error.to_string())
+                    });
+                match result {
+                    Ok(_) => {
+                        let _ = self.focus_named("editor");
+                    }
+                    Err(error) => self.output_errors.push_str(&format!("{error}\n")),
+                }
+                return WorkspaceInput::Handled;
+            }
             if instance.editable
                 && let Some(sources) = sources.as_deref_mut()
                 && instance.pane.handle_source_event(

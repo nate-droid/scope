@@ -12,6 +12,8 @@ pub mod logging;
 pub mod path;
 pub mod proposal;
 pub mod scratch;
+#[cfg(feature = "agent")]
+pub mod semantic_context;
 #[cfg(feature = "tools")]
 pub mod semantic_inspection;
 mod shell_input;

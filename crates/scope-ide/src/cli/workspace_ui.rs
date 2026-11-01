@@ -50,6 +50,14 @@ impl Pane for SuppliedInspector {
         self.0.render(frame, area, ctx)
     }
 
+    fn workspace_document_request(
+        &mut self,
+        event: &crossterm::event::Event,
+        ctx: &TuiContext<'_>,
+    ) -> Option<String> {
+        self.0.workspace_document_request(event, ctx)
+    }
+
     fn handle_view_event(&mut self, event: crossterm::event::Event, ctx: &TuiContext<'_>) -> bool {
         self.0.handle_view_event(event, ctx)
     }

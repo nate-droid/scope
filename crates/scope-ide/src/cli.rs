@@ -14,7 +14,7 @@ mod retained_agent;
 #[cfg(feature = "agent")]
 pub use retained_agent::{
     RetainedScratchAgentConfig, RetainedScratchAgentRun, run_retained_scratch_agent,
-    run_retained_scratch_agent_observed,
+    run_retained_scratch_agent_observed, run_retained_scratch_agent_semantic_observed,
 };
 mod buffer_editor;
 mod script_context;

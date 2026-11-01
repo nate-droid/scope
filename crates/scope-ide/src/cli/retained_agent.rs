@@ -6,9 +6,11 @@ use crate::{
     agent::{
         AgentCancellationToken, AgentError, AgentEvidence, AgentLimits, AgentRun,
         AgentSourceBinding, AgentSourceIdentity, AgentToolOutcome, AgentTurn, DecisionModel,
-        ProtocolTrace, read_only_policy, run_session_traced_observed,
+        ProtocolTrace, read_only_policy, run_session_semantic_observed,
+        run_session_traced_observed,
     },
     scratch::ScratchBuffer,
+    semantic_context::{SemanticContextBuilder, SemanticContextOptions, SemanticPermissions},
     source_edit::{
         PermittedEditScope, SourceEditController, SourceId, SourceSnapshot, SourceTarget,
     },
@@ -153,6 +155,59 @@ pub fn run_retained_scratch_agent_observed<'a>(
     cancellation: &AgentCancellationToken,
     callback: &mut dyn FnMut(&AgentTurn),
 ) -> Result<RetainedScratchAgentRun<'a>, AgentError> {
+    run_retained_scratch_agent_inner(
+        source,
+        service,
+        model,
+        request,
+        limits,
+        config,
+        cancellation,
+        callback,
+        None,
+    )
+}
+
+/// Opt-in semantic context from the exact retained snapshot and installed catalog.
+/// Authorization is opaque: the allowlist is only a ceiling, not a permission grant.
+/// Captures the source-binding trace event, but rich protocol tracing is unsupported
+/// for this branch. Lifecycle snapshots and bounded trace forwarding remain available.
+pub fn run_retained_scratch_agent_semantic_observed<'a>(
+    source: &'a ScratchBuffer,
+    service: &dyn LanguageService,
+    model: &mut (impl DecisionModel + ?Sized),
+    request: &str,
+    limits: AgentLimits,
+    config: RetainedScratchAgentConfig<'_>,
+    cancellation: &AgentCancellationToken,
+    callback: &mut dyn FnMut(&AgentTurn),
+    options: SemanticContextOptions,
+) -> Result<RetainedScratchAgentRun<'a>, AgentError> {
+    run_retained_scratch_agent_inner(
+        source,
+        service,
+        model,
+        request,
+        limits,
+        config,
+        cancellation,
+        callback,
+        Some(options),
+    )
+}
+
+fn run_retained_scratch_agent_inner<'a>(
+    source: &'a ScratchBuffer,
+    service: &dyn LanguageService,
+    model: &mut (impl DecisionModel + ?Sized),
+    request: &str,
+    limits: AgentLimits,
+    config: RetainedScratchAgentConfig<'_>,
+    cancellation: &AgentCancellationToken,
+    callback: &mut dyn FnMut(&AgentTurn),
+    options: Option<SemanticContextOptions>,
+) -> Result<RetainedScratchAgentRun<'a>, AgentError> {
+    let evaluation_source_id = source.evaluation_source_id();
     let snapshot = source.snapshot();
     if snapshot.language != service.language_id() {
         return Err(AgentError::Tool(ToolError::Denied {
@@ -213,22 +268,48 @@ pub fn run_retained_scratch_agent_observed<'a>(
             "version": snapshot.version,
             "language": snapshot.language,
         }));
-        run_session_traced_observed(
-            model,
-            &mut session,
-            request,
-            limits,
-            read_only_policy,
-            &mut trace,
-            Some(source_binding(snapshot)),
-            cancellation,
-            callback,
-        )?
+        if let Some(options) = options {
+            let binding = source_binding(snapshot);
+            let catalog = session.catalog();
+            let context = SemanticContextBuilder::new(
+                "retained semantic inspection",
+                &binding,
+                Some(snapshot.text),
+                limits,
+                &catalog,
+            )
+            .options(options)
+            .permissions(SemanticPermissions::Unknown)
+            .build();
+            run_session_semantic_observed(
+                model,
+                &mut session,
+                request,
+                limits,
+                read_only_policy,
+                binding,
+                context,
+                cancellation,
+                callback,
+            )?
+        } else {
+            run_session_traced_observed(
+                model,
+                &mut session,
+                request,
+                limits,
+                read_only_policy,
+                &mut trace,
+                Some(source_binding(snapshot)),
+                cancellation,
+                callback,
+            )?
+        }
     };
     Ok(RetainedScratchAgentRun {
         run,
         source: snapshot,
-        evaluation_source_id: source.evaluation_source_id().clone(),
+        evaluation_source_id: evaluation_source_id.clone(),
         trace_jsonl: capture.bytes,
         trace_truncated: capture.truncated,
     })
@@ -602,29 +683,41 @@ mod activity_summary_tests {
                 Default::default()
             }
         }
-        struct Model;
+        struct Model(bool);
         impl DecisionModel for Model {
             fn decide(
                 &mut self,
-                _: &[crate::agent::DecisionMessage],
+                messages: &[crate::agent::DecisionMessage],
                 _: u32,
             ) -> Result<String, String> {
+                if self.0 {
+                    let packet: serde_json::Value = serde_json::from_str(&messages[1].content)
+                        .expect("semantic request packet");
+                    let packet = &packet["semantic_context"];
+                    assert_eq!(packet["purpose"], "retained semantic inspection");
+                    assert_eq!(packet["source"]["text"], "unsaved");
+                    assert_eq!(
+                        packet["permissions"],
+                        serde_json::json!({"kind": "unknown"})
+                    );
+                    assert_eq!(packet["evidence"], serde_json::json!([]));
+                }
                 Ok(r#"{"type":"complete","content":"done"}"#.into())
             }
         }
         let mut sources = ScratchBuffers::default();
         sources.create("test", "unsaved");
-        for cancel in [false, true] {
+        for (cancel, semantic) in [(false, false), (true, false), (false, true), (true, true)] {
             let token = AgentCancellationToken::default();
             if cancel {
                 token.cancel();
             }
             let mut snapshots = Vec::new();
             let mut authorize = |_: SemanticAuthorization<'_>| true;
-            let result = run_retained_scratch_agent_observed(
+            let result = run_retained_scratch_agent_inner(
                 sources.selected().unwrap(),
                 &Service,
-                &mut Model,
+                &mut Model(semantic),
                 "inspect",
                 AgentLimits::default(),
                 RetainedScratchAgentConfig {
@@ -634,6 +727,7 @@ mod activity_summary_tests {
                 },
                 &token,
                 &mut |turn| snapshots.push(turn.clone()),
+                semantic.then(SemanticContextOptions::default),
             )
             .unwrap();
             assert_eq!(snapshots.last(), Some(&result.run.turn));
@@ -642,6 +736,18 @@ mod activity_summary_tests {
                 Some(&source_binding(result.source))
             );
             assert!(result.source_is_fresh(sources.selected().unwrap()));
+            let mut other = ScratchBuffers::default();
+            other.create("test", "unsaved");
+            assert!(!result.source_is_fresh(other.selected().unwrap()));
+            if semantic {
+                let events: Vec<serde_json::Value> =
+                    serde_json::Deserializer::from_slice(&result.trace_jsonl)
+                        .into_iter()
+                        .map(Result::unwrap)
+                        .collect();
+                assert_eq!(events.len(), 1);
+                assert_eq!(events[0]["event"], "source_binding");
+            }
             assert_eq!(
                 result.run.stop,
                 if cancel {

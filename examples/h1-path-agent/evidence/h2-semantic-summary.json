@@ -1,0 +1,49 @@
+{
+  "authorization_annotation": "unknown: discovery is not authorization; host authorizations counted separately",
+  "authorizations": 1,
+  "callbacks": 11,
+  "context_assembly": [
+    {
+      "bounded": false,
+      "bytes": 1239,
+      "failure": null,
+      "success": true
+    }
+  ],
+  "context_supplied": [
+    {
+      "initial_message_bytes": 1566,
+      "packet_bytes": 1239
+    }
+  ],
+  "error": null,
+  "first_available_operation_count": 1,
+  "fresh": true,
+  "initial_model_input_bytes": 3046,
+  "initial_model_message_bytes": 1476,
+  "initial_user_message_bytes": 1566,
+  "kernel_checked": true,
+  "mode": "fake-h2",
+  "model_decisions": 2,
+  "model_request_input_bytes": [
+    3046,
+    9639
+  ],
+  "passed": true,
+  "publish_errors": 0,
+  "scope_agent_get_matches": true,
+  "semantic_success_count": 1,
+  "source_revision": 0,
+  "source_unchanged": true,
+  "state": "Completed",
+  "stop": "Completed",
+  "terminal_snapshot_deserialized": true,
+  "tool_attempts": 1,
+  "total_model_input_bytes": 12685,
+  "usage": {
+    "conversation_bytes": 9694,
+    "decisions": 2,
+    "malformed": 0,
+    "tool_calls": 1
+  }
+}

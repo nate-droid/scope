@@ -33,8 +33,8 @@ pub use decision::edit::{
 };
 pub use decision::{
     AgentLimits, AgentRun, AgentStop, AgentWorkflow, AgentWorkflowContext, DecisionModel,
-    read_only_policy, run_session, run_session_observed, run_session_traced,
-    run_session_traced_observed, run_session_with_workflows,
+    read_only_policy, run_session, run_session_observed, run_session_semantic_observed,
+    run_session_traced, run_session_traced_observed, run_session_with_workflows,
 };
 pub use trace::ProtocolTrace;
 

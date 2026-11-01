@@ -146,6 +146,23 @@ pub enum AgentModelResponseOutcome {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentEvidence {
+    /// Assembly and source-binding validation only, not delivery to the model.
+    /// A successfully assembled packet can still be rejected by message budgets.
+    /// See ContextSupplied for exact bytes handed to the first model call.
+    ContextAssembly {
+        success: bool,
+        /// Serialized packet bytes assembled, not bytes supplied to the model or
+        /// charged to conversation usage. Zero when assembly itself failed.
+        bytes: usize,
+        bounded: bool,
+        failure: Option<String>,
+    },
+    /// Exact UTF-8 JSON bytes handed to the first model call, not tokens or
+    /// transport framing. Recorded once at the call boundary, without payloads.
+    ContextSupplied {
+        packet_bytes: usize,
+        initial_message_bytes: usize,
+    },
     Decision {
         ordinal: usize,
     },
@@ -294,6 +311,24 @@ impl TryFrom<RetainedAgentTurn> for AgentTurn {
                 _ => {}
             }
         }
+        if turn
+            .evidence
+            .iter()
+            .any(|e| matches!(e, AgentEvidence::ContextAssembly { success: false, .. }))
+            && (!matches!(turn.state, AgentState::Failed(AgentFailure::ToolSetup))
+                || turn.transitions.len() != 1
+                || turn.evidence.len() != 1
+                || raw.usage != AgentBudgetUsage::default())
+        {
+            return Err(AgentLifecycleError::InvalidSnapshot);
+        }
+        if turn.evidence.iter().any(|e| {
+            matches!(e,
+            AgentEvidence::ContextSupplied { initial_message_bytes, .. }
+                if *initial_message_bytes > raw.usage.conversation_bytes)
+        }) {
+            return Err(AgentLifecycleError::InvalidSnapshot);
+        }
         turn.usage.conversation_bytes = raw.usage.conversation_bytes;
         Ok(turn)
     }
@@ -415,6 +450,28 @@ impl AgentTurn {
     fn validate_evidence(&self, evidence: &AgentEvidence) -> Result<(), AgentLifecycleError> {
         let valid =
             match evidence {
+                AgentEvidence::ContextAssembly { success, bytes, bounded, failure } => {
+                    self.evidence.is_empty()
+                        && self.source_binding.is_some()
+                        && if *success {
+                            failure.is_none()
+                        } else {
+                            matches!(failure.as_deref(), Some("semantic context binding mismatch"))
+                                || (failure.as_deref() == Some("semantic context assembly failed")
+                                    && *bytes == 0 && !*bounded)
+                        }
+                }
+                AgentEvidence::ContextSupplied { packet_bytes, initial_message_bytes } => {
+                    self.usage.decisions == 1
+                        && matches!(self.evidence.last(), Some(AgentEvidence::Decision { ordinal: 1 }))
+                        && self.transitions.iter().any(|t| t.to == AgentState::Deciding { request_ordinal: 1 })
+                        && matches!(self.evidence.first(), Some(AgentEvidence::ContextAssembly { success: true, bytes, .. }) if bytes == packet_bytes)
+                        && *packet_bytes > 0
+                        && *initial_message_bytes > *packet_bytes
+                        && *initial_message_bytes <= self.limits.max_message_bytes
+                        && *initial_message_bytes <= self.limits.max_conversation_bytes
+                        && !self.evidence.iter().any(|e| matches!(e, AgentEvidence::ContextSupplied { .. }))
+                }
                 AgentEvidence::Decision { ordinal } => {
                     Some(*ordinal) == self.usage.decisions.checked_add(1)
                         && self.transitions.iter().any(|t| {
@@ -425,6 +482,8 @@ impl AgentTurn {
                 }
                 AgentEvidence::ModelResponse { ordinal, outcome, response_bytes } => {
                     *ordinal == self.usage.decisions && self.usage.decisions > 0
+                        && (!self.evidence.iter().any(|e| matches!(e, AgentEvidence::ContextAssembly { .. }))
+                            || self.evidence.iter().any(|e| matches!(e, AgentEvidence::ContextSupplied { .. })))
                         && !self.evidence.iter().any(|e| matches!(e, AgentEvidence::ModelResponse { ordinal: n, .. } if n == ordinal))
                         && matches!((outcome, response_bytes),
                             (AgentModelResponseOutcome::Returned, Some(_)) |
@@ -467,12 +526,20 @@ impl AgentTurn {
         match evidence {
             AgentEvidence::Decision { .. } => self.usage.decisions += 1,
             AgentEvidence::Malformed { .. } => self.usage.malformed += 1,
-            AgentEvidence::ModelResponse { .. } | AgentEvidence::Tool { .. } => {}
+            AgentEvidence::ContextAssembly { .. }
+            | AgentEvidence::ContextSupplied { .. }
+            | AgentEvidence::ModelResponse { .. }
+            | AgentEvidence::Tool { .. } => {}
         }
     }
     pub(super) fn record(&mut self, evidence: AgentEvidence) -> Result<(), AgentLifecycleError> {
         if self.state.is_terminal() {
             return Err(AgentLifecycleError::Terminal);
+        }
+        if matches!(evidence, AgentEvidence::ContextSupplied { .. })
+            && self.state != (AgentState::Deciding { request_ordinal: 1 })
+        {
+            return Err(AgentLifecycleError::InvalidEvidence);
         }
         self.validate_evidence(&evidence)?;
         self.account_evidence(&evidence);
