@@ -126,7 +126,11 @@ Offline regression coverage includes lifecycle edge enforcement, duplicate event
 
 See [the real Path experiment](h1-experiment.md) and tracked `examples/h1-path-agent/` harness. A local LM Studio model performed a real kernel-backed Path operation; an independent tool session inspected the completed turn. A deterministic decision model exercised the same real service without a model dependency. The example is optional and outside the root workspace, so routine CI does not require Path or a running model.
 
-## H2 prerequisites and deferred decisions
+## Subsequent milestones
+
+[H2](h2-semantic-context.md) adds opt-in bounded initial context with compact assembly and delivery evidence. [H3](h3-evidence-continuation.md) adds explicitly selected, revision- and invocation-attributed verification metadata through the ordinary tool-feedback path. `Completed` remains protocol completion, not domain success; native payloads remain excluded from public snapshots.
+
+## Historical H2 prerequisites and deferred decisions
 
 The next smallest improvement is a **host-supplied, revision-bound semantic context description using the existing catalog, source binding and retained evidence**, with explicit completeness and safe payload selection. It should distinguish installed operations from permitted operations, and committed-source evidence from candidate evaluation. Reuse `SessionCatalog`, `InspectionBinding` and existing semantic purpose metadata rather than creating a context graph framework.
 

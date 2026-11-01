@@ -75,14 +75,37 @@ pub struct SemanticToolProvider<'a, T: SourceTarget, P> {
     operations: Vec<SemanticOperationDescription>,
     tools: Vec<ToolDefinition>,
     native_result: Option<SemanticOperationResult>,
+    #[cfg(feature = "agent")]
+    verification_projection: Option<(
+        Vec<String>,
+        Box<dyn verification::SemanticResultProjector + 'a>,
+        usize,
+    )>,
 }
 impl<'a, T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool>
     SemanticToolProvider<'a, T, P>
 {
-    /// Validated read/blocked observation from the most recent invocation, after
-    /// the post-execution freshness and result identity checks. Retains full JSON
-    /// even when the agent protocol cannot represent it. Never exposes proposals
-    /// or invalid results; cleared before every invocation, including failed calls.
+    /// Opt in only the listed language operation IDs (not fully qualified tool names).
+    /// Every envelope is bounded by min(max_projection_bytes, 4096). If even
+    /// the unavailable fallback cannot fit, returns a sanitized execution error.
+    #[cfg(feature = "agent")]
+    pub fn with_verification_projection(
+        mut self,
+        allowed_operation_ids: Vec<String>,
+        projector: impl verification::SemanticResultProjector + 'a,
+        max_projection_bytes: usize,
+    ) -> Self {
+        self.verification_projection = Some((
+            allowed_operation_ids,
+            Box::new(projector),
+            max_projection_bytes.min(4096),
+        ));
+        self
+    }
+
+    /// Validated read/blocked observation after freshness and identity checks.
+    /// Retains full JSON even when the tool protocol cannot represent it. Never
+    /// exposes proposals; cleared before every invocation, including failed calls.
     pub fn native_result(&self) -> Option<&SemanticOperationResult> {
         self.native_result.as_ref()
     }
@@ -220,6 +243,8 @@ impl<'a, T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool>
             operations,
             tools,
             native_result: None,
+            #[cfg(feature = "agent")]
+            verification_projection: None,
         })
     }
 }
@@ -354,7 +379,28 @@ impl<T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool> ToolP
             .iter()
             .position(|tool| tool.name == call.name)
             .map(|index| self.operations[index].id.clone());
+        #[cfg(feature = "agent")]
+        let projection_context = (self.target.snapshot(), call.clone());
         let mut result = self.invoke_operation(call)?;
+        #[cfg(feature = "agent")]
+        if let Some(native) = self.native_result.as_ref()
+            && let Some((allowed, projector, cap)) = &mut self.verification_projection
+            && let Some(operation) = operation_id
+                .as_ref()
+                .and_then(|id| self.operations.iter().find(|operation| &operation.id == id))
+            && allowed.contains(&operation.id)
+            && operation.effect == SemanticOperationEffect::Read
+        {
+            let (source, call) = projection_context;
+            let arguments = to_json(
+                call.arguments
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or(ToolValue::Null),
+            );
+            let selection = projector.project(operation, source, &arguments, Some(native));
+            return verification::observation(call.name, source, selection, *cap);
+        }
         if let (Some(id), ToolValue::Object(fields)) = (operation_id, &mut result.value) {
             fields.insert("operation_id".into(), id.into());
         }
@@ -918,7 +964,7 @@ fn language_error(error: SemanticOperationError) -> ToolResult {
         ])),
     }
 }
-fn to_json(value: ToolValue) -> Value {
+pub(super) fn to_json(value: ToolValue) -> Value {
     match value {
         ToolValue::Null => Value::Null,
         ToolValue::Boolean(v) => v.into(),
@@ -930,7 +976,7 @@ fn to_json(value: ToolValue) -> Value {
         }
     }
 }
-fn from_json(value: Value) -> Option<ToolValue> {
+pub(super) fn from_json(value: Value) -> Option<ToolValue> {
     Some(match value {
         Value::Null => ToolValue::Null,
         Value::Bool(v) => v.into(),
@@ -1723,6 +1769,129 @@ mod tests {
                 service.requests.lock().unwrap().len(),
                 usize::from(denied_call == 3)
             );
+        }
+    }
+
+    #[cfg(feature = "agent")]
+    #[test]
+    fn verification_projection_skips_stale_and_malformed_calls() {
+        struct NeverProject;
+        impl verification::SemanticResultProjector for NeverProject {
+            fn project(
+                &mut self,
+                _: &SemanticOperationDescription,
+                _: SourceSnapshot<'_>,
+                _: &Value,
+                _: Option<&SemanticOperationResult>,
+            ) -> verification::VerificationSelection {
+                panic!("invalid invocation must not project")
+            }
+        }
+        let service = LegacyService(SemanticOperationResult::ReadOnly {
+            value: json!({}),
+            rationale: "native".into(),
+        });
+        let target = Target;
+        let mut controller = SourceEditController::default();
+        let mut provider = SemanticToolProvider::new(
+            &service,
+            &target,
+            &mut controller,
+            PermittedEditScope::Document(target.source_id()),
+            None,
+            |_| true,
+        )
+        .unwrap()
+        .with_verification_projection(vec!["rename".into()], NeverProject, 4096);
+        for (version, original, arguments, status) in [
+            (
+                "6",
+                ORIGINAL,
+                ToolValue::object([] as [(&str, ToolValue); 0]),
+                "revision_conflict",
+            ),
+            (
+                "7",
+                "stale source",
+                ToolValue::object([] as [(&str, ToolValue); 0]),
+                "revision_conflict",
+            ),
+            ("invalid", ORIGINAL, ToolValue::Null, "invalid_arguments"),
+            ("7", ORIGINAL, ToolValue::Null, "invalid_arguments"),
+        ] {
+            let result = provider
+                .invoke(
+                    ToolCall::new("language.fixture.rename")
+                        .with_argument("expected_version", version.into())
+                        .with_argument("expected_source", original.into())
+                        .with_argument("arguments", arguments),
+                )
+                .unwrap();
+            assert_eq!(to_json(result.value)["status"], status);
+            assert!(result.verification.is_none());
+            assert!(provider.native_result().is_none());
+        }
+    }
+
+    #[cfg(feature = "agent")]
+    #[test]
+    fn verification_projection_is_allowlisted_sanitized_and_authorized() {
+        use verification::*;
+        for (allowlisted, authorized) in [(true, true), (false, true), (true, false)] {
+            let service = LegacyService(SemanticOperationResult::ReadOnly {
+                value: json!({"float": 1.25, "secret": "native-secret"}),
+                rationale: "private provenance".into(),
+            });
+            let target = Target;
+            let mut controller = SourceEditController::default();
+            let mut projections = 0;
+            let mut provider = SemanticToolProvider::new(
+                &service, &target, &mut controller,
+                PermittedEditScope::Document(target.source_id()), None, |_| authorized,
+            ).unwrap().with_verification_projection(
+                if allowlisted { vec!["rename".into()] } else { vec!["other".into()] },
+                |operation: &SemanticOperationDescription, source: SourceSnapshot<'_>, arguments: &Value, native: Option<&SemanticOperationResult>| {
+                    projections += 1;
+                    assert_eq!(operation.id, "rename");
+                    assert_eq!(source.text, ORIGINAL);
+                    assert_eq!(arguments, &json!({}));
+                    assert!(matches!(native, Some(SemanticOperationResult::ReadOnly { value, .. }) if value["float"] == 1.25));
+                    VerificationSelection {
+                        classification: VerificationClassification::Verified,
+                        subject: VerificationSubject::SourceSnapshot,
+                        completeness: VerificationCompleteness::SelectedFields,
+                        authority: "host check".into(),
+                        fields: ToolValue::object([("passed", true.into())]),
+                    }
+                }, 4096,
+            );
+            let result = provider
+                .invoke(
+                    ToolCall::new("language.fixture.rename")
+                        .with_argument("expected_version", "7".into())
+                        .with_argument("expected_source", ORIGINAL.into())
+                        .with_argument(
+                            "arguments",
+                            ToolValue::object([] as [(&str, ToolValue); 0]),
+                        ),
+                )
+                .unwrap();
+            assert_eq!(result.verification.is_some(), allowlisted && authorized);
+            if allowlisted && authorized {
+                let serialized = to_json(result.value).to_string();
+                assert!(!serialized.contains("native-secret"));
+                assert!(!serialized.contains("private provenance"));
+                assert_eq!(provider.native_result(), Some(&service.0));
+                assert_eq!(
+                    result.verification.unwrap().metadata.operation,
+                    "language.fixture.rename"
+                );
+            }
+            if !authorized {
+                assert!(provider.native_result().is_none());
+            }
+            drop(provider);
+            assert_eq!(projections, usize::from(allowlisted && authorized));
         }
     }
 

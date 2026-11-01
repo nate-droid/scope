@@ -1661,6 +1661,7 @@ version = "0.1.0"
 dependencies = [
  "path-scope",
  "scope-ide",
+ "scope-language",
  "serde_json",
 ]
 

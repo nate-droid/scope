@@ -1,3 +1,4 @@
+mod continuation;
 use scope_ide::source_edit::SourceTarget;
 use scope_ide::{
     agent::*,
@@ -81,6 +82,9 @@ fn value(v: &ToolValue) -> Value {
 }
 fn main() -> Result<(), Box<dyn Error>> {
     let mode = std::env::args().nth(1).unwrap_or("fake".into());
+    if mode == "h3-control" {
+        return continuation::run();
+    }
     let out = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/results");
     std::fs::create_dir_all(&out)?;
     let inner: Box<dyn DecisionModel> = match mode.as_str() {
@@ -89,7 +93,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             "http://127.0.0.1:1234/v1",
         ))?),
         "fake" | "fake-h2" => Box::new(Script(0)),
-        _ => return Err("mode must be fake, real, fake-h2, or real-h2".into()),
+        _ => return Err("mode must be fake, real, fake-h2, real-h2, or h3-control".into()),
     };
     let mut model = ObservedModel {
         inner,

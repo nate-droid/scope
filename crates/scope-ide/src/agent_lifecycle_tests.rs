@@ -720,9 +720,7 @@ fn cancellation_around_tool_dispatch_retains_native_result() {
         fn invoke(&mut self, _: ToolCall) -> Result<ToolResult, ToolError> {
             self.calls.fetch_add(1, Ordering::Relaxed);
             self.token.cancel();
-            Ok(ToolResult {
-                value: ToolValue::Integer(i64::MAX),
-            })
+            Ok(ToolResult::new(ToolValue::Integer(i64::MAX)))
         }
     }
     for cancel_before in [true, false] {

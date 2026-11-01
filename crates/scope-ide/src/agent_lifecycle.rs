@@ -1,6 +1,25 @@
 //! Typed, sanitized lifecycle. Imported turns are records, never execution authority.
 use super::decision::{AgentLimits, AgentStop};
+use crate::tool::verification::{
+    VerificationClassification, VerificationCompleteness, VerificationMetadata,
+};
 use crate::tool::{ToolError, ToolValue};
+
+pub(super) fn valid_verification(
+    metadata: &VerificationMetadata,
+    name: &str,
+    source: Option<&AgentSourceBinding>,
+) -> bool {
+    let label = |s: &str| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control);
+    metadata.operation == name
+        && source == Some(&metadata.source)
+        && label(&metadata.operation)
+        && label(&metadata.authority)
+        && label(&metadata.source.language)
+        && (metadata.completeness != VerificationCompleteness::Unavailable
+            || metadata.classification == VerificationClassification::Inconclusive)
+        && serde_json::to_vec(metadata).is_ok_and(|bytes| bytes.len() <= 2048)
+}
 use serde::{Deserialize, Serialize};
 use std::sync::{
     Arc,
@@ -174,6 +193,11 @@ pub enum AgentEvidence {
     },
     Malformed {
         ordinal: usize,
+    },
+    Verification {
+        request_ordinal: usize,
+        call_ordinal: usize,
+        observation: VerificationMetadata,
     },
     Tool {
         request_ordinal: usize,
@@ -496,6 +520,15 @@ impl AgentTurn {
                     && !self.evidence.iter().any(
                         |e| matches!(e, AgentEvidence::Malformed { ordinal: n } if n == ordinal),
                     ),
+                AgentEvidence::Verification { request_ordinal, call_ordinal, observation } => {
+                    *request_ordinal == self.usage.decisions
+                        && !self.evidence.iter().take(self.evidence.len().saturating_sub(1)).any(|e| matches!(e,
+                            AgentEvidence::Tool { ordinal, .. } if ordinal >= call_ordinal))
+                        && valid_verification(observation, &observation.operation, self.source_binding())
+                        && matches!(self.evidence.last(), Some(AgentEvidence::Tool {
+                            request_ordinal: request, ordinal, name, outcome: AgentToolOutcome::Success, ..
+                        }) if request == request_ordinal && ordinal == call_ordinal && name == &observation.operation)
+                }
                 AgentEvidence::Tool {
                     request_ordinal,
                     ordinal,
@@ -529,7 +562,8 @@ impl AgentTurn {
             AgentEvidence::ContextAssembly { .. }
             | AgentEvidence::ContextSupplied { .. }
             | AgentEvidence::ModelResponse { .. }
-            | AgentEvidence::Tool { .. } => {}
+            | AgentEvidence::Tool { .. }
+            | AgentEvidence::Verification { .. } => {}
         }
     }
     pub(super) fn record(&mut self, evidence: AgentEvidence) -> Result<(), AgentLifecycleError> {
@@ -540,6 +574,22 @@ impl AgentTurn {
             && self.state != (AgentState::Deciding { request_ordinal: 1 })
         {
             return Err(AgentLifecycleError::InvalidEvidence);
+        }
+        if let AgentEvidence::Verification {
+            request_ordinal,
+            call_ordinal,
+            observation,
+        } = &evidence
+        {
+            if self.state
+                != (AgentState::ToolRunning {
+                    request_ordinal: *request_ordinal,
+                    call_ordinal: *call_ordinal,
+                    name: observation.operation.clone(),
+                })
+            {
+                return Err(AgentLifecycleError::InvalidEvidence);
+            }
         }
         self.validate_evidence(&evidence)?;
         self.account_evidence(&evidence);
@@ -571,6 +621,108 @@ impl AgentCancellationToken {
     }
     pub fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::Acquire)
+    }
+}
+
+#[cfg(test)]
+mod verification_tests {
+    use super::*;
+    use crate::tool::verification::VerificationSubject;
+
+    fn fixture() -> (AgentTurn, AgentEvidence) {
+        let source = AgentSourceBinding {
+            identity: AgentSourceIdentity::ScratchBuffer("1".into()),
+            revision: 1,
+            language: "test".into(),
+        };
+        let mut turn = AgentTurn::new(None, Some(source.clone()), AgentLimits::default());
+        turn.transition(AgentState::Deciding { request_ordinal: 1 })
+            .unwrap();
+        turn.record(AgentEvidence::Decision { ordinal: 1 }).unwrap();
+        turn.record(AgentEvidence::ModelResponse {
+            ordinal: 1,
+            outcome: AgentModelResponseOutcome::Returned,
+            response_bytes: Some(1),
+        })
+        .unwrap();
+        turn.transition(AgentState::ToolRunning {
+            request_ordinal: 1,
+            call_ordinal: 1,
+            name: "test.check".into(),
+        })
+        .unwrap();
+        turn.record(AgentEvidence::Tool {
+            request_ordinal: 1,
+            ordinal: 1,
+            name: "test.check".into(),
+            outcome: AgentToolOutcome::Success,
+            output: Some("PRIVATE_FIELDS".into()),
+        })
+        .unwrap();
+        let evidence = AgentEvidence::Verification {
+            request_ordinal: 1,
+            call_ordinal: 1,
+            observation: VerificationMetadata {
+                operation: "test.check".into(),
+                source,
+                classification: VerificationClassification::Rejected,
+                subject: VerificationSubject::HypotheticalCandidate,
+                completeness: VerificationCompleteness::SelectedFields,
+                authority: "test".into(),
+            },
+        };
+        (turn, evidence)
+    }
+
+    #[test]
+    fn metadata_roundtrip_and_tampering() {
+        let (mut turn, evidence) = fixture();
+        turn.record(evidence.clone()).unwrap();
+        assert!(turn.record(evidence).is_err());
+        turn.transition(AgentState::Deciding { request_ordinal: 2 })
+            .unwrap();
+        turn.record(AgentEvidence::Decision { ordinal: 2 }).unwrap();
+        turn.record(AgentEvidence::ModelResponse {
+            ordinal: 2,
+            outcome: AgentModelResponseOutcome::Returned,
+            response_bytes: Some(1),
+        })
+        .unwrap();
+        turn.transition(AgentState::Completed).unwrap();
+        let json = serde_json::to_value(&turn).unwrap();
+        assert!(!json.to_string().contains("PRIVATE_FIELDS"));
+        assert!(serde_json::from_value::<AgentTurn>(json.clone()).is_ok());
+        let index = turn.evidence.len() - 3;
+        for key in ["request_ordinal", "call_ordinal"] {
+            let mut tampered = json.clone();
+            tampered["evidence"][index]["Verification"][key] = 99.into();
+            assert!(serde_json::from_value::<AgentTurn>(tampered).is_err());
+        }
+        let mut duplicate = json.clone();
+        let item = duplicate["evidence"][index].clone();
+        duplicate["evidence"]
+            .as_array_mut()
+            .unwrap()
+            .insert(index, item);
+        assert!(serde_json::from_value::<AgentTurn>(duplicate).is_err());
+        let mut delayed = json;
+        let items = delayed["evidence"].as_array_mut().unwrap();
+        let item = items.remove(index);
+        items.push(item);
+        assert!(serde_json::from_value::<AgentTurn>(delayed).is_err());
+    }
+
+    #[test]
+    fn live_verification_requires_current_tool_state_and_bounded_metadata() {
+        let (mut turn, evidence) = fixture();
+        turn.transition(AgentState::Deciding { request_ordinal: 2 })
+            .unwrap();
+        assert!(turn.record(evidence).is_err());
+        let (turn, mut evidence) = fixture();
+        if let AgentEvidence::Verification { observation, .. } = &mut evidence {
+            observation.authority = "x".repeat(2049);
+        }
+        assert!(turn.validate_evidence(&evidence).is_err());
     }
 }
 

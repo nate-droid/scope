@@ -10,3 +10,4 @@ publish = false
 scope-ide = { path = "../../crates/scope-ide", features = ["agent"] }
 path-scope = { path = "../../../path/crates/path-scope" }
 serde_json = "1"
+scope-language = { path = "../../crates/scope-language" }

@@ -17,6 +17,7 @@ use crate::{
     tool::{
         AgentSession, ToolCall, ToolDefinition, ToolError, ToolProvider, ToolResult, ToolValue,
         semantic::{SemanticAuthorization, SemanticToolProvider},
+        verification::SemanticResultProjector,
     },
 };
 use scope_language::{
@@ -34,6 +35,15 @@ pub struct RetainedScratchAgentConfig<'a> {
     pub trace: Option<&'a mut dyn std::io::Write>,
     pub allowed_operation_ids: &'a [String],
     pub authorize: &'a mut dyn for<'b> FnMut(SemanticAuthorization<'b>) -> bool,
+}
+
+/// Explicit host-selected verification output. This allowlist does not authorize
+/// execution; `RetainedScratchAgentConfig` remains the operation authority.
+/// The projector may own its state or borrow it for the duration of the run.
+pub struct RetainedVerificationConfig<'a> {
+    pub allowed_operation_ids: Vec<String>,
+    pub projector: Box<dyn SemanticResultProjector + 'a>,
+    pub max_projection_bytes: usize,
 }
 
 /// The unmodified agent outcome and its exact, host-accessible source attribution.
@@ -165,6 +175,7 @@ pub fn run_retained_scratch_agent_observed<'a>(
         cancellation,
         callback,
         None,
+        None,
     )
 }
 
@@ -193,6 +204,35 @@ pub fn run_retained_scratch_agent_semantic_observed<'a>(
         cancellation,
         callback,
         Some(options),
+        None,
+    )
+}
+
+/// Semantic retained run with explicit, bounded host-selected verification output.
+/// Uses the same semantic context and authorization as the non-projecting path.
+pub fn run_retained_scratch_agent_verification_observed<'a>(
+    source: &'a ScratchBuffer,
+    service: &dyn LanguageService,
+    model: &mut (impl DecisionModel + ?Sized),
+    request: &str,
+    limits: AgentLimits,
+    config: RetainedScratchAgentConfig<'_>,
+    cancellation: &AgentCancellationToken,
+    callback: &mut dyn FnMut(&AgentTurn),
+    options: SemanticContextOptions,
+    projection: RetainedVerificationConfig<'_>,
+) -> Result<RetainedScratchAgentRun<'a>, AgentError> {
+    run_retained_scratch_agent_inner(
+        source,
+        service,
+        model,
+        request,
+        limits,
+        config,
+        cancellation,
+        callback,
+        Some(options),
+        Some(projection),
     )
 }
 
@@ -206,6 +246,7 @@ fn run_retained_scratch_agent_inner<'a>(
     cancellation: &AgentCancellationToken,
     callback: &mut dyn FnMut(&AgentTurn),
     options: Option<SemanticContextOptions>,
+    projection: Option<RetainedVerificationConfig<'_>>,
 ) -> Result<RetainedScratchAgentRun<'a>, AgentError> {
     let evaluation_source_id = source.evaluation_source_id();
     let snapshot = source.snapshot();
@@ -237,9 +278,25 @@ fn run_retained_scratch_agent_inner<'a>(
                 && (config.authorize)(authorization)
         },
     )
-    .map_err(AgentError::Tool)?
-    .with_projected_arguments()
     .map_err(AgentError::Tool)?;
+    let provider = if let Some(projection) = projection {
+        let mut projector = projection.projector;
+        provider.with_verification_projection(
+            projection.allowed_operation_ids,
+            move |operation: &SemanticOperationDescription,
+                  source: SourceSnapshot<'_>,
+                  arguments: &serde_json::Value,
+                  native: Option<&scope_language::SemanticOperationResult>| {
+                projector.project(operation, source, arguments, native)
+            },
+            projection.max_projection_bytes,
+        )
+    } else {
+        provider
+    };
+    let provider = provider
+        .with_projected_arguments()
+        .map_err(AgentError::Tool)?;
     let tools = provider
         .tools()
         .iter()
@@ -664,6 +721,155 @@ mod activity_summary_tests {
     }
 
     #[test]
+    fn verification_runner_projects_safe_fields_with_exact_binding() {
+        use crate::tool::verification::*;
+        use scope_language::{
+            SemanticOperationError, SemanticOperationRequest, SemanticOperationResult,
+        };
+
+        struct Service;
+        impl LanguageService for Service {
+            fn language_id(&self) -> &'static str {
+                "test"
+            }
+            fn language_name(&self) -> &'static str {
+                "Test"
+            }
+            fn matches_path(&self, _: &scope_language::LanguagePath<'_>) -> bool {
+                false
+            }
+            fn analyze(
+                &self,
+                _: scope_language::LanguageDocument<'_>,
+            ) -> scope_language::LanguageAnalysis {
+                panic!("verification must use the semantic operation")
+            }
+            fn semantic_operations(&self) -> Vec<SemanticOperationDescription> {
+                vec![SemanticOperationDescription {
+                    id: "check".into(),
+                    description: "Synthetic check".into(),
+                    arguments: vec![],
+                    effect: SemanticOperationEffect::Read,
+                    target: SemanticTargetRequirement::Document,
+                    constraints: None,
+                }]
+            }
+            fn perform_semantic_operation(
+                &self,
+                request: SemanticOperationRequest<'_>,
+            ) -> Result<SemanticOperationResult, SemanticOperationError> {
+                assert_eq!(request.document.text(), "unsaved");
+                Ok(SemanticOperationResult::ReadOnly {
+                    value: serde_json::json!({"secret": "NATIVE_SECRET", "score": 1.25}),
+                    rationale: "PRIVATE_PROVENANCE".into(),
+                })
+            }
+        }
+        struct Model(bool, bool);
+        impl DecisionModel for Model {
+            fn decide(
+                &mut self,
+                messages: &[crate::agent::DecisionMessage],
+                _: u32,
+            ) -> Result<String, String> {
+                let serialized = messages
+                    .iter()
+                    .map(|message| message.content.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(!serialized.contains("NATIVE_SECRET"));
+                assert!(!serialized.contains("PRIVATE_PROVENANCE"));
+                if self.0 {
+                    assert_eq!(serialized.contains("verification_observation"), self.1);
+                    assert_eq!(serialized.contains("safe_check"), self.1);
+                    Ok(r#"{"type":"complete","content":"done"}"#.into())
+                } else {
+                    self.0 = true;
+                    let packet: serde_json::Value =
+                        serde_json::from_str(&messages[1].content).unwrap();
+                    assert_eq!(
+                        packet["semantic_context"]["permissions"],
+                        serde_json::json!({"kind":"unknown"})
+                    );
+                    Ok(r#"{"type":"tool","name":"language.test.check","arguments":{}}"#.into())
+                }
+            }
+        }
+        let mut sources = ScratchBuffers::default();
+        sources.create("test", "unsaved");
+        let source = sources.selected().unwrap();
+        for allowed in [true, false] {
+            let mut projections = 0;
+            let mut authorized = 0;
+            let mut authorize = |_: SemanticAuthorization<'_>| {
+                authorized += 1;
+                true
+            };
+            let allowed_ids = if allowed {
+                vec!["check".into()]
+            } else {
+                vec![]
+            };
+            let mut model = Model(false, allowed);
+            let result = run_retained_scratch_agent_verification_observed(
+                source,
+                &Service,
+                &mut model,
+                "check",
+                AgentLimits::default(),
+                RetainedScratchAgentConfig {
+                    trace: None,
+                    allowed_operation_ids: &allowed_ids,
+                    authorize: &mut authorize,
+                },
+                &AgentCancellationToken::default(),
+                &mut |_| {},
+                SemanticContextOptions::default(),
+                RetainedVerificationConfig {
+                    allowed_operation_ids: vec!["check".into()],
+                    max_projection_bytes: 4096,
+                    projector: Box::new(
+                        |operation: &SemanticOperationDescription,
+                         snapshot: SourceSnapshot<'_>,
+                         arguments: &serde_json::Value,
+                         native: Option<&SemanticOperationResult>| {
+                            projections += 1;
+                            assert_eq!(operation.id, "check");
+                            assert_eq!(source_binding(snapshot), source_binding(source.snapshot()));
+                            assert_eq!(snapshot.text, "unsaved");
+                            assert_eq!(arguments, &serde_json::json!({}));
+                            assert!(
+                                matches!(native, Some(SemanticOperationResult::ReadOnly { value, .. }) if value["score"] == 1.25)
+                            );
+                            VerificationSelection {
+                                classification: VerificationClassification::Verified,
+                                subject: VerificationSubject::SourceSnapshot,
+                                completeness: VerificationCompleteness::SelectedFields,
+                                authority: "synthetic host check".into(),
+                                fields: ToolValue::object([("safe_check", true.into())]),
+                            }
+                        },
+                    ),
+                },
+            );
+            if allowed {
+                let result = result.unwrap();
+                assert!(result.source_is_fresh(source));
+                assert_eq!(
+                    result.run.turn.source_binding(),
+                    Some(&source_binding(source.snapshot()))
+                );
+                assert_eq!(projections, 1);
+                assert!(authorized > 0);
+            } else {
+                assert!(result.is_ok());
+                assert_eq!(projections, 0);
+                assert_eq!(authorized, 0);
+            }
+        }
+    }
+
+    #[test]
     fn observed_runner_retains_provenance_and_supports_cancellation() {
         struct Service;
         impl LanguageService for Service {
@@ -728,6 +934,7 @@ mod activity_summary_tests {
                 &token,
                 &mut |turn| snapshots.push(turn.clone()),
                 semantic.then(SemanticContextOptions::default),
+                None,
             )
             .unwrap();
             assert_eq!(snapshots.last(), Some(&result.run.turn));

@@ -133,9 +133,9 @@ mod tests {
                 &self.0
             }
             fn invoke(&mut self, _: ToolCall) -> Result<ToolResult, ToolError> {
-                Ok(ToolResult {
-                    value: ToolValue::String("SECRET_TOOL_OUTPUT".into()),
-                })
+                Ok(ToolResult::new(ToolValue::String(
+                    "SECRET_TOOL_OUTPUT".into(),
+                )))
             }
         }
         let mut session = AgentSession::builder()

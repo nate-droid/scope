@@ -277,16 +277,25 @@ impl ToolCall {
     }
 }
 
+#[cfg(feature = "agent")]
+pub mod verification;
+
 pub type ToolArguments = BTreeMap<String, ToolValue>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolResult {
     pub value: ToolValue,
+    #[cfg(feature = "agent")]
+    pub verification: Option<verification::VerificationObservation>,
 }
 
 impl ToolResult {
     pub fn new(value: ToolValue) -> Self {
-        Self { value }
+        Self {
+            value,
+            #[cfg(feature = "agent")]
+            verification: None,
+        }
     }
 }
 

@@ -1,4 +1,4 @@
-# H1/H2 Path retained-agent harness
+# H1/H2/H3 Path retained-agent harness
 
 Standalone Cargo workspace; does not change Scope's root dependencies. Required checkout layout:
 
@@ -30,7 +30,56 @@ original runner. All four share the exact fixture source, task, decision/tool
 budgets, and model settings. Fake modes script only decisions, not Path results;
 real modes are optional and were not run for the paired evidence below.
 
-The `DecisionModel` wrapper retains counts only, never raw messages or responses.
+The original `DecisionModel` wrapper retains counts only, never raw messages or responses.
+
+## H3 feedback-driven offline control
+
+```sh
+cargo build --offline --locked --manifest-path examples/h1-path-agent/Cargo.toml
+cargo run --offline --locked --manifest-path examples/h1-path-agent/Cargo.toml -- h3-control
+```
+
+`src/continuation.rs`, delegated from the existing main, runs baseline/H2/H3 for
+positive (`refl x`), rejected-then-refined (`x`), and incomplete (`?`) candidates
+against the same real Path source snapshot, task per scenario, and budgets.
+It scripts decisions, not evaluator results: the last actual feedback determines
+whether to refine or finish. Counterfactual feedback assertions guard against a
+blind sequence. No local model is contacted; real-model H3 comparison is not run.
+
+The example-only projector accepts only native `ReadOnly` results. `Completed`
+requires candidate outcome `Checked` and kernel `checked=true` to become Verified;
+`RejectedCandidate` becomes Rejected; all other cases are Inconclusive. The four
+selected scalar fields are classification, candidate_outcome, kernel_checked,
+and goal_id (from validated request arguments). Native JSON is borrowed rather
+than cloned. Missing or unrecognized native observations use Unavailable with null
+fields; recognized StillIncomplete reports remain SelectedFields. The summary
+records the selected fields, and verified candidates assert outcome Checked.
+Authority is Path's kernel/candidate evaluator and subject is always
+HypotheticalCandidate: the source remains unchanged and is not claimed proved.
+
+Each host independently checks trusted in-process Tool evidence. H3 also compares
+it with compact native classifications collected by the projector. A separate
+public LanguageService invocation validates the final candidate outside agent
+budgets (one additional validation per run). Retained snapshots are published,
+queried through `scope.agent.get` in a separate session, imported, and checked for
+matching verification metadata and absence of native output.
+
+Runs write `target/results/h3-control-summary.json`, not the historical evidence.
+To explicitly refresh the sanitized evidence snapshot after a successful run:
+
+```sh
+cp examples/h1-path-agent/target/results/h3-control-summary.json examples/h1-path-agent/evidence/h3-control-summary.json
+```
+
+`evidence/h3-control-summary.json` contains sanitized measurements and assertions,
+not raw source, diagnostics, feedback, or model responses. Input bytes count UTF-8
+role plus content at each decision, cumulatively including repeated history;
+distinct feedback bytes count unique complete feedback message contents once.
+Initial context packet metrics are recorded where the runner supplies them (H2/H3);
+baseline initial input bytes include its catalog. Dispatch Success and loop
+Completed alone never establish verification. Transient actual feedback is kept
+in memory only for distinct-byte measurement. All runs use 4 decisions, 2 tools,
+320 tokens per decision, 65,536 message bytes, and 196,608 conversation bytes.
 `initial_model_message_bytes` measures the first message's UTF-8 role plus content
 bytes (normally the system message), not the whole initial request. This existing
 field is distinct from `initial_user_message_bytes`, which counts only the first

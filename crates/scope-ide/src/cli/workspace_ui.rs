@@ -35,7 +35,7 @@ impl Default for WorkspaceConfig {
         }
     }
 }
-/// Forwards presentation and read-only view input, never mutable pane callbacks.
+/// Forwards presentation, read-only input and host-owned open requests only.
 struct SuppliedInspector(Box<dyn Pane>);
 impl Pane for SuppliedInspector {
     fn id(&self) -> &'static str {
@@ -240,6 +240,15 @@ mod tests {
             consumed
         }
 
+        fn workspace_document_request(
+            &mut self,
+            event: &crossterm::event::Event,
+            ctx: &TuiContext<'_>,
+        ) -> Option<String> {
+            assert!(ctx.is_focused());
+            matches!(event, crossterm::event::Event::Key(key) if key.code == crossterm::event::KeyCode::Enter).then(|| "target.txt".into())
+        }
+
         fn handle_source_event(
             &mut self,
             _event: crossterm::event::Event,
@@ -273,6 +282,7 @@ mod tests {
             ..WorkspaceConfig::default()
         };
         let mut sources = configured_sources(&app, &config).unwrap();
+        let before_id = sources.selected().unwrap().id();
         let before_text = sources.selected().unwrap().text().to_owned();
         let before_version = sources.selected().unwrap().version();
         let mut ui = build_configured(config).unwrap();
@@ -295,6 +305,17 @@ mod tests {
         assert_eq!(*events.borrow(), vec![paste.clone(), key.clone()]);
         assert_eq!(sources.selected().unwrap().text(), before_text);
         assert_eq!(sources.selected().unwrap().version(), before_version);
+        root.write_file("target.txt", "target source");
+        ui.handle_event_with_sources(
+            Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            &mut app,
+            &mut sources,
+        );
+        assert_eq!(sources.selected().unwrap().text(), "target source");
+        assert_eq!(ui.focused(), Some("editor"));
+        // Restore selection to exercise the remaining read-only routing assertions.
+        sources.select(before_id).unwrap();
+
         ui.focus_named("editor").unwrap();
         ui.handle_event_with_sources(key, &mut app, &mut sources);
         assert_eq!(events.borrow().len(), 2);

@@ -1965,3 +1965,189 @@ fn downstream_proposal_handoff_blocks_dirty_drafts_and_stale_acceptance() {
             .is_err()
     );
 }
+
+struct DocumentRequester(String, Rc<Cell<usize>>);
+impl Pane for DocumentRequester {
+    fn id(&self) -> &'static str {
+        "document-requester"
+    }
+    fn render(&self, _: &mut ratatui::Frame<'_>, _: Rect, _: &TuiContext<'_>) {}
+    fn workspace_document_request(&mut self, _: &Event, ctx: &TuiContext<'_>) -> Option<String> {
+        assert!(ctx.is_focused());
+        self.1.set(self.1.get() + 1);
+        Some(self.0.clone())
+    }
+    fn handle_source_event(&mut self, _: Event, _: &mut crate::tui::ScratchEditAccess<'_>) -> bool {
+        panic!("open must not invoke editing");
+    }
+    fn handle_key(&mut self, _: KeyEvent, _: &mut TuiContextMut<'_>) -> bool {
+        panic!("open must not invoke mutable callback");
+    }
+}
+fn document_requester(h: &mut EditableWorkspace, path: &str) -> Rc<Cell<usize>> {
+    let calls = Rc::new(Cell::new(0));
+    h.ui.register_editable("requester", DocumentRequester(path.into(), calls.clone()))
+        .unwrap();
+    h.ui.layout(
+        "requests",
+        View::horizontal([View::leaf("editor"), View::leaf("requester")]),
+    )
+    .unwrap();
+    h.ui.select_layout("requests").unwrap();
+    h.render();
+    calls
+}
+#[test]
+fn workspace_document_request_preserves_selected_and_parked_drafts() {
+    for parked in [false, true] {
+        let root = TempWorkspace::new("document-request-drafts");
+        root.write_file("target with spaces.txt", "opened source");
+        let mut h = EditableWorkspace::new(&root, true);
+        let original = h.sources.selected().unwrap().id();
+        h.event(Event::Paste("draft ".into()));
+        if parked {
+            h.sources.create("text", "other");
+            h.render();
+        }
+        let calls = document_requester(&mut h, "target with spaces.txt");
+        h.key(KeyCode::Left, event::KeyModifiers::NONE);
+        assert_eq!(calls.get(), 0);
+        h.ui.focus_named("requester").unwrap();
+        h.key(KeyCode::F(4), event::KeyModifiers::NONE);
+        assert_eq!(calls.get(), 0);
+        h.ui.command_line = None;
+        let binding = h.sources.bound_source();
+        assert_eq!(
+            h.key(KeyCode::Enter, event::KeyModifiers::NONE),
+            WorkspaceInput::Handled
+        );
+        assert_eq!(calls.get(), 1);
+        assert_eq!(h.ui.focused(), Some("editor"));
+        assert_eq!(h.sources.selected().unwrap().text(), "opened source");
+        assert_eq!(h.sources.bound_source(), binding);
+        assert_eq!(h.sources.get(original).unwrap().text(), "original");
+        assert!(h.ui.draft_blocker().is_some());
+        h.sources.select(original).unwrap();
+        h.render();
+        assert!(h.pane_text("editor").contains("draft "));
+        h.control('s');
+        assert!(h.sources.selected().unwrap().text().starts_with("draft "));
+        assert_eq!(h.ui.draft_blocker(), None);
+        assert!(h.ui.output_errors.is_empty());
+    }
+}
+#[test]
+fn workspace_document_request_errors_never_dispatch_commands() {
+    for parked in [false, true] {
+        for path in [
+            "missing.txt",
+            "../escape.txt",
+            "/absolute.txt",
+            ":scope new text\n:scope save-as injected.txt",
+        ] {
+            let root = TempWorkspace::new("document-request-errors");
+            let mut h = EditableWorkspace::new(&root, true);
+            let draft_id = h.sources.selected().unwrap().id();
+            h.event(Event::Paste("draft ".into()));
+            if parked {
+                h.sources.create("text", "other committed source");
+                h.render();
+            }
+            let selected = h.sources.selected().unwrap().id();
+            let before: Vec<_> = h
+                .sources
+                .list()
+                .map(|b| {
+                    (
+                        b.id(),
+                        b.evaluation_source_id().clone(),
+                        b.version(),
+                        b.text().to_owned(),
+                        b.is_dirty(),
+                    )
+                })
+                .collect();
+            let binding = h.sources.bound_source();
+            let blocker = h.ui.draft_blocker();
+            assert!(blocker.is_some());
+            document_requester(&mut h, path);
+            h.ui.focus_named("requester").unwrap();
+            assert_eq!(
+                h.key(KeyCode::Enter, event::KeyModifiers::NONE),
+                WorkspaceInput::Handled
+            );
+            assert_eq!(h.ui.focused(), Some("requester"));
+            assert_eq!(h.sources.selected().unwrap().id(), selected);
+            let after: Vec<_> = h
+                .sources
+                .list()
+                .map(|b| {
+                    (
+                        b.id(),
+                        b.evaluation_source_id().clone(),
+                        b.version(),
+                        b.text().to_owned(),
+                        b.is_dirty(),
+                    )
+                })
+                .collect();
+            assert_eq!(after, before, "{path}, parked={parked}");
+            assert_eq!(h.sources.bound_source(), binding);
+            assert_eq!(h.ui.draft_blocker(), blocker);
+            assert!(!h.ui.output_errors.is_empty(), "{path}");
+            assert!(!root.host_path_exists("injected.txt"));
+            // Recover the exact unpublished draft, not merely its dirty marker.
+            h.sources.select(draft_id).unwrap();
+            h.ui.focus_named("editor").unwrap();
+            h.render();
+            assert!(h.pane_text("editor").contains("draft original"));
+            h.control('s');
+            assert_eq!(h.sources.selected().unwrap().text(), "draft original");
+            assert_eq!(h.ui.draft_blocker(), None);
+        }
+    }
+}
+
+#[test]
+fn workspace_document_request_reuses_destination_without_rereading_or_losing_draft() {
+    let root = TempWorkspace::new("document-request-repeat");
+    root.write_file("target.txt", "disk source");
+    let mut h = EditableWorkspace::new(&root, true);
+    document_requester(&mut h, "target.txt");
+    h.ui.focus_named("requester").unwrap();
+    h.key(KeyCode::Enter, event::KeyModifiers::NONE);
+    let id = h.sources.selected().unwrap().id();
+    let identity = h.sources.selected().unwrap().evaluation_source_id().clone();
+    h.render();
+    h.event(Event::Paste("draft ".into()));
+    h.render();
+    let draft_text = h.pane_text("editor");
+    let version = h.sources.selected().unwrap().version();
+    let count = h.sources.list().count();
+    let blocker = h.ui.draft_blocker();
+    assert!(blocker.is_some());
+    root.write_file("target.txt", "changed disk source must not be reread");
+    for parked in [false, true] {
+        if parked {
+            h.sources.create("text", "other");
+            h.render();
+        }
+        let count = if parked { count + 1 } else { count };
+        h.ui.focus_named("requester").unwrap();
+        h.key(KeyCode::Enter, event::KeyModifiers::NONE);
+        assert_eq!(h.ui.focused(), Some("editor"));
+        let buffer = h.sources.selected().unwrap();
+        assert_eq!(buffer.id(), id);
+        assert_eq!(buffer.evaluation_source_id(), &identity);
+        assert_eq!(buffer.version(), version);
+        assert_eq!(buffer.text(), "disk source");
+        assert_eq!(h.sources.list().count(), count);
+        assert_eq!(h.ui.draft_blocker(), blocker);
+        h.render();
+        assert_eq!(h.pane_text("editor"), draft_text);
+    }
+    h.control('s');
+    assert_eq!(h.sources.selected().unwrap().text(), "draft disk source");
+    assert_eq!(h.ui.draft_blocker(), None);
+    assert!(h.ui.output_errors.is_empty());
+}

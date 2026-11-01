@@ -1,0 +1,466 @@
+{
+  "alternative_feedback_controls_asserted": true,
+  "limits": {
+    "max_conversation_bytes": 196608,
+    "max_decisions": 4,
+    "max_message_bytes": 65536,
+    "max_tokens_per_decision": 320,
+    "max_tool_calls": 2
+  },
+  "local_model_runs": "not run",
+  "mode": "h3-control",
+  "passed": true,
+  "real_path_service_and_kernel": true,
+  "runs": [
+    {
+      "authorizations": 1,
+      "budget_exhausted": false,
+      "callbacks": 10,
+      "conclusion": "verified",
+      "cumulative_input_bytes": 20473,
+      "decision_input_bytes": [
+        3736,
+        16737
+      ],
+      "decisions": 2,
+      "distinct_feedback_content_bytes": 12868,
+      "distinct_feedback_count": 1,
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Verified",
+        "invocations": 1,
+        "outside_agent_budget": true
+      },
+      "initial_context": [],
+      "initial_input_bytes": 3736,
+      "passed": true,
+      "projected_fields": [],
+      "refinements": 0,
+      "rejections": 0,
+      "retained_verification_count": 0,
+      "scenario": "positive",
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "tools": 1,
+      "trusted_classifications": [
+        "Verified"
+      ],
+      "unresolved": false,
+      "usage": {
+        "conversation_bytes": 16754,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "baseline"
+    },
+    {
+      "authorizations": 1,
+      "budget_exhausted": false,
+      "callbacks": 11,
+      "conclusion": "verified",
+      "cumulative_input_bytes": 19909,
+      "decision_input_bytes": [
+        3454,
+        16455
+      ],
+      "decisions": 2,
+      "distinct_feedback_content_bytes": 12868,
+      "distinct_feedback_count": 1,
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Verified",
+        "invocations": 1,
+        "outside_agent_budget": true
+      },
+      "initial_context": [
+        {
+          "initial_message_bytes": 1974,
+          "packet_bytes": 1708
+        }
+      ],
+      "initial_input_bytes": 3454,
+      "passed": true,
+      "projected_fields": [],
+      "refinements": 0,
+      "rejections": 0,
+      "retained_verification_count": 0,
+      "scenario": "positive",
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "tools": 1,
+      "trusted_classifications": [
+        "Verified"
+      ],
+      "unresolved": false,
+      "usage": {
+        "conversation_bytes": 16472,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "H2"
+    },
+    {
+      "authorizations": 1,
+      "budget_exhausted": false,
+      "callbacks": 12,
+      "conclusion": "verified",
+      "cumulative_input_bytes": 7609,
+      "decision_input_bytes": [
+        3454,
+        4155
+      ],
+      "decisions": 2,
+      "distinct_feedback_content_bytes": 568,
+      "distinct_feedback_count": 1,
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Verified",
+        "invocations": 1,
+        "outside_agent_budget": true
+      },
+      "initial_context": [
+        {
+          "initial_message_bytes": 1974,
+          "packet_bytes": 1708
+        }
+      ],
+      "initial_input_bytes": 3454,
+      "passed": true,
+      "projected_fields": [
+        {
+          "candidate_outcome": "Checked",
+          "classification": "Verified",
+          "goal_id": 0,
+          "kernel_checked": true
+        }
+      ],
+      "refinements": 0,
+      "rejections": 0,
+      "retained_verification_count": 1,
+      "scenario": "positive",
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "tools": 1,
+      "trusted_classifications": [
+        "Verified"
+      ],
+      "unresolved": false,
+      "usage": {
+        "conversation_bytes": 4172,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "H3"
+    },
+    {
+      "authorizations": 2,
+      "budget_exhausted": false,
+      "callbacks": 15,
+      "conclusion": "verified",
+      "cumulative_input_bytes": 52218,
+      "decision_input_bytes": [
+        3731,
+        17743,
+        30744
+      ],
+      "decisions": 3,
+      "distinct_feedback_content_bytes": 26752,
+      "distinct_feedback_count": 2,
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Verified",
+        "invocations": 1,
+        "outside_agent_budget": true
+      },
+      "initial_context": [],
+      "initial_input_bytes": 3731,
+      "passed": true,
+      "projected_fields": [],
+      "refinements": 1,
+      "rejections": 1,
+      "retained_verification_count": 0,
+      "scenario": "refinement",
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "tools": 2,
+      "trusted_classifications": [
+        "Rejected",
+        "Verified"
+      ],
+      "unresolved": false,
+      "usage": {
+        "conversation_bytes": 30748,
+        "decisions": 3,
+        "malformed": 0,
+        "tool_calls": 2
+      },
+      "variant": "baseline"
+    },
+    {
+      "authorizations": 2,
+      "budget_exhausted": false,
+      "callbacks": 16,
+      "conclusion": "verified",
+      "cumulative_input_bytes": 51372,
+      "decision_input_bytes": [
+        3449,
+        17461,
+        30462
+      ],
+      "decisions": 3,
+      "distinct_feedback_content_bytes": 26752,
+      "distinct_feedback_count": 2,
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Verified",
+        "invocations": 1,
+        "outside_agent_budget": true
+      },
+      "initial_context": [
+        {
+          "initial_message_bytes": 1969,
+          "packet_bytes": 1708
+        }
+      ],
+      "initial_input_bytes": 3449,
+      "passed": true,
+      "projected_fields": [],
+      "refinements": 1,
+      "rejections": 1,
+      "retained_verification_count": 0,
+      "scenario": "refinement",
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "tools": 2,
+      "trusted_classifications": [
+        "Rejected",
+        "Verified"
+      ],
+      "unresolved": false,
+      "usage": {
+        "conversation_bytes": 30466,
+        "decisions": 3,
+        "malformed": 0,
+        "tool_calls": 2
+      },
+      "variant": "H2"
+    },
+    {
+      "authorizations": 2,
+      "budget_exhausted": false,
+      "callbacks": 18,
+      "conclusion": "verified",
+      "cumulative_input_bytes": 12470,
+      "decision_input_bytes": [
+        3449,
+        4160,
+        4861
+      ],
+      "decisions": 3,
+      "distinct_feedback_content_bytes": 1151,
+      "distinct_feedback_count": 2,
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Verified",
+        "invocations": 1,
+        "outside_agent_budget": true
+      },
+      "initial_context": [
+        {
+          "initial_message_bytes": 1969,
+          "packet_bytes": 1708
+        }
+      ],
+      "initial_input_bytes": 3449,
+      "passed": true,
+      "projected_fields": [
+        {
+          "candidate_outcome": "MathematicalRejection",
+          "classification": "Rejected",
+          "goal_id": 0,
+          "kernel_checked": false
+        },
+        {
+          "candidate_outcome": "Checked",
+          "classification": "Verified",
+          "goal_id": 0,
+          "kernel_checked": true
+        }
+      ],
+      "refinements": 1,
+      "rejections": 1,
+      "retained_verification_count": 2,
+      "scenario": "refinement",
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "tools": 2,
+      "trusted_classifications": [
+        "Rejected",
+        "Verified"
+      ],
+      "unresolved": false,
+      "usage": {
+        "conversation_bytes": 4865,
+        "decisions": 3,
+        "malformed": 0,
+        "tool_calls": 2
+      },
+      "variant": "H3"
+    },
+    {
+      "authorizations": 1,
+      "budget_exhausted": false,
+      "callbacks": 10,
+      "conclusion": "unresolved",
+      "cumulative_input_bytes": 22599,
+      "decision_input_bytes": [
+        3731,
+        18868
+      ],
+      "decisions": 2,
+      "distinct_feedback_content_bytes": 15009,
+      "distinct_feedback_count": 1,
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Inconclusive",
+        "invocations": 1,
+        "outside_agent_budget": true
+      },
+      "initial_context": [],
+      "initial_input_bytes": 3731,
+      "passed": true,
+      "projected_fields": [],
+      "refinements": 0,
+      "rejections": 0,
+      "retained_verification_count": 0,
+      "scenario": "incomplete",
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "tools": 1,
+      "trusted_classifications": [
+        "Inconclusive"
+      ],
+      "unresolved": true,
+      "usage": {
+        "conversation_bytes": 18887,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "baseline"
+    },
+    {
+      "authorizations": 1,
+      "budget_exhausted": false,
+      "callbacks": 11,
+      "conclusion": "unresolved",
+      "cumulative_input_bytes": 22035,
+      "decision_input_bytes": [
+        3449,
+        18586
+      ],
+      "decisions": 2,
+      "distinct_feedback_content_bytes": 15009,
+      "distinct_feedback_count": 1,
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Inconclusive",
+        "invocations": 1,
+        "outside_agent_budget": true
+      },
+      "initial_context": [
+        {
+          "initial_message_bytes": 1969,
+          "packet_bytes": 1708
+        }
+      ],
+      "initial_input_bytes": 3449,
+      "passed": true,
+      "projected_fields": [],
+      "refinements": 0,
+      "rejections": 0,
+      "retained_verification_count": 0,
+      "scenario": "incomplete",
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "tools": 1,
+      "trusted_classifications": [
+        "Inconclusive"
+      ],
+      "unresolved": true,
+      "usage": {
+        "conversation_bytes": 18605,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "H2"
+    },
+    {
+      "authorizations": 1,
+      "budget_exhausted": false,
+      "callbacks": 12,
+      "conclusion": "unresolved",
+      "cumulative_input_bytes": 7606,
+      "decision_input_bytes": [
+        3449,
+        4157
+      ],
+      "decisions": 2,
+      "distinct_feedback_content_bytes": 580,
+      "distinct_feedback_count": 1,
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Inconclusive",
+        "invocations": 1,
+        "outside_agent_budget": true
+      },
+      "initial_context": [
+        {
+          "initial_message_bytes": 1969,
+          "packet_bytes": 1708
+        }
+      ],
+      "initial_input_bytes": 3449,
+      "passed": true,
+      "projected_fields": [
+        {
+          "candidate_outcome": "Incomplete",
+          "classification": "Inconclusive",
+          "goal_id": 0,
+          "kernel_checked": false
+        }
+      ],
+      "refinements": 0,
+      "rejections": 0,
+      "retained_verification_count": 1,
+      "scenario": "incomplete",
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "tools": 1,
+      "trusted_classifications": [
+        "Inconclusive"
+      ],
+      "unresolved": true,
+      "usage": {
+        "conversation_bytes": 4176,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "H3"
+    }
+  ]
+}
