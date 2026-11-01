@@ -590,6 +590,21 @@ fn reveal_operations(eligible: &[String], visible: &mut Vec<String>, page_size: 
     count
 }
 
+// Only continuation presentation uses the provider projection. Lifecycle decisions,
+// last_result, retained evidence, and source-state comparisons use the full result.
+fn continuation_value(value: &ToolValue) -> serde_json::Value {
+    let mut result = to_json(value.clone());
+    if let Some(fields) = result.as_object_mut()
+        && let Some(feedback) = fields.remove("model_feedback")
+    {
+        fields.remove("value");
+        fields.remove("message");
+        fields.remove("rationale");
+        fields.insert("feedback".into(), feedback);
+    }
+    result
+}
+
 /// Host-owned evidence, not a model-authored plan or reasoning transcript.
 /// Each result remains tied to the exact invocation and host revision token.
 #[derive(Default)]
@@ -646,7 +661,7 @@ impl EditContinuation {
                 "decision":{"type":"tool","name":call.name,"arguments":to_json(ToolValue::Object(call.arguments.clone()))},
                 "decision_instruction":"The decision shows the exact evaluated invocation, not a request to repeat it. Submit changed candidate arguments through this evaluator; preserve applicable criteria and source preconditions. Additional source inspection is optional when needed. Return complete if unable to proceed.",
                 "evaluation":evaluation.map(|e| to_json(e.clone())),
-                "observations":to_json(value.clone()),
+                "observations":continuation_value(value),
                 "remaining_refinements":remaining_refinements,
                 "inspection_scope":"Inspection reads existing source definitions, not temporary candidate definitions. Candidate execution is disposable and installs nothing. Validation evidence is retained separately from active source.",
                 "evaluation_orchestration":"explicit_model_invocation",
@@ -675,7 +690,7 @@ impl EditContinuation {
                     }
                     state
                 }),
-                "value":to_json(value.clone())
+                "value":continuation_value(value)
             })).collect::<Vec<_>>()
         }).to_string()
     }
@@ -1672,6 +1687,32 @@ fn run_semantic_objective_inventory<T: SourceTarget>(
 mod continuation_tests {
     use super::*;
     use crate::tool::{ToolProvider, ToolResult};
+
+    #[test]
+    fn projection_is_presentation_only_and_preserves_envelope_status() {
+        for status in ["read_only", "blocked"] {
+            let full = ToolValue::object([
+                ("status", status.into()),
+                ("value", "complete evidence".into()),
+                ("message", "complete blocker".into()),
+                ("operation_id", "inspect".into()),
+                (
+                    "model_feedback",
+                    ToolValue::object([("outcome", "inconclusive".into())]),
+                ),
+            ]);
+            let mut continuation = EditContinuation::default();
+            continuation.retain(ToolCall::new("inspect"), "revision".into(), full.clone());
+            let projected = continuation_value(&full);
+            assert_eq!(projected["status"], status);
+            assert_eq!(projected["operation_id"], "inspect");
+            assert_eq!(projected["feedback"]["outcome"], "inconclusive");
+            assert!(projected.get("value").is_none());
+            assert_eq!(continuation.evidence[0].2, full);
+        }
+        let legacy = ToolValue::object([("value", "legacy full result".into())]);
+        assert_eq!(continuation_value(&legacy), to_json(legacy));
+    }
 
     #[test]
     fn evidence_is_keyed_by_call_and_state_without_invented_candidate_facts() {

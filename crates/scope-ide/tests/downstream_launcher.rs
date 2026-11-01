@@ -107,6 +107,23 @@ fn launcher_child() {
 }
 
 #[test]
+fn pty_command_synchronization() {
+    let result = Command::new("python3")
+        .args([
+            "-B",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/test_pty_sync.py"),
+        ])
+        .output()
+        .expect("Python 3 is required for PTY synchronization tests");
+    assert!(
+        result.status.success(),
+        "PTY synchronization failed:\n{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[test]
 fn downstream_actions_through_real_launcher() {
     let result = Command::new("python3")
         .arg(concat!(

@@ -1,4 +1,31 @@
-# H1/H2/H3 Path retained-agent harness
+# H1/H2/H3/H4 Path retained-agent harness
+
+## H4 bounded local-model comparison
+
+With LM Studio serving `qwen3-30b-a3b` at `http://127.0.0.1:1234/v1`:
+
+```sh
+cargo build --offline --locked --manifest-path examples/h1-path-agent/Cargo.toml
+H4_REPEATS=2 examples/h1-path-agent/target/debug/scope-h1-experiment h4-real
+cargo test --offline --locked --manifest-path examples/h1-path-agent/Cargo.toml
+```
+
+`h4-real` runs baseline/H2/H3 for positive, rejection-refinement, incomplete,
+and tight-recovery tasks (24 attempts by default). `H4_REPEATS` accepts 1–10.
+It uses the ordinary retained runner and existing Cell adapter, with no paid API.
+Each attempt is checkpointed to ignored `target/results/h4-summary.json`;
+failed task outcomes are retained and do not abort the comparison. Successful
+process exit means the evaluation finished, **not** that every task passed.
+Independent Path checks run outside the agent's unchanged budgets. Token counts
+are unavailable through the adapter and remain null; byte counts are not tokens.
+Fixture-specific safe decision fields are retained, not arbitrary model prose or
+native reports. This evaluation sends fixture context to the configured local
+server; routine tests never require that server.
+
+See [the H4 evaluation](../../docs/h4-evaluation.md) for conditions, both live
+batches, individual failures, feedback limitations and next milestone, and
+[the human UX audit](../../docs/h4-human-ux.md) for actual workbench PTY evidence.
+The Path experiment is not an ordinary workbench action.
 
 Standalone Cargo workspace; does not change Scope's root dependencies. Required checkout layout:
 

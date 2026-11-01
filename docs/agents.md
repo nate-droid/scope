@@ -120,7 +120,13 @@ built-in providers and read-only host policy, including when human shell command
 can edit/save. A model cannot authorize its own writes. The legacy
 `CellAgent::answer` API remains single-shot text completion without tool dispatch.
 
-Cell's current chat capability accepts text messages, not native function calls
+The opt-in, development-only `agent-lmstudio` feature adds a separate Cell native
+transport without changing this lifecycle or the default OpenAI-compatible adapter.
+See [H5b native reasoning](h5b-native-reasoning.md) for sibling dependency setup,
+bounds, live evidence, and outstanding assurance. Effective reasoning mode remains
+unknown unless independently established; reasoning is never decision content.
+
+Cell's default chat capability accepts text messages, not native function calls
 or a server-enforced JSON schema. Each model decision must be exactly one of:
 
 ```json

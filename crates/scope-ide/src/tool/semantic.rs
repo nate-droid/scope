@@ -401,6 +401,25 @@ impl<T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool> ToolP
             let selection = projector.project(operation, source, &arguments, Some(native));
             return verification::observation(call.name, source, selection, *cap);
         }
+        // Presentation is opt-in and bounded independently of authoritative evidence.
+        if let (Some(id), Some(native), ToolValue::Object(fields)) = (
+            operation_id.as_deref(),
+            self.native_result.as_ref(),
+            &mut result.value,
+        ) && matches!(
+            native,
+            SemanticOperationResult::ReadOnly { .. } | SemanticOperationResult::Blocked { .. }
+        ) && let Some(feedback) = self.service.semantic_feedback(id, native)
+        {
+            let feedback = if feedback.to_string().len() <= 8192 {
+                feedback
+            } else {
+                json!({"feedback_status":"inconclusive", "reason":"feedback projection exceeds 8192 bytes; inspect retained host evidence", "completion_established":false})
+            };
+            if let Some(feedback) = from_json(feedback) {
+                fields.insert("model_feedback".into(), feedback);
+            }
+        }
         if let (Some(id), ToolValue::Object(fields)) = (operation_id, &mut result.value) {
             fields.insert("operation_id".into(), id.into());
         }
@@ -1117,6 +1136,83 @@ mod tests {
             assert_eq!(request.document.text(), ORIGINAL);
             assert_eq!(request.document.version(), 7);
             Ok(self.0.clone())
+        }
+    }
+
+    #[test]
+    fn feedback_hook_is_bounded_and_retains_full_native_and_transport_results() {
+        struct FeedbackService(usize);
+        impl LanguageService for FeedbackService {
+            fn language_id(&self) -> &'static str {
+                "fixture"
+            }
+            fn language_name(&self) -> &'static str {
+                "Fixture"
+            }
+            fn matches_path(&self, _: &LanguagePath<'_>) -> bool {
+                false
+            }
+            fn analyze(&self, _: LanguageDocument<'_>) -> scope_language::LanguageAnalysis {
+                Default::default()
+            }
+            fn semantic_operations(&self) -> Vec<SemanticOperationDescription> {
+                LegacyService(SemanticOperationResult::ReadOnly {
+                    value: json!({}),
+                    rationale: String::new(),
+                })
+                .semantic_operations()
+            }
+            fn perform_semantic_operation(
+                &self,
+                _: SemanticOperationRequest<'_>,
+            ) -> Result<SemanticOperationResult, SemanticOperationError> {
+                Ok(SemanticOperationResult::ReadOnly {
+                    value: json!({"full":"complete evidence"}),
+                    rationale: "full rationale".into(),
+                })
+            }
+            fn semantic_feedback(&self, _: &str, _: &SemanticOperationResult) -> Option<Value> {
+                Some(json!({"summary":"x".repeat(self.0)}))
+            }
+        }
+        for (length, authorized) in [(10, true), (8192, true), (10, false)] {
+            let service = FeedbackService(length);
+            let target = Target;
+            let mut controller = SourceEditController::default();
+            let mut provider = SemanticToolProvider::new(
+                &service,
+                &target,
+                &mut controller,
+                PermittedEditScope::Document(target.source_id()),
+                None,
+                |_| authorized,
+            )
+            .unwrap();
+            let result = provider
+                .invoke(
+                    ToolCall::new("language.fixture.rename")
+                        .with_argument("expected_version", "7".into())
+                        .with_argument("expected_source", ORIGINAL.into())
+                        .with_argument(
+                            "arguments",
+                            ToolValue::object([] as [(&str, ToolValue); 0]),
+                        ),
+                )
+                .unwrap();
+            let value = to_json(result.value);
+            if authorized {
+                assert_eq!(value["value"]["full"], "complete evidence");
+                assert_eq!(value["rationale"], "full rationale");
+                assert!(provider.native_result().is_some());
+                assert!(value["model_feedback"].to_string().len() <= 8192);
+                if length == 8192 {
+                    assert_eq!(value["model_feedback"]["feedback_status"], "inconclusive");
+                }
+            } else {
+                assert_eq!(value["status"], "unauthorized");
+                assert!(value.get("model_feedback").is_none());
+                assert!(provider.native_result().is_none());
+            }
         }
     }
 

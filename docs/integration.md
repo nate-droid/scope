@@ -97,6 +97,10 @@ Implement `language_id`, `language_name`, `matches_path` and `analyze`. Return
 `LanguageAnalysis { diagnostics, symbols }` from your own parser/checker.
 `actions` is optional descriptive metadata, not automatic execution.
 
+For optional human/agent authoring help, reuse a read-only semantic operation:
+see [language-aware guidance](language-guidance.md) for the contract, source and
+size boundaries, runnable consumer tests, and downstream responsibilities.
+
 ### Combined document analysis
 
 `diagnostics` and `outline` default to projections of `analyze`; never call those

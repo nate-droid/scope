@@ -38,6 +38,12 @@ pub use decision::{
 };
 pub use trace::ProtocolTrace;
 
+#[cfg(feature = "agent-lmstudio")]
+#[path = "agent_lmstudio.rs"]
+mod lmstudio;
+#[cfg(feature = "agent-lmstudio")]
+pub use lmstudio::{LmStudioAgent, ReasoningMode};
+
 const DEFAULT_TEMPERATURE: f32 = 0.2;
 const DEFAULT_MAX_TOKENS: u32 = 700;
 const SYSTEM_PROMPT: &str = "You are a small Scope coding assistant. You do not have shell access, process execution, ambient filesystem access, network access, or hidden tools. You may reason only from the context provided by Scope commands. If the context is insufficient, say which Scope command or file would help next. Prefer concise, actionable answers.";

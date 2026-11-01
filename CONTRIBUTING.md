@@ -11,14 +11,25 @@ expectations. Cell is fetched from Git tag `v0.0.2`; no sibling Cell checkout or
 `CELL_REPOSITORY` is required. Include the Scope revision, `Cargo.lock`, toolchain,
 platform and local changes when reporting reproducibility problems.
 
-Start with focused tests, then run the relevant workspace checks:
+Follow the authoritative [verification policy](docs/verification.md) and its
+short ordinary development workflow. Start with direct and adjacent tests using
+a named package and target; select broader system checks by changed boundaries
+and risk. Low-risk isolated changes need not run the whole package or downstream
+PTY suites. The policy retains mandatory high-risk and release verification.
+For example, a manifest regression can start with:
 
 ```sh
+cargo test --locked -p scope-types --test manifest
 cargo fmt --all -- --check
-cargo test --workspace --locked
-cargo test --workspace --all-features --locked
-cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 ```
+
+Use the contract's [scope-selection table](docs/verification.md#choose-your-next-check)
+and [target discovery/reuse guidance](docs/verification.md#discover-targets-and-reuse-builds)
+when choosing the smallest meaningful check. Historical measurements are indexed
+in the [DX3 loop audit](docs/development-loop.md); they are not additional workflow
+requirements.
+Reuse build artifacts; do not routinely run `cargo clean`. Ordinary changes need
+neither profiling nor a new performance report.
 
 These are requested checks, not a claim they pass on every platform. Report exact
 commands/results, features and skipped checks with reasons. Separate example

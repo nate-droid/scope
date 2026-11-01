@@ -219,6 +219,17 @@ pub trait LanguageService: Sync {
         Vec::new()
     }
 
+    /// Optional concise continuation-only feedback. Full results remain authoritative.
+    /// This is presentation, never validation, authorization, or permission to edit.
+    /// Return None to preserve the default full-result presentation.
+    fn semantic_feedback(
+        &self,
+        _operation_id: &str,
+        _result: &SemanticOperationResult,
+    ) -> Option<serde_json::Value> {
+        None
+    }
+
     /// Advertise optional evaluation outcomes in the existing operation catalog.
     /// Descriptive only: this grants no authority and does not require evaluation.
     fn semantic_operation_produces_evaluation(&self, _operation_id: &str) -> bool {

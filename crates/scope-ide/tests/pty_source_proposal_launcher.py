@@ -39,11 +39,13 @@ def main():
 
             def command(text, expected=None):
                 # Every operation opens and submits a fresh F4 command line.
-                workspace.send(b'\x1bOS')
+                # The fresh command-bar prefix establishes input focus only;
+                # submissions and asserted redraws still collect full output.
+                workspace.send_until(b'\x1bOS', '>')
                 workspace.send(text.encode() + b'\r')
                 if expected is None:
                     return
-                workspace.send(b'\x1bOS')
+                workspace.send_until(b'\x1bOS', '>')
                 workspace.send(b'pane output\r')
                 workspace.send(b'\x1b[6~' * 12 + b'\x1b[A' * 5)
                 # CSI stripping is not a screen emulator. Force a full redraw

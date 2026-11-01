@@ -658,6 +658,7 @@ impl WorkspaceTui {
         );
     }
 
+    #[cfg(test)]
     fn submit_command(
         &mut self,
         line: &str,
@@ -677,10 +678,6 @@ impl WorkspaceTui {
         );
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Keep borrowed dispatch owners explicit"
-    )]
     fn submit_command_inner(
         &mut self,
         line: &str,

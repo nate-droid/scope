@@ -33,10 +33,10 @@ def main():
             assert b'\x1b[?1049h' in workspace.raw, 'launcher did not enter TUI'
 
             def shell():
-                workspace.expect('scope> ', workspace.send(b'\x1bOQ'))
+                workspace.send_until(b'\x1bOQ', 'scope> ')
 
             def resume():
-                workspace.expect('Read-onlyinspector', workspace.send(b':scope quit\r'))
+                workspace.send_until(b':scope quit\r', 'Read-onlyinspector')
 
             def picker():
                 return workspace.expect('Actions:', workspace.send(b'\x1bOP'))

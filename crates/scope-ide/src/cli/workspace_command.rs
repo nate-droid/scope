@@ -84,6 +84,11 @@ impl WorkspaceCommandOutput {
     /// Trusted hosts may pass this to `run_semantic_edit_with_discovery`; that
     /// operation still requires its own capability and authorization contract.
     /// Keep the controller paired with this session's original source owner.
+    #[cfg(feature = "tui")]
+    pub(crate) fn source_proposals(&self) -> &crate::source_edit::SourceEditController {
+        self.proposals.controller()
+    }
+
     pub fn source_edit_controller(&mut self) -> &mut crate::source_edit::SourceEditController {
         self.proposals.controller_mut()
     }
@@ -266,10 +271,6 @@ impl WorkspaceCommandOutput {
         self.submit_inner(line, app, session, host, sources, observer)
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Explicit borrowed execution and presentation owners"
-    )]
     fn submit_inner(
         &mut self,
         line: &str,

@@ -70,7 +70,8 @@ enables TUI by default.
 ## Build and run
 
 ```sh
-cargo build --workspace --locked
+# Build the default application, not every workspace package.
+cargo build --locked
 cargo run --locked
 cargo run --locked -- --help
 cargo run --locked -p scope-script -- crates/scope-script/examples/daily.scope
@@ -110,15 +111,24 @@ code, not automatically sandboxed.
 
 ## Validation commands
 
-These are commands to run, **not a claim that they have passed**:
+Use the authoritative [verification policy](verification.md) for direct,
+adjacent and system check selection, escalation and shared artifact reuse.
+Start with a package and target; ordinary iteration does not need a workspace
+build. For example:
 
 ```sh
-cargo fmt --all -- --check
-cargo test --workspace --locked
-cargo test --workspace --all-features --locked
-cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-cargo doc --workspace --all-features --no-deps --locked
+cargo test --locked -p scope-types --test manifest
 ```
+
+Low-risk isolated changes can finish with direct and adjacent tests. Use system
+checks for affected integration boundaries and Full for high-risk contracts and
+release confidence. The policy contains the complete CI and standalone matrix;
+do not repeat it after each edit.
+
+These are commands to run, **not a claim that they have passed**:
+
+For Rust edits, check formatting with `cargo fmt --all -- --check` and use the
+policy's affected-package test and Clippy selections.
 
 Check focused crates/features first when changing their code. Do not silence
 failures with blanket lint suppression or weaken rejection tests. Report the

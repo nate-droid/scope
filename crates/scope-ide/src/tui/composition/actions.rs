@@ -212,7 +212,7 @@ impl WorkspaceTui {
             (
                 "document.review",
                 "Review source proposal — enter proposal ID",
-                ":scope source-review ",
+                ":scope source-proposal ",
             ),
             (
                 "document.accept",
@@ -237,6 +237,50 @@ impl WorkspaceTui {
                 None,
                 None,
             );
+        }
+        if let Ok(source) = sources.selected()
+            && source.language_id() == "language.path"
+        {
+            let pending: Vec<_> = self
+                .output
+                .source_proposals()
+                .list()
+                .filter(|p| {
+                    p.target() == crate::source_edit::SourceId::Scratch(source.id())
+                        && p.status() == crate::proposal::ProposalStatus::Pending
+                })
+                .collect();
+            if let [proposal] = pending.as_slice() {
+                for (id, label, command) in [
+                    (
+                        "path.review",
+                        "Path: Review Proof Proposal — exact edits and evidence",
+                        "source-proposal",
+                    ),
+                    ("path.diff", "Path: Show Proof Diff", "source-diff"),
+                    (
+                        "path.accept",
+                        "Path: Accept Proof Proposal — apply in memory, then check",
+                        "source-accept",
+                    ),
+                    (
+                        "path.reject",
+                        "Path: Reject Proof Proposal",
+                        "source-reject",
+                    ),
+                ] {
+                    add(
+                        WorkspaceAction::CommandPrompt(format!(
+                            ":scope {command} {}",
+                            proposal.id().0
+                        )),
+                        id.into(),
+                        label.into(),
+                        None,
+                        self.draft_blocker(),
+                    );
+                }
+            }
         }
         for source in sources.list() {
             let name = source

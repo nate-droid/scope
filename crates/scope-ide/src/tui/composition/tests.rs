@@ -2151,3 +2151,221 @@ fn workspace_document_request_reuses_destination_without_rereading_or_losing_dra
     assert_eq!(h.ui.draft_blocker(), None);
     assert!(h.ui.output_errors.is_empty());
 }
+
+fn path_f1_workspace(root: &TempWorkspace) -> EditableWorkspace {
+    let mut h = EditableWorkspace::new(root, true);
+    let id = h.sources.create("language.path", "original");
+    h.sources.select(id).unwrap();
+    let mut action = downstream_test_action();
+    action.language = "language.path".into();
+    h.ui.register_downstream_action(action).unwrap();
+    h.render();
+    h
+}
+
+fn path_f1_propose(h: &mut EditableWorkspace) {
+    let action = discovered_downstream(h).action;
+    h.ui.invoke_action(
+        action,
+        &mut h.app,
+        &mut h.sources,
+        Some(&mut ProposalHandoffHost::default()),
+    )
+    .unwrap();
+}
+
+fn path_f1_actions(h: &EditableWorkspace) -> Vec<ActionInfo> {
+    h.ui.actions(&h.sources, false)
+        .into_iter()
+        .filter(|item| item.id.starts_with("path."))
+        .collect()
+}
+
+#[test]
+fn path_f1_unique_pending_prefills_exact_commands_without_mutation_until_submission() {
+    use crate::proposal::{ProposalId, ProposalStatus};
+    let root = TempWorkspace::new("path-f1-prefill");
+    let mut h = path_f1_workspace(&root);
+    path_f1_propose(&mut h);
+    let original = h.sources.bound_source();
+    let actions = path_f1_actions(&h);
+    assert_eq!(actions.len(), 4);
+    for (item, (id, command)) in actions.into_iter().zip([
+        ("path.review", "source-proposal"),
+        ("path.diff", "source-diff"),
+        ("path.accept", "source-accept"),
+        ("path.reject", "source-reject"),
+    ]) {
+        assert_eq!(item.id, id);
+        assert_eq!(item.disabled_reason, None);
+        let command = format!(":scope {command} 1");
+        assert_eq!(item.action, WorkspaceAction::CommandPrompt(command.clone()));
+        h.ui.invoke_action(item.action, &mut h.app, &mut h.sources, None)
+            .unwrap();
+        assert_eq!(h.ui.command_line.as_deref(), Some(command.as_str()));
+        assert_eq!(h.sources.bound_source(), original);
+        assert_eq!(
+            h.ui.source_edit_controller()
+                .get(ProposalId(1))
+                .unwrap()
+                .status(),
+            ProposalStatus::Pending
+        );
+    }
+    h.ui.submit_command(
+        ":scope source-accept 1",
+        &mut h.app,
+        &mut h.session,
+        None,
+        &mut h.sources,
+    );
+    assert_eq!(h.sources.selected().unwrap().text(), "proof original");
+    assert_eq!(
+        h.ui.source_edit_controller()
+            .get(ProposalId(1))
+            .unwrap()
+            .status(),
+        ProposalStatus::Applied
+    );
+    assert!(path_f1_actions(&h).is_empty());
+}
+
+#[test]
+fn path_f1_equal_text_other_scratch_has_no_actions_and_cannot_retarget_token() {
+    let root = TempWorkspace::new("path-f1-identity");
+    let mut h = path_f1_workspace(&root);
+    path_f1_propose(&mut h);
+    let token = path_f1_actions(&h)
+        .into_iter()
+        .find(|a| a.id == "path.accept")
+        .unwrap()
+        .action;
+    let original_id = h.sources.selected().unwrap().id();
+    let other = h.sources.create("language.path", "original");
+    h.sources.select(other).unwrap();
+    path_f1_propose(&mut h);
+    let before = h.sources.bound_source();
+    assert_eq!(path_f1_actions(&h).len(), 4);
+    assert!(
+        h.ui.invoke_action(token, &mut h.app, &mut h.sources, None)
+            .is_err()
+    );
+    assert_eq!(h.sources.bound_source(), before);
+    // An equal-text document without its own pending proposal has no handoffs.
+    let third = h.sources.create("language.path", "original");
+    h.sources.select(third).unwrap();
+    assert!(path_f1_actions(&h).is_empty());
+    assert_eq!(h.sources.get(original_id).unwrap().text(), "original");
+    assert_eq!(h.sources.get(other).unwrap().text(), "original");
+}
+
+#[test]
+fn path_f1_multiple_pending_removes_actions_and_invalidates_unique_token() {
+    let root = TempWorkspace::new("path-f1-ambiguous");
+    let mut h = path_f1_workspace(&root);
+    path_f1_propose(&mut h);
+    let token = path_f1_actions(&h)[0].action.clone();
+    path_f1_propose(&mut h);
+    let before = h.sources.bound_source();
+    assert!(path_f1_actions(&h).is_empty());
+    assert!(
+        h.ui.invoke_action(token, &mut h.app, &mut h.sources, None)
+            .is_err()
+    );
+    assert_eq!(h.sources.bound_source(), before);
+    assert_eq!(h.ui.source_edit_controller().list().count(), 2);
+}
+
+#[test]
+fn path_f1_repeated_prefill_and_consumed_token_never_retarget_new_pending() {
+    use crate::proposal::{ProposalId, ProposalStatus};
+    let root = TempWorkspace::new("path-f1-repeated");
+    let mut h = path_f1_workspace(&root);
+    path_f1_propose(&mut h);
+    let token = path_f1_actions(&h)
+        .into_iter()
+        .find(|a| a.id == "path.reject")
+        .unwrap()
+        .action;
+    let before = h.sources.bound_source();
+    for _ in 0..2 {
+        h.ui.invoke_action(token.clone(), &mut h.app, &mut h.sources, None)
+            .unwrap();
+        assert_eq!(h.ui.command_line.as_deref(), Some(":scope source-reject 1"));
+        assert_eq!(h.sources.bound_source(), before);
+        assert_eq!(
+            h.ui.source_edit_controller()
+                .get(ProposalId(1))
+                .unwrap()
+                .status(),
+            ProposalStatus::Pending
+        );
+    }
+    h.ui.submit_command(
+        ":scope source-reject 1",
+        &mut h.app,
+        &mut h.session,
+        None,
+        &mut h.sources,
+    );
+    assert_eq!(
+        h.ui.source_edit_controller()
+            .get(ProposalId(1))
+            .unwrap()
+            .status(),
+        ProposalStatus::Rejected
+    );
+    assert!(path_f1_actions(&h).is_empty());
+    assert!(
+        h.ui.invoke_action(token.clone(), &mut h.app, &mut h.sources, None)
+            .is_err()
+    );
+    path_f1_propose(&mut h);
+    assert_eq!(path_f1_actions(&h).len(), 4);
+    assert!(
+        h.ui.invoke_action(token, &mut h.app, &mut h.sources, None)
+            .is_err()
+    );
+    assert_eq!(h.sources.bound_source(), before);
+    assert_eq!(
+        h.ui.source_edit_controller()
+            .get(ProposalId(2))
+            .unwrap()
+            .status(),
+        ProposalStatus::Pending
+    );
+}
+
+#[test]
+fn path_f1_dirty_draft_disables_all_handoffs_and_rechecks_captured_tokens() {
+    use crate::proposal::{ProposalId, ProposalStatus};
+    let root = TempWorkspace::new("path-f1-dirty");
+    let mut h = path_f1_workspace(&root);
+    path_f1_propose(&mut h);
+    let tokens = path_f1_actions(&h);
+    h.event(Event::Paste("draft ".into()));
+    let before = h.sources.bound_source();
+    let disabled = path_f1_actions(&h);
+    assert_eq!(disabled.len(), 4);
+    assert!(disabled.iter().all(|a| {
+        a.disabled_reason
+            .as_deref()
+            .is_some_and(|r| r.contains("draft"))
+    }));
+    for item in tokens {
+        assert!(
+            h.ui.invoke_action(item.action, &mut h.app, &mut h.sources, None)
+                .is_err()
+        );
+        assert_eq!(h.sources.bound_source(), before);
+    }
+    assert_eq!(
+        h.ui.source_edit_controller()
+            .get(ProposalId(1))
+            .unwrap()
+            .status(),
+        ProposalStatus::Pending
+    );
+    h.render();
+    assert!(h.pane_text("editor").contains("draft original"));
+}

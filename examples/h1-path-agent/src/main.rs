@@ -3,14 +3,14 @@ use scope_ide::source_edit::SourceTarget;
 use scope_ide::{
     agent::*,
     cli::{
-        RetainedScratchAgentConfig, run_retained_scratch_agent_observed,
-        run_retained_scratch_agent_semantic_observed,
+        run_retained_scratch_agent_observed, run_retained_scratch_agent_semantic_observed,
+        RetainedScratchAgentConfig,
     },
     scratch::ScratchBuffers,
     semantic_context::SemanticContextOptions,
     tool::agent_turns::{AgentTurnStore, AgentTurnToolProvider},
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{error::Error, path::PathBuf};
 #[derive(Default)]
 struct InputMetrics {
@@ -85,6 +85,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     if mode == "h3-control" {
         return continuation::run();
     }
+    if mode == "h4-real" {
+        return continuation::run_real();
+    }
     let out = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/results");
     std::fs::create_dir_all(&out)?;
     let inner: Box<dyn DecisionModel> = match mode.as_str() {
@@ -93,7 +96,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             "http://127.0.0.1:1234/v1",
         ))?),
         "fake" | "fake-h2" => Box::new(Script(0)),
-        _ => return Err("mode must be fake, real, fake-h2, real-h2, or h3-control".into()),
+        _ => {
+            return Err("mode must be fake, real, fake-h2, real-h2, h3-control, or h4-real".into())
+        }
     };
     let mut model = ObservedModel {
         inner,
@@ -251,13 +256,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     summary["first_available_operation_count"] =
         json!(model.metrics.first_available_operation_count);
     summary["model_decisions"] = json!(model.metrics.request_bytes.len());
-    summary["tool_attempts"] = json!(
-        imported
-            .evidence()
-            .iter()
-            .filter(|e| matches!(e, AgentEvidence::Tool { .. }))
-            .count()
-    );
+    summary["tool_attempts"] = json!(imported
+        .evidence()
+        .iter()
+        .filter(|e| matches!(e, AgentEvidence::Tool { .. }))
+        .count());
     summary["authorization_annotation"] =
         json!("unknown: discovery is not authorization; host authorizations counted separately");
     summary["context_assembly"] = json!(context_assembly);

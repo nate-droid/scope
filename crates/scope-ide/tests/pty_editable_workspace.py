@@ -66,13 +66,13 @@ class Workspace:
                 os._exit(127)
         os.close(restore_write)
 
-    def read(self, timeout=4):
+    def read(self, timeout=4, *, completed=None):
         data = bytearray()
         end = min(time.monotonic() + timeout, self.deadline)
         quiet = time.monotonic() + .3
         while time.monotonic() < end:
-            if not select.select([self.fd], [], [], .05)[0]:
-                if time.monotonic() >= quiet:
+            if not select.select([self.fd], [], [], min(.05, max(0, end - time.monotonic())))[0]:
+                if completed is None and time.monotonic() >= quiet:
                     break
                 continue
             try:
@@ -92,6 +92,14 @@ class Workspace:
                 _, self.pending = self.pending.split(b'\x1b[6n', 1)
                 os.write(self.fd, b'\x1b[1;1R')
             self.pending = self.pending[-3:]
+            # Normalize the accumulated bytes, not individual chunks: CSI and
+            # UTF-8 sequences may be fragmented at any byte boundary.
+            if completed is not None and completed(self.text(data)):
+                break
+        return self.text(data)
+
+    @staticmethod
+    def text(data):
         return ANSI.sub(b'', bytes(data)).decode('utf-8', errors='replace').replace('\r', '')
 
     def expect(self, needle, initial=''):
@@ -109,8 +117,41 @@ class Workspace:
         os.write(self.fd, keys)
         return self.read()
 
+    def send_until(self, keys, needle, timeout=10):
+        """Wait for fresh transition text, not a quiet TUI or a complete frame.
+
+        Use only when the marker establishes the next input mode. Callers needing
+        trailing frame content or a negative observation must retain send/read.
+        """
+        if not needle:
+            raise ValueError('send_until requires a nonempty marker')
+        if time.monotonic() >= self.deadline:
+            raise AssertionError('90-second scenario deadline exceeded')
+        os.write(self.fd, keys)
+        output = self.read(timeout=timeout, completed=lambda output: needle in output)
+        if needle not in output:
+            raise AssertionError(f'missing {needle!r} after PTY input {keys!r}: {output!r}')
+        return output
+
     def command(self, command):
-        return self.expect('scope> ', self.send(command.encode() + b'\r'))
+        # This path is only for single-line commands returning to the REPL.
+        # Typing redraws also contain the prompt. Wait past the submitted echo
+        # before recognizing the fresh prompt after synchronous command output.
+        if not command.isascii() or any(ord(ch) < 32 or ord(ch) == 127 for ch in command):
+            raise ValueError('command requires a single-line printable ASCII REPL command')
+        echo = 'scope> ' + command + '\n'
+
+        def completed(output):
+            _, submitted, following = output.partition(echo)
+            return bool(submitted) and following.endswith('scope> ')
+
+        if time.monotonic() >= self.deadline:
+            raise AssertionError('90-second scenario deadline exceeded')
+        os.write(self.fd, command.encode() + b'\r')
+        output = self.read(timeout=10, completed=completed)
+        if not completed(output):
+            raise AssertionError(f'missing post-submission prompt for {command!r} in PTY output: {output!r}')
+        return output
 
     def wait_exit(self, timeout=5):
         end = min(time.monotonic() + timeout, self.deadline)

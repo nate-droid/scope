@@ -1,0 +1,4 @@
+# Share artifacts with standalone example workspaces invoked within this checkout.
+# Cargo resolves this path relative to the repository, not the caller's directory.
+[build]
+target-dir = "target"

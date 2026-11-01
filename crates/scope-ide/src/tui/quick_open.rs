@@ -44,6 +44,8 @@ impl QuickOpen {
                 self.selected = 0;
                 self.error = None;
             }
+            KeyCode::Home => self.selected = 0,
+            KeyCode::End => self.selected = self.matches(app).len().saturating_sub(1),
             KeyCode::Up => {
                 self.selected = self.selected.min(self.matches(app).len().saturating_sub(1));
                 self.selected = self.selected.saturating_sub(1);
@@ -93,7 +95,7 @@ impl QuickOpen {
         frame.render_widget(Clear, modal);
         let block = Block::default()
             .borders(Borders::ALL)
-            .title("Quick open — Esc cancels");
+            .title("Quick open — Home/End first/last · Esc cancels");
         let inner = block.inner(modal);
         frame.render_widget(block, modal);
         if inner.is_empty() {
@@ -202,6 +204,44 @@ mod tests {
         assert!(picker.query.is_empty());
         assert_eq!(picker.selected, 1);
         assert!(picker.handle_key(key(KeyCode::Esc), &mut app));
+        assert!(app.open_document().is_none());
+    }
+
+    #[test]
+    fn home_and_end_jump_within_filtered_results() {
+        let root = TempWorkspace::new("quick_open_home_end");
+        root.write_file("a.txt", "a");
+        root.write_file("b.rs", "b");
+        root.write_file("c.txt", "c");
+        let mut app = App::new(root.workspace()).unwrap();
+        let mut picker = QuickOpen::default();
+
+        assert!(!picker.handle_key(key(KeyCode::End), &mut app));
+        assert_eq!(picker.selected, 2);
+        assert!(!picker.handle_key(key(KeyCode::Home), &mut app));
+        assert_eq!(picker.selected, 0);
+
+        type_query(&mut picker, &mut app, ".txt");
+        assert!(!picker.handle_key(key(KeyCode::End), &mut app));
+        assert_eq!(picker.selected, 1);
+        assert_eq!(picker.query, ".txt");
+        assert!(picker.handle_key(key(KeyCode::Enter), &mut app));
+        assert_eq!(app.open_document().unwrap().text(), "c");
+    }
+
+    #[test]
+    fn home_and_end_are_safe_with_no_matches() {
+        let root = TempWorkspace::new("quick_open_home_end_empty");
+        root.write_file("a.txt", "a");
+        let mut app = App::new(root.workspace()).unwrap();
+        let mut picker = QuickOpen::default();
+        type_query(&mut picker, &mut app, "missing");
+        for code in [KeyCode::End, KeyCode::Home] {
+            assert!(!picker.handle_key(key(code), &mut app));
+            assert_eq!(picker.selected, 0);
+        }
+        assert!(!picker.handle_key(key(KeyCode::Enter), &mut app));
+        assert_eq!(picker.error.as_deref(), Some("No matching files"));
         assert!(app.open_document().is_none());
     }
 

@@ -222,6 +222,11 @@ impl Proposals {
         Ok(())
     }
 
+    #[cfg(feature = "tui")]
+    pub(super) fn controller(&self) -> &SourceEditController {
+        &self.controller
+    }
+
     pub(super) fn controller_mut(&mut self) -> &mut SourceEditController {
         &mut self.controller
     }
@@ -496,6 +501,12 @@ impl Proposals {
                             "source proposal {} applied to buffer {}; {}",
                             id.0, target_buffer, assurance
                         )?;
+                        if buffers.get(target_buffer)?.language_id() == "language.path" {
+                            writeln!(
+                                output,
+                                "Committed theorem not yet checked. F1: Path: Inspect Goals / Check Theorem; acceptance is an in-memory edit, not final kernel acceptance. F3 returns to editing."
+                            )?;
+                        }
                     }
                     _ => {
                         let buffer = buffers.get(target_buffer)?;
@@ -651,7 +662,8 @@ mod tests {
                     checks: std::collections::BTreeMap::new(),
                 },
             ),
-            ..Default::default()
+            #[cfg(feature = "agent")]
+            editing: None,
         };
         let mut baseline = ScratchBuffers::default();
         baseline.create("scope-script", original);

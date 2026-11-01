@@ -1,0 +1,4257 @@
+{
+  "adapter": "CellAgent / cell-capability-openai",
+  "aggregates": [
+    {
+      "adapter_errors": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "budget_exhaustions": 0,
+      "calls": {
+        "available_runs": 2,
+        "sum": 2.0
+      },
+      "corrections": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "cumulative_input_bytes": {
+        "available_runs": 2,
+        "sum": 42686.0
+      },
+      "cumulative_output_bytes": {
+        "available_runs": 2,
+        "sum": 402.0
+      },
+      "distinct_feedback_content_bytes": {
+        "available_runs": 2,
+        "sum": 25736.0
+      },
+      "elapsed_ms": {
+        "available_runs": 2,
+        "sum": 22140.712832999998
+      },
+      "error_runs": 0,
+      "failed": 0,
+      "fresh": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "input_tokens": null,
+      "malformed": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "model_claim_matches_verification": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "output_tokens": null,
+      "passed": 2,
+      "rejections": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "runs": 2,
+      "scenario": "positive",
+      "source_unchanged": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "store_get_import_valid": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "task_claim_matches_expected": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "variant": "baseline"
+    },
+    {
+      "adapter_errors": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "budget_exhaustions": 0,
+      "calls": {
+        "available_runs": 2,
+        "sum": 2.0
+      },
+      "corrections": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "cumulative_input_bytes": {
+        "available_runs": 2,
+        "sum": 44688.0
+      },
+      "cumulative_output_bytes": {
+        "available_runs": 2,
+        "sum": 382.0
+      },
+      "distinct_feedback_content_bytes": {
+        "available_runs": 2,
+        "sum": 27768.0
+      },
+      "elapsed_ms": {
+        "available_runs": 2,
+        "sum": 24238.929291
+      },
+      "error_runs": 0,
+      "failed": 2,
+      "fresh": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "input_tokens": null,
+      "malformed": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "model_claim_matches_verification": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "output_tokens": null,
+      "passed": 0,
+      "rejections": {
+        "available_runs": 2,
+        "sum": 2.0
+      },
+      "runs": 2,
+      "scenario": "rejection_refinement",
+      "source_unchanged": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "store_get_import_valid": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "task_claim_matches_expected": {
+        "false_runs": 2,
+        "true_runs": 0,
+        "unavailable_runs": 0
+      },
+      "variant": "baseline"
+    },
+    {
+      "adapter_errors": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "budget_exhaustions": 0,
+      "calls": {
+        "available_runs": 2,
+        "sum": 2.0
+      },
+      "corrections": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "cumulative_input_bytes": {
+        "available_runs": 2,
+        "sum": 46938.0
+      },
+      "cumulative_output_bytes": {
+        "available_runs": 2,
+        "sum": 386.0
+      },
+      "distinct_feedback_content_bytes": {
+        "available_runs": 2,
+        "sum": 30018.0
+      },
+      "elapsed_ms": {
+        "available_runs": 2,
+        "sum": 25794.413416
+      },
+      "error_runs": 0,
+      "failed": 0,
+      "fresh": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "input_tokens": null,
+      "malformed": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "model_claim_matches_verification": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "output_tokens": null,
+      "passed": 2,
+      "rejections": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "runs": 2,
+      "scenario": "incomplete",
+      "source_unchanged": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "store_get_import_valid": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "task_claim_matches_expected": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "variant": "baseline"
+    },
+    {
+      "adapter_errors": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "budget_exhaustions": 0,
+      "calls": {
+        "available_runs": 2,
+        "sum": 2.0
+      },
+      "corrections": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "cumulative_input_bytes": {
+        "available_runs": 2,
+        "sum": 44688.0
+      },
+      "cumulative_output_bytes": {
+        "available_runs": 2,
+        "sum": 382.0
+      },
+      "distinct_feedback_content_bytes": {
+        "available_runs": 2,
+        "sum": 27768.0
+      },
+      "elapsed_ms": {
+        "available_runs": 2,
+        "sum": 24688.876917
+      },
+      "error_runs": 0,
+      "failed": 2,
+      "fresh": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "input_tokens": null,
+      "malformed": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "model_claim_matches_verification": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "output_tokens": null,
+      "passed": 0,
+      "rejections": {
+        "available_runs": 2,
+        "sum": 2.0
+      },
+      "runs": 2,
+      "scenario": "tight_recovery",
+      "source_unchanged": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "store_get_import_valid": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "task_claim_matches_expected": {
+        "false_runs": 2,
+        "true_runs": 0,
+        "unavailable_runs": 0
+      },
+      "variant": "baseline"
+    },
+    {
+      "adapter_errors": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "budget_exhaustions": 0,
+      "calls": {
+        "available_runs": 2,
+        "sum": 2.0
+      },
+      "corrections": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "cumulative_input_bytes": {
+        "available_runs": 2,
+        "sum": 41558.0
+      },
+      "cumulative_output_bytes": {
+        "available_runs": 2,
+        "sum": 402.0
+      },
+      "distinct_feedback_content_bytes": {
+        "available_runs": 2,
+        "sum": 25736.0
+      },
+      "elapsed_ms": {
+        "available_runs": 2,
+        "sum": 21567.137416999998
+      },
+      "error_runs": 0,
+      "failed": 0,
+      "fresh": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "input_tokens": null,
+      "malformed": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "model_claim_matches_verification": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "output_tokens": null,
+      "passed": 2,
+      "rejections": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "runs": 2,
+      "scenario": "positive",
+      "source_unchanged": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "store_get_import_valid": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "task_claim_matches_expected": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "variant": "H2"
+    },
+    {
+      "adapter_errors": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "budget_exhaustions": 0,
+      "calls": {
+        "available_runs": 2,
+        "sum": 2.0
+      },
+      "corrections": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "cumulative_input_bytes": {
+        "available_runs": 2,
+        "sum": 43560.0
+      },
+      "cumulative_output_bytes": {
+        "available_runs": 2,
+        "sum": 382.0
+      },
+      "distinct_feedback_content_bytes": {
+        "available_runs": 2,
+        "sum": 27768.0
+      },
+      "elapsed_ms": {
+        "available_runs": 2,
+        "sum": 23072.427750000003
+      },
+      "error_runs": 0,
+      "failed": 2,
+      "fresh": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "input_tokens": null,
+      "malformed": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "model_claim_matches_verification": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "output_tokens": null,
+      "passed": 0,
+      "rejections": {
+        "available_runs": 2,
+        "sum": 2.0
+      },
+      "runs": 2,
+      "scenario": "rejection_refinement",
+      "source_unchanged": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "store_get_import_valid": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "task_claim_matches_expected": {
+        "false_runs": 2,
+        "true_runs": 0,
+        "unavailable_runs": 0
+      },
+      "variant": "H2"
+    },
+    {
+      "adapter_errors": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "budget_exhaustions": 0,
+      "calls": {
+        "available_runs": 2,
+        "sum": 2.0
+      },
+      "corrections": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "cumulative_input_bytes": {
+        "available_runs": 2,
+        "sum": 45810.0
+      },
+      "cumulative_output_bytes": {
+        "available_runs": 2,
+        "sum": 386.0
+      },
+      "distinct_feedback_content_bytes": {
+        "available_runs": 2,
+        "sum": 30018.0
+      },
+      "elapsed_ms": {
+        "available_runs": 2,
+        "sum": 24246.509
+      },
+      "error_runs": 0,
+      "failed": 0,
+      "fresh": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "input_tokens": null,
+      "malformed": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "model_claim_matches_verification": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "output_tokens": null,
+      "passed": 2,
+      "rejections": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "runs": 2,
+      "scenario": "incomplete",
+      "source_unchanged": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "store_get_import_valid": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "task_claim_matches_expected": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "variant": "H2"
+    },
+    {
+      "adapter_errors": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "budget_exhaustions": 0,
+      "calls": {
+        "available_runs": 2,
+        "sum": 2.0
+      },
+      "corrections": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "cumulative_input_bytes": {
+        "available_runs": 2,
+        "sum": 43560.0
+      },
+      "cumulative_output_bytes": {
+        "available_runs": 2,
+        "sum": 382.0
+      },
+      "distinct_feedback_content_bytes": {
+        "available_runs": 2,
+        "sum": 27768.0
+      },
+      "elapsed_ms": {
+        "available_runs": 2,
+        "sum": 23129.880748999996
+      },
+      "error_runs": 0,
+      "failed": 2,
+      "fresh": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "input_tokens": null,
+      "malformed": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "model_claim_matches_verification": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "output_tokens": null,
+      "passed": 0,
+      "rejections": {
+        "available_runs": 2,
+        "sum": 2.0
+      },
+      "runs": 2,
+      "scenario": "tight_recovery",
+      "source_unchanged": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "store_get_import_valid": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "task_claim_matches_expected": {
+        "false_runs": 2,
+        "true_runs": 0,
+        "unavailable_runs": 0
+      },
+      "variant": "H2"
+    },
+    {
+      "adapter_errors": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "budget_exhaustions": 0,
+      "calls": {
+        "available_runs": 2,
+        "sum": 2.0
+      },
+      "corrections": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "cumulative_input_bytes": {
+        "available_runs": 2,
+        "sum": 16958.0
+      },
+      "cumulative_output_bytes": {
+        "available_runs": 2,
+        "sum": 408.0
+      },
+      "distinct_feedback_content_bytes": {
+        "available_runs": 2,
+        "sum": 1136.0
+      },
+      "elapsed_ms": {
+        "available_runs": 2,
+        "sum": 3161.214083
+      },
+      "error_runs": 0,
+      "failed": 0,
+      "fresh": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "input_tokens": null,
+      "malformed": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "model_claim_matches_verification": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "output_tokens": null,
+      "passed": 2,
+      "rejections": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "runs": 2,
+      "scenario": "positive",
+      "source_unchanged": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "store_get_import_valid": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "task_claim_matches_expected": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "variant": "H3"
+    },
+    {
+      "adapter_errors": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "budget_exhaustions": 0,
+      "calls": {
+        "available_runs": 2,
+        "sum": 2.0
+      },
+      "corrections": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "cumulative_input_bytes": {
+        "available_runs": 2,
+        "sum": 16958.0
+      },
+      "cumulative_output_bytes": {
+        "available_runs": 2,
+        "sum": 382.0
+      },
+      "distinct_feedback_content_bytes": {
+        "available_runs": 2,
+        "sum": 1166.0
+      },
+      "elapsed_ms": {
+        "available_runs": 2,
+        "sum": 2875.749459
+      },
+      "error_runs": 0,
+      "failed": 2,
+      "fresh": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "input_tokens": null,
+      "malformed": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "model_claim_matches_verification": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "output_tokens": null,
+      "passed": 0,
+      "rejections": {
+        "available_runs": 2,
+        "sum": 2.0
+      },
+      "runs": 2,
+      "scenario": "rejection_refinement",
+      "source_unchanged": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "store_get_import_valid": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "task_claim_matches_expected": {
+        "false_runs": 2,
+        "true_runs": 0,
+        "unavailable_runs": 0
+      },
+      "variant": "H3"
+    },
+    {
+      "adapter_errors": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "budget_exhaustions": 0,
+      "calls": {
+        "available_runs": 2,
+        "sum": 2.0
+      },
+      "corrections": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "cumulative_input_bytes": {
+        "available_runs": 2,
+        "sum": 16952.0
+      },
+      "cumulative_output_bytes": {
+        "available_runs": 2,
+        "sum": 386.0
+      },
+      "distinct_feedback_content_bytes": {
+        "available_runs": 2,
+        "sum": 1160.0
+      },
+      "elapsed_ms": {
+        "available_runs": 2,
+        "sum": 2918.6883340000004
+      },
+      "error_runs": 0,
+      "failed": 0,
+      "fresh": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "input_tokens": null,
+      "malformed": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "model_claim_matches_verification": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "output_tokens": null,
+      "passed": 2,
+      "rejections": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "runs": 2,
+      "scenario": "incomplete",
+      "source_unchanged": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "store_get_import_valid": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "task_claim_matches_expected": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "variant": "H3"
+    },
+    {
+      "adapter_errors": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "budget_exhaustions": 0,
+      "calls": {
+        "available_runs": 2,
+        "sum": 2.0
+      },
+      "corrections": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "cumulative_input_bytes": {
+        "available_runs": 2,
+        "sum": 16958.0
+      },
+      "cumulative_output_bytes": {
+        "available_runs": 2,
+        "sum": 388.0
+      },
+      "distinct_feedback_content_bytes": {
+        "available_runs": 2,
+        "sum": 1166.0
+      },
+      "elapsed_ms": {
+        "available_runs": 2,
+        "sum": 3149.859958
+      },
+      "error_runs": 0,
+      "failed": 2,
+      "fresh": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "input_tokens": null,
+      "malformed": {
+        "available_runs": 2,
+        "sum": 0.0
+      },
+      "model_claim_matches_verification": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "output_tokens": null,
+      "passed": 0,
+      "rejections": {
+        "available_runs": 2,
+        "sum": 2.0
+      },
+      "runs": 2,
+      "scenario": "tight_recovery",
+      "source_unchanged": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "store_get_import_valid": {
+        "false_runs": 0,
+        "true_runs": 2,
+        "unavailable_runs": 0
+      },
+      "task_claim_matches_expected": {
+        "false_runs": 2,
+        "true_runs": 0,
+        "unavailable_runs": 0
+      },
+      "variant": "H3"
+    }
+  ],
+  "clock": "std::time::Instant (monotonic)",
+  "completed_attempts": 24,
+  "elapsed_ms": 201079.845,
+  "endpoint": "http://127.0.0.1:1234/v1",
+  "expected_runs": 24,
+  "limitations": [
+    "Token usage not exposed by DecisionModel/CellAgent: null, not estimated.",
+    "Adapter exposes no seed/top-p/reasoning control; LM Studio loaded model identity and server defaults are not attested.",
+    "320 tokens is a requested cap; /no_think is a prompt hint, not an enforced server setting.",
+    "Byte metrics count UTF-8 role+content, not HTTP framing or tokens; distinct feedback is measured in memory only.",
+    "Sequential loopback calls; latency includes runner and independent verification, not isolated inference.",
+    "No raw native payloads, arbitrary model prose, or backend error bodies are retained.",
+    "Without an explicit completion candidate, independently check the last model tool proposal (even if budget-blocked); otherwise use the labeled last authorized candidate.",
+    "model_claim_matches_verification measures actual claim/classification agreement (null if unavailable); task_claim_matches_expected and passed measure task expectations separately.",
+    "Tight recovery has three decisions: no spare decision for a malformed-response retry.",
+    "Independent verification is outside agent budgets and verifies a hypothetical candidate, never the unchanged source."
+  ],
+  "metric_schema_version": 2,
+  "mode": "h4-real",
+  "model": "qwen3-30b-a3b",
+  "repeats": 2,
+  "runs": [
+    {
+      "adapter_errors": 0,
+      "authorization_rejections": 0,
+      "authorized_candidates": [
+        "refl x"
+      ],
+      "budget_exhausted": false,
+      "callbacks": 10,
+      "calls": 1,
+      "corrections": 0,
+      "cumulative_input_bytes": 21343,
+      "cumulative_output_bytes": 201,
+      "decision_input_bytes": [
+        4171,
+        17172
+      ],
+      "decision_output_bytes": [
+        120,
+        81
+      ],
+      "distinct_feedback_content_bytes": 12868,
+      "distinct_feedback_count": 1,
+      "elapsed_ms": 10953.754332999999,
+      "final_candidate": "refl x",
+      "final_candidate_origin": "completion",
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Verified",
+        "invocations": 1,
+        "outside_agent_budget": true,
+        "subject": "hypothetical candidate, not source proof"
+      },
+      "initial_candidate": "refl x",
+      "initial_input_bytes": 4171,
+      "input_tokens": null,
+      "lifecycle": [
+        "Ready",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Completed"
+      ],
+      "limits": {
+        "max_conversation_bytes": 196608,
+        "max_decisions": 4,
+        "max_malformed": 1,
+        "max_message_bytes": 65536,
+        "max_tokens_per_decision": 320,
+        "max_tool_calls": 2
+      },
+      "malformed": 0,
+      "model_claim": "verified",
+      "model_claim_matches_verification": true,
+      "output_tokens": null,
+      "passed": true,
+      "publish_errors": 0,
+      "rejections": 0,
+      "repetition": 1,
+      "request": "Evaluate hypothetical replacement for goal 0 of this unchanged Path source: theorem trial (A : Type 0) (x : A) : Id A x x := ?\n\nFirst call language.language.path.evaluate_goal_candidate with goal_id 0 and replacement \"refl x\". On rejection, infer a corrected candidate and evaluate it; do not claim success without a kernel-checked result. On incomplete/inconclusive stop unresolved, not verified. Complete with content containing a JSON string object with candidate (the final proposed replacement) and claim (verified, rejected, or unresolved). This is read-only candidate evaluation, not verification of the source containing a hole. /no_think",
+      "safe_decisions": [
+        {
+          "candidate": "refl x",
+          "fixture_tool": true,
+          "goal_id": 0,
+          "json_parsed": true,
+          "response_bytes": 120,
+          "type": "tool"
+        },
+        {
+          "candidate": "refl x",
+          "claim": "verified",
+          "content_bytes": 41,
+          "json_parsed": true,
+          "response_bytes": 81,
+          "type": "complete"
+        }
+      ],
+      "safe_evidence": [
+        {
+          "kind": "decision",
+          "ordinal": 1
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 1,
+          "response_bytes": 120
+        },
+        {
+          "kind": "tool",
+          "ordinal": 1,
+          "outcome": "Success",
+          "request_ordinal": 1
+        },
+        {
+          "kind": "decision",
+          "ordinal": 2
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 2,
+          "response_bytes": 81
+        }
+      ],
+      "scenario": "positive",
+      "sequence_ok": true,
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "task_claim_matches_expected": true,
+      "trusted_classifications": [
+        "Verified"
+      ],
+      "usage": {
+        "conversation_bytes": 17230,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "baseline"
+    },
+    {
+      "adapter_errors": 0,
+      "authorization_rejections": 0,
+      "authorized_candidates": [
+        "refl x"
+      ],
+      "budget_exhausted": false,
+      "callbacks": 11,
+      "calls": 1,
+      "corrections": 0,
+      "cumulative_input_bytes": 20779,
+      "cumulative_output_bytes": 201,
+      "decision_input_bytes": [
+        3889,
+        16890
+      ],
+      "decision_output_bytes": [
+        120,
+        81
+      ],
+      "distinct_feedback_content_bytes": 12868,
+      "distinct_feedback_count": 1,
+      "elapsed_ms": 10795.634833999999,
+      "final_candidate": "refl x",
+      "final_candidate_origin": "completion",
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Verified",
+        "invocations": 1,
+        "outside_agent_budget": true,
+        "subject": "hypothetical candidate, not source proof"
+      },
+      "initial_candidate": "refl x",
+      "initial_input_bytes": 3889,
+      "input_tokens": null,
+      "lifecycle": [
+        "Ready",
+        "Ready",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Completed"
+      ],
+      "limits": {
+        "max_conversation_bytes": 196608,
+        "max_decisions": 4,
+        "max_malformed": 1,
+        "max_message_bytes": 65536,
+        "max_tokens_per_decision": 320,
+        "max_tool_calls": 2
+      },
+      "malformed": 0,
+      "model_claim": "verified",
+      "model_claim_matches_verification": true,
+      "output_tokens": null,
+      "passed": true,
+      "publish_errors": 0,
+      "rejections": 0,
+      "repetition": 1,
+      "request": "Evaluate hypothetical replacement for goal 0 of this unchanged Path source: theorem trial (A : Type 0) (x : A) : Id A x x := ?\n\nFirst call language.language.path.evaluate_goal_candidate with goal_id 0 and replacement \"refl x\". On rejection, infer a corrected candidate and evaluate it; do not claim success without a kernel-checked result. On incomplete/inconclusive stop unresolved, not verified. Complete with content containing a JSON string object with candidate (the final proposed replacement) and claim (verified, rejected, or unresolved). This is read-only candidate evaluation, not verification of the source containing a hole. /no_think",
+      "safe_decisions": [
+        {
+          "candidate": "refl x",
+          "fixture_tool": true,
+          "goal_id": 0,
+          "json_parsed": true,
+          "response_bytes": 120,
+          "type": "tool"
+        },
+        {
+          "candidate": "refl x",
+          "claim": "verified",
+          "content_bytes": 41,
+          "json_parsed": true,
+          "response_bytes": 81,
+          "type": "complete"
+        }
+      ],
+      "safe_evidence": [
+        {
+          "bounded": false,
+          "bytes": 1708,
+          "kind": "context_assembly",
+          "success": true
+        },
+        {
+          "kind": "decision",
+          "ordinal": 1
+        },
+        {
+          "initial_message_bytes": 2409,
+          "kind": "context_supplied",
+          "packet_bytes": 1708
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 1,
+          "response_bytes": 120
+        },
+        {
+          "kind": "tool",
+          "ordinal": 1,
+          "outcome": "Success",
+          "request_ordinal": 1
+        },
+        {
+          "kind": "decision",
+          "ordinal": 2
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 2,
+          "response_bytes": 81
+        }
+      ],
+      "scenario": "positive",
+      "sequence_ok": true,
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "task_claim_matches_expected": true,
+      "trusted_classifications": [
+        "Verified"
+      ],
+      "usage": {
+        "conversation_bytes": 16948,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "H2"
+    },
+    {
+      "adapter_errors": 0,
+      "authorization_rejections": 0,
+      "authorized_candidates": [
+        "refl x"
+      ],
+      "budget_exhausted": false,
+      "callbacks": 12,
+      "calls": 1,
+      "corrections": 0,
+      "cumulative_input_bytes": 8479,
+      "cumulative_output_bytes": 204,
+      "decision_input_bytes": [
+        3889,
+        4590
+      ],
+      "decision_output_bytes": [
+        120,
+        84
+      ],
+      "distinct_feedback_content_bytes": 568,
+      "distinct_feedback_count": 1,
+      "elapsed_ms": 1587.05325,
+      "final_candidate": "refl x",
+      "final_candidate_origin": "completion",
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Verified",
+        "invocations": 1,
+        "outside_agent_budget": true,
+        "subject": "hypothetical candidate, not source proof"
+      },
+      "initial_candidate": "refl x",
+      "initial_input_bytes": 3889,
+      "input_tokens": null,
+      "lifecycle": [
+        "Ready",
+        "Ready",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Completed"
+      ],
+      "limits": {
+        "max_conversation_bytes": 196608,
+        "max_decisions": 4,
+        "max_malformed": 1,
+        "max_message_bytes": 65536,
+        "max_tokens_per_decision": 320,
+        "max_tool_calls": 2
+      },
+      "malformed": 0,
+      "model_claim": "verified",
+      "model_claim_matches_verification": true,
+      "output_tokens": null,
+      "passed": true,
+      "publish_errors": 0,
+      "rejections": 0,
+      "repetition": 1,
+      "request": "Evaluate hypothetical replacement for goal 0 of this unchanged Path source: theorem trial (A : Type 0) (x : A) : Id A x x := ?\n\nFirst call language.language.path.evaluate_goal_candidate with goal_id 0 and replacement \"refl x\". On rejection, infer a corrected candidate and evaluate it; do not claim success without a kernel-checked result. On incomplete/inconclusive stop unresolved, not verified. Complete with content containing a JSON string object with candidate (the final proposed replacement) and claim (verified, rejected, or unresolved). This is read-only candidate evaluation, not verification of the source containing a hole. /no_think",
+      "safe_decisions": [
+        {
+          "candidate": "refl x",
+          "fixture_tool": true,
+          "goal_id": 0,
+          "json_parsed": true,
+          "response_bytes": 120,
+          "type": "tool"
+        },
+        {
+          "candidate": "refl x",
+          "claim": "verified",
+          "content_bytes": 44,
+          "json_parsed": true,
+          "response_bytes": 84,
+          "type": "complete"
+        }
+      ],
+      "safe_evidence": [
+        {
+          "bounded": false,
+          "bytes": 1708,
+          "kind": "context_assembly",
+          "success": true
+        },
+        {
+          "kind": "decision",
+          "ordinal": 1
+        },
+        {
+          "initial_message_bytes": 2409,
+          "kind": "context_supplied",
+          "packet_bytes": 1708
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 1,
+          "response_bytes": 120
+        },
+        {
+          "kind": "tool",
+          "ordinal": 1,
+          "outcome": "Success",
+          "request_ordinal": 1
+        },
+        {
+          "call_ordinal": 1,
+          "kind": "verification",
+          "observation": {
+            "authority": "Path kernel/candidate evaluator",
+            "classification": "Verified",
+            "completeness": "SelectedFields",
+            "operation": "language.language.path.evaluate_goal_candidate",
+            "source": {
+              "identity": {
+                "identity": "0",
+                "kind": "scratch_buffer"
+              },
+              "language": "language.path",
+              "revision": 0
+            },
+            "subject": "HypotheticalCandidate"
+          },
+          "request_ordinal": 1
+        },
+        {
+          "kind": "decision",
+          "ordinal": 2
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 2,
+          "response_bytes": 84
+        }
+      ],
+      "scenario": "positive",
+      "sequence_ok": true,
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "task_claim_matches_expected": true,
+      "trusted_classifications": [
+        "Verified"
+      ],
+      "usage": {
+        "conversation_bytes": 4651,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "H3"
+    },
+    {
+      "adapter_errors": 0,
+      "authorization_rejections": 0,
+      "authorized_candidates": [
+        "x"
+      ],
+      "budget_exhausted": false,
+      "callbacks": 10,
+      "calls": 1,
+      "corrections": 0,
+      "cumulative_input_bytes": 22344,
+      "cumulative_output_bytes": 191,
+      "decision_input_bytes": [
+        4166,
+        18178
+      ],
+      "decision_output_bytes": [
+        115,
+        76
+      ],
+      "distinct_feedback_content_bytes": 13884,
+      "distinct_feedback_count": 1,
+      "elapsed_ms": 12151.383958,
+      "final_candidate": "x",
+      "final_candidate_origin": "completion",
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Rejected",
+        "invocations": 1,
+        "outside_agent_budget": true,
+        "subject": "hypothetical candidate, not source proof"
+      },
+      "initial_candidate": "x",
+      "initial_input_bytes": 4166,
+      "input_tokens": null,
+      "lifecycle": [
+        "Ready",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Completed"
+      ],
+      "limits": {
+        "max_conversation_bytes": 196608,
+        "max_decisions": 4,
+        "max_malformed": 1,
+        "max_message_bytes": 65536,
+        "max_tokens_per_decision": 320,
+        "max_tool_calls": 2
+      },
+      "malformed": 0,
+      "model_claim": "rejected",
+      "model_claim_matches_verification": true,
+      "output_tokens": null,
+      "passed": false,
+      "publish_errors": 0,
+      "rejections": 1,
+      "repetition": 1,
+      "request": "Evaluate hypothetical replacement for goal 0 of this unchanged Path source: theorem trial (A : Type 0) (x : A) : Id A x x := ?\n\nFirst call language.language.path.evaluate_goal_candidate with goal_id 0 and replacement \"x\". On rejection, infer a corrected candidate and evaluate it; do not claim success without a kernel-checked result. On incomplete/inconclusive stop unresolved, not verified. Complete with content containing a JSON string object with candidate (the final proposed replacement) and claim (verified, rejected, or unresolved). This is read-only candidate evaluation, not verification of the source containing a hole. /no_think",
+      "safe_decisions": [
+        {
+          "candidate": "x",
+          "fixture_tool": true,
+          "goal_id": 0,
+          "json_parsed": true,
+          "response_bytes": 115,
+          "type": "tool"
+        },
+        {
+          "candidate": "x",
+          "claim": "rejected",
+          "content_bytes": 36,
+          "json_parsed": true,
+          "response_bytes": 76,
+          "type": "complete"
+        }
+      ],
+      "safe_evidence": [
+        {
+          "kind": "decision",
+          "ordinal": 1
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 1,
+          "response_bytes": 115
+        },
+        {
+          "kind": "tool",
+          "ordinal": 1,
+          "outcome": "Success",
+          "request_ordinal": 1
+        },
+        {
+          "kind": "decision",
+          "ordinal": 2
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 2,
+          "response_bytes": 76
+        }
+      ],
+      "scenario": "rejection_refinement",
+      "sequence_ok": false,
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "task_claim_matches_expected": false,
+      "trusted_classifications": [
+        "Rejected"
+      ],
+      "usage": {
+        "conversation_bytes": 18231,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "baseline"
+    },
+    {
+      "adapter_errors": 0,
+      "authorization_rejections": 0,
+      "authorized_candidates": [
+        "x"
+      ],
+      "budget_exhausted": false,
+      "callbacks": 11,
+      "calls": 1,
+      "corrections": 0,
+      "cumulative_input_bytes": 21780,
+      "cumulative_output_bytes": 191,
+      "decision_input_bytes": [
+        3884,
+        17896
+      ],
+      "decision_output_bytes": [
+        115,
+        76
+      ],
+      "distinct_feedback_content_bytes": 13884,
+      "distinct_feedback_count": 1,
+      "elapsed_ms": 11563.601084,
+      "final_candidate": "x",
+      "final_candidate_origin": "completion",
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Rejected",
+        "invocations": 1,
+        "outside_agent_budget": true,
+        "subject": "hypothetical candidate, not source proof"
+      },
+      "initial_candidate": "x",
+      "initial_input_bytes": 3884,
+      "input_tokens": null,
+      "lifecycle": [
+        "Ready",
+        "Ready",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Completed"
+      ],
+      "limits": {
+        "max_conversation_bytes": 196608,
+        "max_decisions": 4,
+        "max_malformed": 1,
+        "max_message_bytes": 65536,
+        "max_tokens_per_decision": 320,
+        "max_tool_calls": 2
+      },
+      "malformed": 0,
+      "model_claim": "rejected",
+      "model_claim_matches_verification": true,
+      "output_tokens": null,
+      "passed": false,
+      "publish_errors": 0,
+      "rejections": 1,
+      "repetition": 1,
+      "request": "Evaluate hypothetical replacement for goal 0 of this unchanged Path source: theorem trial (A : Type 0) (x : A) : Id A x x := ?\n\nFirst call language.language.path.evaluate_goal_candidate with goal_id 0 and replacement \"x\". On rejection, infer a corrected candidate and evaluate it; do not claim success without a kernel-checked result. On incomplete/inconclusive stop unresolved, not verified. Complete with content containing a JSON string object with candidate (the final proposed replacement) and claim (verified, rejected, or unresolved). This is read-only candidate evaluation, not verification of the source containing a hole. /no_think",
+      "safe_decisions": [
+        {
+          "candidate": "x",
+          "fixture_tool": true,
+          "goal_id": 0,
+          "json_parsed": true,
+          "response_bytes": 115,
+          "type": "tool"
+        },
+        {
+          "candidate": "x",
+          "claim": "rejected",
+          "content_bytes": 36,
+          "json_parsed": true,
+          "response_bytes": 76,
+          "type": "complete"
+        }
+      ],
+      "safe_evidence": [
+        {
+          "bounded": false,
+          "bytes": 1708,
+          "kind": "context_assembly",
+          "success": true
+        },
+        {
+          "kind": "decision",
+          "ordinal": 1
+        },
+        {
+          "initial_message_bytes": 2404,
+          "kind": "context_supplied",
+          "packet_bytes": 1708
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 1,
+          "response_bytes": 115
+        },
+        {
+          "kind": "tool",
+          "ordinal": 1,
+          "outcome": "Success",
+          "request_ordinal": 1
+        },
+        {
+          "kind": "decision",
+          "ordinal": 2
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 2,
+          "response_bytes": 76
+        }
+      ],
+      "scenario": "rejection_refinement",
+      "sequence_ok": false,
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "task_claim_matches_expected": false,
+      "trusted_classifications": [
+        "Rejected"
+      ],
+      "usage": {
+        "conversation_bytes": 17949,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "H2"
+    },
+    {
+      "adapter_errors": 0,
+      "authorization_rejections": 0,
+      "authorized_candidates": [
+        "x"
+      ],
+      "budget_exhausted": false,
+      "callbacks": 12,
+      "calls": 1,
+      "corrections": 0,
+      "cumulative_input_bytes": 8479,
+      "cumulative_output_bytes": 191,
+      "decision_input_bytes": [
+        3884,
+        4595
+      ],
+      "decision_output_bytes": [
+        115,
+        76
+      ],
+      "distinct_feedback_content_bytes": 583,
+      "distinct_feedback_count": 1,
+      "elapsed_ms": 1422.190917,
+      "final_candidate": "x",
+      "final_candidate_origin": "completion",
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Rejected",
+        "invocations": 1,
+        "outside_agent_budget": true,
+        "subject": "hypothetical candidate, not source proof"
+      },
+      "initial_candidate": "x",
+      "initial_input_bytes": 3884,
+      "input_tokens": null,
+      "lifecycle": [
+        "Ready",
+        "Ready",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Completed"
+      ],
+      "limits": {
+        "max_conversation_bytes": 196608,
+        "max_decisions": 4,
+        "max_malformed": 1,
+        "max_message_bytes": 65536,
+        "max_tokens_per_decision": 320,
+        "max_tool_calls": 2
+      },
+      "malformed": 0,
+      "model_claim": "rejected",
+      "model_claim_matches_verification": true,
+      "output_tokens": null,
+      "passed": false,
+      "publish_errors": 0,
+      "rejections": 1,
+      "repetition": 1,
+      "request": "Evaluate hypothetical replacement for goal 0 of this unchanged Path source: theorem trial (A : Type 0) (x : A) : Id A x x := ?\n\nFirst call language.language.path.evaluate_goal_candidate with goal_id 0 and replacement \"x\". On rejection, infer a corrected candidate and evaluate it; do not claim success without a kernel-checked result. On incomplete/inconclusive stop unresolved, not verified. Complete with content containing a JSON string object with candidate (the final proposed replacement) and claim (verified, rejected, or unresolved). This is read-only candidate evaluation, not verification of the source containing a hole. /no_think",
+      "safe_decisions": [
+        {
+          "candidate": "x",
+          "fixture_tool": true,
+          "goal_id": 0,
+          "json_parsed": true,
+          "response_bytes": 115,
+          "type": "tool"
+        },
+        {
+          "candidate": "x",
+          "claim": "rejected",
+          "content_bytes": 36,
+          "json_parsed": true,
+          "response_bytes": 76,
+          "type": "complete"
+        }
+      ],
+      "safe_evidence": [
+        {
+          "bounded": false,
+          "bytes": 1708,
+          "kind": "context_assembly",
+          "success": true
+        },
+        {
+          "kind": "decision",
+          "ordinal": 1
+        },
+        {
+          "initial_message_bytes": 2404,
+          "kind": "context_supplied",
+          "packet_bytes": 1708
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 1,
+          "response_bytes": 115
+        },
+        {
+          "kind": "tool",
+          "ordinal": 1,
+          "outcome": "Success",
+          "request_ordinal": 1
+        },
+        {
+          "call_ordinal": 1,
+          "kind": "verification",
+          "observation": {
+            "authority": "Path kernel/candidate evaluator",
+            "classification": "Rejected",
+            "completeness": "SelectedFields",
+            "operation": "language.language.path.evaluate_goal_candidate",
+            "source": {
+              "identity": {
+                "identity": "0",
+                "kind": "scratch_buffer"
+              },
+              "language": "language.path",
+              "revision": 0
+            },
+            "subject": "HypotheticalCandidate"
+          },
+          "request_ordinal": 1
+        },
+        {
+          "kind": "decision",
+          "ordinal": 2
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 2,
+          "response_bytes": 76
+        }
+      ],
+      "scenario": "rejection_refinement",
+      "sequence_ok": false,
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "task_claim_matches_expected": false,
+      "trusted_classifications": [
+        "Rejected"
+      ],
+      "usage": {
+        "conversation_bytes": 4648,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "H3"
+    },
+    {
+      "adapter_errors": 0,
+      "authorization_rejections": 0,
+      "authorized_candidates": [
+        "?"
+      ],
+      "budget_exhausted": false,
+      "callbacks": 10,
+      "calls": 1,
+      "corrections": 0,
+      "cumulative_input_bytes": 23469,
+      "cumulative_output_bytes": 193,
+      "decision_input_bytes": [
+        4166,
+        19303
+      ],
+      "decision_output_bytes": [
+        115,
+        78
+      ],
+      "distinct_feedback_content_bytes": 15009,
+      "distinct_feedback_count": 1,
+      "elapsed_ms": 12874.732666,
+      "final_candidate": "?",
+      "final_candidate_origin": "completion",
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Inconclusive",
+        "invocations": 1,
+        "outside_agent_budget": true,
+        "subject": "hypothetical candidate, not source proof"
+      },
+      "initial_candidate": "?",
+      "initial_input_bytes": 4166,
+      "input_tokens": null,
+      "lifecycle": [
+        "Ready",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Completed"
+      ],
+      "limits": {
+        "max_conversation_bytes": 196608,
+        "max_decisions": 4,
+        "max_malformed": 1,
+        "max_message_bytes": 65536,
+        "max_tokens_per_decision": 320,
+        "max_tool_calls": 2
+      },
+      "malformed": 0,
+      "model_claim": "unresolved",
+      "model_claim_matches_verification": true,
+      "output_tokens": null,
+      "passed": true,
+      "publish_errors": 0,
+      "rejections": 0,
+      "repetition": 1,
+      "request": "Evaluate hypothetical replacement for goal 0 of this unchanged Path source: theorem trial (A : Type 0) (x : A) : Id A x x := ?\n\nFirst call language.language.path.evaluate_goal_candidate with goal_id 0 and replacement \"?\". On rejection, infer a corrected candidate and evaluate it; do not claim success without a kernel-checked result. On incomplete/inconclusive stop unresolved, not verified. Complete with content containing a JSON string object with candidate (the final proposed replacement) and claim (verified, rejected, or unresolved). This is read-only candidate evaluation, not verification of the source containing a hole. /no_think",
+      "safe_decisions": [
+        {
+          "candidate": "?",
+          "fixture_tool": true,
+          "goal_id": 0,
+          "json_parsed": true,
+          "response_bytes": 115,
+          "type": "tool"
+        },
+        {
+          "candidate": "?",
+          "claim": "unresolved",
+          "content_bytes": 38,
+          "json_parsed": true,
+          "response_bytes": 78,
+          "type": "complete"
+        }
+      ],
+      "safe_evidence": [
+        {
+          "kind": "decision",
+          "ordinal": 1
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 1,
+          "response_bytes": 115
+        },
+        {
+          "kind": "tool",
+          "ordinal": 1,
+          "outcome": "Success",
+          "request_ordinal": 1
+        },
+        {
+          "kind": "decision",
+          "ordinal": 2
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 2,
+          "response_bytes": 78
+        }
+      ],
+      "scenario": "incomplete",
+      "sequence_ok": true,
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "task_claim_matches_expected": true,
+      "trusted_classifications": [
+        "Inconclusive"
+      ],
+      "usage": {
+        "conversation_bytes": 19358,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "baseline"
+    },
+    {
+      "adapter_errors": 0,
+      "authorization_rejections": 0,
+      "authorized_candidates": [
+        "?"
+      ],
+      "budget_exhausted": false,
+      "callbacks": 11,
+      "calls": 1,
+      "corrections": 0,
+      "cumulative_input_bytes": 22905,
+      "cumulative_output_bytes": 193,
+      "decision_input_bytes": [
+        3884,
+        19021
+      ],
+      "decision_output_bytes": [
+        115,
+        78
+      ],
+      "distinct_feedback_content_bytes": 15009,
+      "distinct_feedback_count": 1,
+      "elapsed_ms": 12579.514292,
+      "final_candidate": "?",
+      "final_candidate_origin": "completion",
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Inconclusive",
+        "invocations": 1,
+        "outside_agent_budget": true,
+        "subject": "hypothetical candidate, not source proof"
+      },
+      "initial_candidate": "?",
+      "initial_input_bytes": 3884,
+      "input_tokens": null,
+      "lifecycle": [
+        "Ready",
+        "Ready",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Completed"
+      ],
+      "limits": {
+        "max_conversation_bytes": 196608,
+        "max_decisions": 4,
+        "max_malformed": 1,
+        "max_message_bytes": 65536,
+        "max_tokens_per_decision": 320,
+        "max_tool_calls": 2
+      },
+      "malformed": 0,
+      "model_claim": "unresolved",
+      "model_claim_matches_verification": true,
+      "output_tokens": null,
+      "passed": true,
+      "publish_errors": 0,
+      "rejections": 0,
+      "repetition": 1,
+      "request": "Evaluate hypothetical replacement for goal 0 of this unchanged Path source: theorem trial (A : Type 0) (x : A) : Id A x x := ?\n\nFirst call language.language.path.evaluate_goal_candidate with goal_id 0 and replacement \"?\". On rejection, infer a corrected candidate and evaluate it; do not claim success without a kernel-checked result. On incomplete/inconclusive stop unresolved, not verified. Complete with content containing a JSON string object with candidate (the final proposed replacement) and claim (verified, rejected, or unresolved). This is read-only candidate evaluation, not verification of the source containing a hole. /no_think",
+      "safe_decisions": [
+        {
+          "candidate": "?",
+          "fixture_tool": true,
+          "goal_id": 0,
+          "json_parsed": true,
+          "response_bytes": 115,
+          "type": "tool"
+        },
+        {
+          "candidate": "?",
+          "claim": "unresolved",
+          "content_bytes": 38,
+          "json_parsed": true,
+          "response_bytes": 78,
+          "type": "complete"
+        }
+      ],
+      "safe_evidence": [
+        {
+          "bounded": false,
+          "bytes": 1708,
+          "kind": "context_assembly",
+          "success": true
+        },
+        {
+          "kind": "decision",
+          "ordinal": 1
+        },
+        {
+          "initial_message_bytes": 2404,
+          "kind": "context_supplied",
+          "packet_bytes": 1708
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 1,
+          "response_bytes": 115
+        },
+        {
+          "kind": "tool",
+          "ordinal": 1,
+          "outcome": "Success",
+          "request_ordinal": 1
+        },
+        {
+          "kind": "decision",
+          "ordinal": 2
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 2,
+          "response_bytes": 78
+        }
+      ],
+      "scenario": "incomplete",
+      "sequence_ok": true,
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "task_claim_matches_expected": true,
+      "trusted_classifications": [
+        "Inconclusive"
+      ],
+      "usage": {
+        "conversation_bytes": 19076,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "H2"
+    },
+    {
+      "adapter_errors": 0,
+      "authorization_rejections": 0,
+      "authorized_candidates": [
+        "?"
+      ],
+      "budget_exhausted": false,
+      "callbacks": 12,
+      "calls": 1,
+      "corrections": 0,
+      "cumulative_input_bytes": 8476,
+      "cumulative_output_bytes": 193,
+      "decision_input_bytes": [
+        3884,
+        4592
+      ],
+      "decision_output_bytes": [
+        115,
+        78
+      ],
+      "distinct_feedback_content_bytes": 580,
+      "distinct_feedback_count": 1,
+      "elapsed_ms": 1465.9672500000001,
+      "final_candidate": "?",
+      "final_candidate_origin": "completion",
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Inconclusive",
+        "invocations": 1,
+        "outside_agent_budget": true,
+        "subject": "hypothetical candidate, not source proof"
+      },
+      "initial_candidate": "?",
+      "initial_input_bytes": 3884,
+      "input_tokens": null,
+      "lifecycle": [
+        "Ready",
+        "Ready",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Completed"
+      ],
+      "limits": {
+        "max_conversation_bytes": 196608,
+        "max_decisions": 4,
+        "max_malformed": 1,
+        "max_message_bytes": 65536,
+        "max_tokens_per_decision": 320,
+        "max_tool_calls": 2
+      },
+      "malformed": 0,
+      "model_claim": "unresolved",
+      "model_claim_matches_verification": true,
+      "output_tokens": null,
+      "passed": true,
+      "publish_errors": 0,
+      "rejections": 0,
+      "repetition": 1,
+      "request": "Evaluate hypothetical replacement for goal 0 of this unchanged Path source: theorem trial (A : Type 0) (x : A) : Id A x x := ?\n\nFirst call language.language.path.evaluate_goal_candidate with goal_id 0 and replacement \"?\". On rejection, infer a corrected candidate and evaluate it; do not claim success without a kernel-checked result. On incomplete/inconclusive stop unresolved, not verified. Complete with content containing a JSON string object with candidate (the final proposed replacement) and claim (verified, rejected, or unresolved). This is read-only candidate evaluation, not verification of the source containing a hole. /no_think",
+      "safe_decisions": [
+        {
+          "candidate": "?",
+          "fixture_tool": true,
+          "goal_id": 0,
+          "json_parsed": true,
+          "response_bytes": 115,
+          "type": "tool"
+        },
+        {
+          "candidate": "?",
+          "claim": "unresolved",
+          "content_bytes": 38,
+          "json_parsed": true,
+          "response_bytes": 78,
+          "type": "complete"
+        }
+      ],
+      "safe_evidence": [
+        {
+          "bounded": false,
+          "bytes": 1708,
+          "kind": "context_assembly",
+          "success": true
+        },
+        {
+          "kind": "decision",
+          "ordinal": 1
+        },
+        {
+          "initial_message_bytes": 2404,
+          "kind": "context_supplied",
+          "packet_bytes": 1708
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 1,
+          "response_bytes": 115
+        },
+        {
+          "kind": "tool",
+          "ordinal": 1,
+          "outcome": "Success",
+          "request_ordinal": 1
+        },
+        {
+          "call_ordinal": 1,
+          "kind": "verification",
+          "observation": {
+            "authority": "Path kernel/candidate evaluator",
+            "classification": "Inconclusive",
+            "completeness": "SelectedFields",
+            "operation": "language.language.path.evaluate_goal_candidate",
+            "source": {
+              "identity": {
+                "identity": "0",
+                "kind": "scratch_buffer"
+              },
+              "language": "language.path",
+              "revision": 0
+            },
+            "subject": "HypotheticalCandidate"
+          },
+          "request_ordinal": 1
+        },
+        {
+          "kind": "decision",
+          "ordinal": 2
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 2,
+          "response_bytes": 78
+        }
+      ],
+      "scenario": "incomplete",
+      "sequence_ok": true,
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "task_claim_matches_expected": true,
+      "trusted_classifications": [
+        "Inconclusive"
+      ],
+      "usage": {
+        "conversation_bytes": 4647,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "H3"
+    },
+    {
+      "adapter_errors": 0,
+      "authorization_rejections": 0,
+      "authorized_candidates": [
+        "x"
+      ],
+      "budget_exhausted": false,
+      "callbacks": 10,
+      "calls": 1,
+      "corrections": 0,
+      "cumulative_input_bytes": 22344,
+      "cumulative_output_bytes": 191,
+      "decision_input_bytes": [
+        4166,
+        18178
+      ],
+      "decision_output_bytes": [
+        115,
+        76
+      ],
+      "distinct_feedback_content_bytes": 13884,
+      "distinct_feedback_count": 1,
+      "elapsed_ms": 12119.301292,
+      "final_candidate": "x",
+      "final_candidate_origin": "completion",
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Rejected",
+        "invocations": 1,
+        "outside_agent_budget": true,
+        "subject": "hypothetical candidate, not source proof"
+      },
+      "initial_candidate": "x",
+      "initial_input_bytes": 4166,
+      "input_tokens": null,
+      "lifecycle": [
+        "Ready",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Completed"
+      ],
+      "limits": {
+        "max_conversation_bytes": 196608,
+        "max_decisions": 3,
+        "max_malformed": 1,
+        "max_message_bytes": 65536,
+        "max_tokens_per_decision": 320,
+        "max_tool_calls": 2
+      },
+      "malformed": 0,
+      "model_claim": "rejected",
+      "model_claim_matches_verification": true,
+      "output_tokens": null,
+      "passed": false,
+      "publish_errors": 0,
+      "rejections": 1,
+      "repetition": 1,
+      "request": "Evaluate hypothetical replacement for goal 0 of this unchanged Path source: theorem trial (A : Type 0) (x : A) : Id A x x := ?\n\nFirst call language.language.path.evaluate_goal_candidate with goal_id 0 and replacement \"x\". On rejection, infer a corrected candidate and evaluate it; do not claim success without a kernel-checked result. On incomplete/inconclusive stop unresolved, not verified. Complete with content containing a JSON string object with candidate (the final proposed replacement) and claim (verified, rejected, or unresolved). This is read-only candidate evaluation, not verification of the source containing a hole. /no_think",
+      "safe_decisions": [
+        {
+          "candidate": "x",
+          "fixture_tool": true,
+          "goal_id": 0,
+          "json_parsed": true,
+          "response_bytes": 115,
+          "type": "tool"
+        },
+        {
+          "candidate": "x",
+          "claim": "rejected",
+          "content_bytes": 36,
+          "json_parsed": true,
+          "response_bytes": 76,
+          "type": "complete"
+        }
+      ],
+      "safe_evidence": [
+        {
+          "kind": "decision",
+          "ordinal": 1
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 1,
+          "response_bytes": 115
+        },
+        {
+          "kind": "tool",
+          "ordinal": 1,
+          "outcome": "Success",
+          "request_ordinal": 1
+        },
+        {
+          "kind": "decision",
+          "ordinal": 2
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 2,
+          "response_bytes": 76
+        }
+      ],
+      "scenario": "tight_recovery",
+      "sequence_ok": false,
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "task_claim_matches_expected": false,
+      "trusted_classifications": [
+        "Rejected"
+      ],
+      "usage": {
+        "conversation_bytes": 18231,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "baseline"
+    },
+    {
+      "adapter_errors": 0,
+      "authorization_rejections": 0,
+      "authorized_candidates": [
+        "x"
+      ],
+      "budget_exhausted": false,
+      "callbacks": 11,
+      "calls": 1,
+      "corrections": 0,
+      "cumulative_input_bytes": 21780,
+      "cumulative_output_bytes": 191,
+      "decision_input_bytes": [
+        3884,
+        17896
+      ],
+      "decision_output_bytes": [
+        115,
+        76
+      ],
+      "distinct_feedback_content_bytes": 13884,
+      "distinct_feedback_count": 1,
+      "elapsed_ms": 11483.186957999998,
+      "final_candidate": "x",
+      "final_candidate_origin": "completion",
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Rejected",
+        "invocations": 1,
+        "outside_agent_budget": true,
+        "subject": "hypothetical candidate, not source proof"
+      },
+      "initial_candidate": "x",
+      "initial_input_bytes": 3884,
+      "input_tokens": null,
+      "lifecycle": [
+        "Ready",
+        "Ready",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Completed"
+      ],
+      "limits": {
+        "max_conversation_bytes": 196608,
+        "max_decisions": 3,
+        "max_malformed": 1,
+        "max_message_bytes": 65536,
+        "max_tokens_per_decision": 320,
+        "max_tool_calls": 2
+      },
+      "malformed": 0,
+      "model_claim": "rejected",
+      "model_claim_matches_verification": true,
+      "output_tokens": null,
+      "passed": false,
+      "publish_errors": 0,
+      "rejections": 1,
+      "repetition": 1,
+      "request": "Evaluate hypothetical replacement for goal 0 of this unchanged Path source: theorem trial (A : Type 0) (x : A) : Id A x x := ?\n\nFirst call language.language.path.evaluate_goal_candidate with goal_id 0 and replacement \"x\". On rejection, infer a corrected candidate and evaluate it; do not claim success without a kernel-checked result. On incomplete/inconclusive stop unresolved, not verified. Complete with content containing a JSON string object with candidate (the final proposed replacement) and claim (verified, rejected, or unresolved). This is read-only candidate evaluation, not verification of the source containing a hole. /no_think",
+      "safe_decisions": [
+        {
+          "candidate": "x",
+          "fixture_tool": true,
+          "goal_id": 0,
+          "json_parsed": true,
+          "response_bytes": 115,
+          "type": "tool"
+        },
+        {
+          "candidate": "x",
+          "claim": "rejected",
+          "content_bytes": 36,
+          "json_parsed": true,
+          "response_bytes": 76,
+          "type": "complete"
+        }
+      ],
+      "safe_evidence": [
+        {
+          "bounded": false,
+          "bytes": 1708,
+          "kind": "context_assembly",
+          "success": true
+        },
+        {
+          "kind": "decision",
+          "ordinal": 1
+        },
+        {
+          "initial_message_bytes": 2404,
+          "kind": "context_supplied",
+          "packet_bytes": 1708
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 1,
+          "response_bytes": 115
+        },
+        {
+          "kind": "tool",
+          "ordinal": 1,
+          "outcome": "Success",
+          "request_ordinal": 1
+        },
+        {
+          "kind": "decision",
+          "ordinal": 2
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 2,
+          "response_bytes": 76
+        }
+      ],
+      "scenario": "tight_recovery",
+      "sequence_ok": false,
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "task_claim_matches_expected": false,
+      "trusted_classifications": [
+        "Rejected"
+      ],
+      "usage": {
+        "conversation_bytes": 17949,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "H2"
+    },
+    {
+      "adapter_errors": 0,
+      "authorization_rejections": 0,
+      "authorized_candidates": [
+        "x"
+      ],
+      "budget_exhausted": false,
+      "callbacks": 12,
+      "calls": 1,
+      "corrections": 0,
+      "cumulative_input_bytes": 8479,
+      "cumulative_output_bytes": 194,
+      "decision_input_bytes": [
+        3884,
+        4595
+      ],
+      "decision_output_bytes": [
+        115,
+        79
+      ],
+      "distinct_feedback_content_bytes": 583,
+      "distinct_feedback_count": 1,
+      "elapsed_ms": 1499.1342080000002,
+      "final_candidate": "x",
+      "final_candidate_origin": "completion",
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Rejected",
+        "invocations": 1,
+        "outside_agent_budget": true,
+        "subject": "hypothetical candidate, not source proof"
+      },
+      "initial_candidate": "x",
+      "initial_input_bytes": 3884,
+      "input_tokens": null,
+      "lifecycle": [
+        "Ready",
+        "Ready",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Completed"
+      ],
+      "limits": {
+        "max_conversation_bytes": 196608,
+        "max_decisions": 3,
+        "max_malformed": 1,
+        "max_message_bytes": 65536,
+        "max_tokens_per_decision": 320,
+        "max_tool_calls": 2
+      },
+      "malformed": 0,
+      "model_claim": "rejected",
+      "model_claim_matches_verification": true,
+      "output_tokens": null,
+      "passed": false,
+      "publish_errors": 0,
+      "rejections": 1,
+      "repetition": 1,
+      "request": "Evaluate hypothetical replacement for goal 0 of this unchanged Path source: theorem trial (A : Type 0) (x : A) : Id A x x := ?\n\nFirst call language.language.path.evaluate_goal_candidate with goal_id 0 and replacement \"x\". On rejection, infer a corrected candidate and evaluate it; do not claim success without a kernel-checked result. On incomplete/inconclusive stop unresolved, not verified. Complete with content containing a JSON string object with candidate (the final proposed replacement) and claim (verified, rejected, or unresolved). This is read-only candidate evaluation, not verification of the source containing a hole. /no_think",
+      "safe_decisions": [
+        {
+          "candidate": "x",
+          "fixture_tool": true,
+          "goal_id": 0,
+          "json_parsed": true,
+          "response_bytes": 115,
+          "type": "tool"
+        },
+        {
+          "candidate": "x",
+          "claim": "rejected",
+          "content_bytes": 39,
+          "json_parsed": true,
+          "response_bytes": 79,
+          "type": "complete"
+        }
+      ],
+      "safe_evidence": [
+        {
+          "bounded": false,
+          "bytes": 1708,
+          "kind": "context_assembly",
+          "success": true
+        },
+        {
+          "kind": "decision",
+          "ordinal": 1
+        },
+        {
+          "initial_message_bytes": 2404,
+          "kind": "context_supplied",
+          "packet_bytes": 1708
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 1,
+          "response_bytes": 115
+        },
+        {
+          "kind": "tool",
+          "ordinal": 1,
+          "outcome": "Success",
+          "request_ordinal": 1
+        },
+        {
+          "call_ordinal": 1,
+          "kind": "verification",
+          "observation": {
+            "authority": "Path kernel/candidate evaluator",
+            "classification": "Rejected",
+            "completeness": "SelectedFields",
+            "operation": "language.language.path.evaluate_goal_candidate",
+            "source": {
+              "identity": {
+                "identity": "0",
+                "kind": "scratch_buffer"
+              },
+              "language": "language.path",
+              "revision": 0
+            },
+            "subject": "HypotheticalCandidate"
+          },
+          "request_ordinal": 1
+        },
+        {
+          "kind": "decision",
+          "ordinal": 2
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 2,
+          "response_bytes": 79
+        }
+      ],
+      "scenario": "tight_recovery",
+      "sequence_ok": false,
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "task_claim_matches_expected": false,
+      "trusted_classifications": [
+        "Rejected"
+      ],
+      "usage": {
+        "conversation_bytes": 4651,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "H3"
+    },
+    {
+      "adapter_errors": 0,
+      "authorization_rejections": 0,
+      "authorized_candidates": [
+        "refl x"
+      ],
+      "budget_exhausted": false,
+      "callbacks": 11,
+      "calls": 1,
+      "corrections": 0,
+      "cumulative_input_bytes": 20779,
+      "cumulative_output_bytes": 201,
+      "decision_input_bytes": [
+        3889,
+        16890
+      ],
+      "decision_output_bytes": [
+        120,
+        81
+      ],
+      "distinct_feedback_content_bytes": 12868,
+      "distinct_feedback_count": 1,
+      "elapsed_ms": 10771.502583,
+      "final_candidate": "refl x",
+      "final_candidate_origin": "completion",
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Verified",
+        "invocations": 1,
+        "outside_agent_budget": true,
+        "subject": "hypothetical candidate, not source proof"
+      },
+      "initial_candidate": "refl x",
+      "initial_input_bytes": 3889,
+      "input_tokens": null,
+      "lifecycle": [
+        "Ready",
+        "Ready",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Completed"
+      ],
+      "limits": {
+        "max_conversation_bytes": 196608,
+        "max_decisions": 4,
+        "max_malformed": 1,
+        "max_message_bytes": 65536,
+        "max_tokens_per_decision": 320,
+        "max_tool_calls": 2
+      },
+      "malformed": 0,
+      "model_claim": "verified",
+      "model_claim_matches_verification": true,
+      "output_tokens": null,
+      "passed": true,
+      "publish_errors": 0,
+      "rejections": 0,
+      "repetition": 2,
+      "request": "Evaluate hypothetical replacement for goal 0 of this unchanged Path source: theorem trial (A : Type 0) (x : A) : Id A x x := ?\n\nFirst call language.language.path.evaluate_goal_candidate with goal_id 0 and replacement \"refl x\". On rejection, infer a corrected candidate and evaluate it; do not claim success without a kernel-checked result. On incomplete/inconclusive stop unresolved, not verified. Complete with content containing a JSON string object with candidate (the final proposed replacement) and claim (verified, rejected, or unresolved). This is read-only candidate evaluation, not verification of the source containing a hole. /no_think",
+      "safe_decisions": [
+        {
+          "candidate": "refl x",
+          "fixture_tool": true,
+          "goal_id": 0,
+          "json_parsed": true,
+          "response_bytes": 120,
+          "type": "tool"
+        },
+        {
+          "candidate": "refl x",
+          "claim": "verified",
+          "content_bytes": 41,
+          "json_parsed": true,
+          "response_bytes": 81,
+          "type": "complete"
+        }
+      ],
+      "safe_evidence": [
+        {
+          "bounded": false,
+          "bytes": 1708,
+          "kind": "context_assembly",
+          "success": true
+        },
+        {
+          "kind": "decision",
+          "ordinal": 1
+        },
+        {
+          "initial_message_bytes": 2409,
+          "kind": "context_supplied",
+          "packet_bytes": 1708
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 1,
+          "response_bytes": 120
+        },
+        {
+          "kind": "tool",
+          "ordinal": 1,
+          "outcome": "Success",
+          "request_ordinal": 1
+        },
+        {
+          "kind": "decision",
+          "ordinal": 2
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 2,
+          "response_bytes": 81
+        }
+      ],
+      "scenario": "positive",
+      "sequence_ok": true,
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "task_claim_matches_expected": true,
+      "trusted_classifications": [
+        "Verified"
+      ],
+      "usage": {
+        "conversation_bytes": 16948,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "H2"
+    },
+    {
+      "adapter_errors": 0,
+      "authorization_rejections": 0,
+      "authorized_candidates": [
+        "refl x"
+      ],
+      "budget_exhausted": false,
+      "callbacks": 12,
+      "calls": 1,
+      "corrections": 0,
+      "cumulative_input_bytes": 8479,
+      "cumulative_output_bytes": 204,
+      "decision_input_bytes": [
+        3889,
+        4590
+      ],
+      "decision_output_bytes": [
+        120,
+        84
+      ],
+      "distinct_feedback_content_bytes": 568,
+      "distinct_feedback_count": 1,
+      "elapsed_ms": 1574.1608330000001,
+      "final_candidate": "refl x",
+      "final_candidate_origin": "completion",
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Verified",
+        "invocations": 1,
+        "outside_agent_budget": true,
+        "subject": "hypothetical candidate, not source proof"
+      },
+      "initial_candidate": "refl x",
+      "initial_input_bytes": 3889,
+      "input_tokens": null,
+      "lifecycle": [
+        "Ready",
+        "Ready",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Completed"
+      ],
+      "limits": {
+        "max_conversation_bytes": 196608,
+        "max_decisions": 4,
+        "max_malformed": 1,
+        "max_message_bytes": 65536,
+        "max_tokens_per_decision": 320,
+        "max_tool_calls": 2
+      },
+      "malformed": 0,
+      "model_claim": "verified",
+      "model_claim_matches_verification": true,
+      "output_tokens": null,
+      "passed": true,
+      "publish_errors": 0,
+      "rejections": 0,
+      "repetition": 2,
+      "request": "Evaluate hypothetical replacement for goal 0 of this unchanged Path source: theorem trial (A : Type 0) (x : A) : Id A x x := ?\n\nFirst call language.language.path.evaluate_goal_candidate with goal_id 0 and replacement \"refl x\". On rejection, infer a corrected candidate and evaluate it; do not claim success without a kernel-checked result. On incomplete/inconclusive stop unresolved, not verified. Complete with content containing a JSON string object with candidate (the final proposed replacement) and claim (verified, rejected, or unresolved). This is read-only candidate evaluation, not verification of the source containing a hole. /no_think",
+      "safe_decisions": [
+        {
+          "candidate": "refl x",
+          "fixture_tool": true,
+          "goal_id": 0,
+          "json_parsed": true,
+          "response_bytes": 120,
+          "type": "tool"
+        },
+        {
+          "candidate": "refl x",
+          "claim": "verified",
+          "content_bytes": 44,
+          "json_parsed": true,
+          "response_bytes": 84,
+          "type": "complete"
+        }
+      ],
+      "safe_evidence": [
+        {
+          "bounded": false,
+          "bytes": 1708,
+          "kind": "context_assembly",
+          "success": true
+        },
+        {
+          "kind": "decision",
+          "ordinal": 1
+        },
+        {
+          "initial_message_bytes": 2409,
+          "kind": "context_supplied",
+          "packet_bytes": 1708
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 1,
+          "response_bytes": 120
+        },
+        {
+          "kind": "tool",
+          "ordinal": 1,
+          "outcome": "Success",
+          "request_ordinal": 1
+        },
+        {
+          "call_ordinal": 1,
+          "kind": "verification",
+          "observation": {
+            "authority": "Path kernel/candidate evaluator",
+            "classification": "Verified",
+            "completeness": "SelectedFields",
+            "operation": "language.language.path.evaluate_goal_candidate",
+            "source": {
+              "identity": {
+                "identity": "0",
+                "kind": "scratch_buffer"
+              },
+              "language": "language.path",
+              "revision": 0
+            },
+            "subject": "HypotheticalCandidate"
+          },
+          "request_ordinal": 1
+        },
+        {
+          "kind": "decision",
+          "ordinal": 2
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 2,
+          "response_bytes": 84
+        }
+      ],
+      "scenario": "positive",
+      "sequence_ok": true,
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "task_claim_matches_expected": true,
+      "trusted_classifications": [
+        "Verified"
+      ],
+      "usage": {
+        "conversation_bytes": 4651,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "H3"
+    },
+    {
+      "adapter_errors": 0,
+      "authorization_rejections": 0,
+      "authorized_candidates": [
+        "refl x"
+      ],
+      "budget_exhausted": false,
+      "callbacks": 10,
+      "calls": 1,
+      "corrections": 0,
+      "cumulative_input_bytes": 21343,
+      "cumulative_output_bytes": 201,
+      "decision_input_bytes": [
+        4171,
+        17172
+      ],
+      "decision_output_bytes": [
+        120,
+        81
+      ],
+      "distinct_feedback_content_bytes": 12868,
+      "distinct_feedback_count": 1,
+      "elapsed_ms": 11186.958499999999,
+      "final_candidate": "refl x",
+      "final_candidate_origin": "completion",
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Verified",
+        "invocations": 1,
+        "outside_agent_budget": true,
+        "subject": "hypothetical candidate, not source proof"
+      },
+      "initial_candidate": "refl x",
+      "initial_input_bytes": 4171,
+      "input_tokens": null,
+      "lifecycle": [
+        "Ready",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Completed"
+      ],
+      "limits": {
+        "max_conversation_bytes": 196608,
+        "max_decisions": 4,
+        "max_malformed": 1,
+        "max_message_bytes": 65536,
+        "max_tokens_per_decision": 320,
+        "max_tool_calls": 2
+      },
+      "malformed": 0,
+      "model_claim": "verified",
+      "model_claim_matches_verification": true,
+      "output_tokens": null,
+      "passed": true,
+      "publish_errors": 0,
+      "rejections": 0,
+      "repetition": 2,
+      "request": "Evaluate hypothetical replacement for goal 0 of this unchanged Path source: theorem trial (A : Type 0) (x : A) : Id A x x := ?\n\nFirst call language.language.path.evaluate_goal_candidate with goal_id 0 and replacement \"refl x\". On rejection, infer a corrected candidate and evaluate it; do not claim success without a kernel-checked result. On incomplete/inconclusive stop unresolved, not verified. Complete with content containing a JSON string object with candidate (the final proposed replacement) and claim (verified, rejected, or unresolved). This is read-only candidate evaluation, not verification of the source containing a hole. /no_think",
+      "safe_decisions": [
+        {
+          "candidate": "refl x",
+          "fixture_tool": true,
+          "goal_id": 0,
+          "json_parsed": true,
+          "response_bytes": 120,
+          "type": "tool"
+        },
+        {
+          "candidate": "refl x",
+          "claim": "verified",
+          "content_bytes": 41,
+          "json_parsed": true,
+          "response_bytes": 81,
+          "type": "complete"
+        }
+      ],
+      "safe_evidence": [
+        {
+          "kind": "decision",
+          "ordinal": 1
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 1,
+          "response_bytes": 120
+        },
+        {
+          "kind": "tool",
+          "ordinal": 1,
+          "outcome": "Success",
+          "request_ordinal": 1
+        },
+        {
+          "kind": "decision",
+          "ordinal": 2
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 2,
+          "response_bytes": 81
+        }
+      ],
+      "scenario": "positive",
+      "sequence_ok": true,
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "task_claim_matches_expected": true,
+      "trusted_classifications": [
+        "Verified"
+      ],
+      "usage": {
+        "conversation_bytes": 17230,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "baseline"
+    },
+    {
+      "adapter_errors": 0,
+      "authorization_rejections": 0,
+      "authorized_candidates": [
+        "x"
+      ],
+      "budget_exhausted": false,
+      "callbacks": 11,
+      "calls": 1,
+      "corrections": 0,
+      "cumulative_input_bytes": 21780,
+      "cumulative_output_bytes": 191,
+      "decision_input_bytes": [
+        3884,
+        17896
+      ],
+      "decision_output_bytes": [
+        115,
+        76
+      ],
+      "distinct_feedback_content_bytes": 13884,
+      "distinct_feedback_count": 1,
+      "elapsed_ms": 11508.826666,
+      "final_candidate": "x",
+      "final_candidate_origin": "completion",
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Rejected",
+        "invocations": 1,
+        "outside_agent_budget": true,
+        "subject": "hypothetical candidate, not source proof"
+      },
+      "initial_candidate": "x",
+      "initial_input_bytes": 3884,
+      "input_tokens": null,
+      "lifecycle": [
+        "Ready",
+        "Ready",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Completed"
+      ],
+      "limits": {
+        "max_conversation_bytes": 196608,
+        "max_decisions": 4,
+        "max_malformed": 1,
+        "max_message_bytes": 65536,
+        "max_tokens_per_decision": 320,
+        "max_tool_calls": 2
+      },
+      "malformed": 0,
+      "model_claim": "rejected",
+      "model_claim_matches_verification": true,
+      "output_tokens": null,
+      "passed": false,
+      "publish_errors": 0,
+      "rejections": 1,
+      "repetition": 2,
+      "request": "Evaluate hypothetical replacement for goal 0 of this unchanged Path source: theorem trial (A : Type 0) (x : A) : Id A x x := ?\n\nFirst call language.language.path.evaluate_goal_candidate with goal_id 0 and replacement \"x\". On rejection, infer a corrected candidate and evaluate it; do not claim success without a kernel-checked result. On incomplete/inconclusive stop unresolved, not verified. Complete with content containing a JSON string object with candidate (the final proposed replacement) and claim (verified, rejected, or unresolved). This is read-only candidate evaluation, not verification of the source containing a hole. /no_think",
+      "safe_decisions": [
+        {
+          "candidate": "x",
+          "fixture_tool": true,
+          "goal_id": 0,
+          "json_parsed": true,
+          "response_bytes": 115,
+          "type": "tool"
+        },
+        {
+          "candidate": "x",
+          "claim": "rejected",
+          "content_bytes": 36,
+          "json_parsed": true,
+          "response_bytes": 76,
+          "type": "complete"
+        }
+      ],
+      "safe_evidence": [
+        {
+          "bounded": false,
+          "bytes": 1708,
+          "kind": "context_assembly",
+          "success": true
+        },
+        {
+          "kind": "decision",
+          "ordinal": 1
+        },
+        {
+          "initial_message_bytes": 2404,
+          "kind": "context_supplied",
+          "packet_bytes": 1708
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 1,
+          "response_bytes": 115
+        },
+        {
+          "kind": "tool",
+          "ordinal": 1,
+          "outcome": "Success",
+          "request_ordinal": 1
+        },
+        {
+          "kind": "decision",
+          "ordinal": 2
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 2,
+          "response_bytes": 76
+        }
+      ],
+      "scenario": "rejection_refinement",
+      "sequence_ok": false,
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "task_claim_matches_expected": false,
+      "trusted_classifications": [
+        "Rejected"
+      ],
+      "usage": {
+        "conversation_bytes": 17949,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "H2"
+    },
+    {
+      "adapter_errors": 0,
+      "authorization_rejections": 0,
+      "authorized_candidates": [
+        "x"
+      ],
+      "budget_exhausted": false,
+      "callbacks": 12,
+      "calls": 1,
+      "corrections": 0,
+      "cumulative_input_bytes": 8479,
+      "cumulative_output_bytes": 191,
+      "decision_input_bytes": [
+        3884,
+        4595
+      ],
+      "decision_output_bytes": [
+        115,
+        76
+      ],
+      "distinct_feedback_content_bytes": 583,
+      "distinct_feedback_count": 1,
+      "elapsed_ms": 1453.5585420000002,
+      "final_candidate": "x",
+      "final_candidate_origin": "completion",
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Rejected",
+        "invocations": 1,
+        "outside_agent_budget": true,
+        "subject": "hypothetical candidate, not source proof"
+      },
+      "initial_candidate": "x",
+      "initial_input_bytes": 3884,
+      "input_tokens": null,
+      "lifecycle": [
+        "Ready",
+        "Ready",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Completed"
+      ],
+      "limits": {
+        "max_conversation_bytes": 196608,
+        "max_decisions": 4,
+        "max_malformed": 1,
+        "max_message_bytes": 65536,
+        "max_tokens_per_decision": 320,
+        "max_tool_calls": 2
+      },
+      "malformed": 0,
+      "model_claim": "rejected",
+      "model_claim_matches_verification": true,
+      "output_tokens": null,
+      "passed": false,
+      "publish_errors": 0,
+      "rejections": 1,
+      "repetition": 2,
+      "request": "Evaluate hypothetical replacement for goal 0 of this unchanged Path source: theorem trial (A : Type 0) (x : A) : Id A x x := ?\n\nFirst call language.language.path.evaluate_goal_candidate with goal_id 0 and replacement \"x\". On rejection, infer a corrected candidate and evaluate it; do not claim success without a kernel-checked result. On incomplete/inconclusive stop unresolved, not verified. Complete with content containing a JSON string object with candidate (the final proposed replacement) and claim (verified, rejected, or unresolved). This is read-only candidate evaluation, not verification of the source containing a hole. /no_think",
+      "safe_decisions": [
+        {
+          "candidate": "x",
+          "fixture_tool": true,
+          "goal_id": 0,
+          "json_parsed": true,
+          "response_bytes": 115,
+          "type": "tool"
+        },
+        {
+          "candidate": "x",
+          "claim": "rejected",
+          "content_bytes": 36,
+          "json_parsed": true,
+          "response_bytes": 76,
+          "type": "complete"
+        }
+      ],
+      "safe_evidence": [
+        {
+          "bounded": false,
+          "bytes": 1708,
+          "kind": "context_assembly",
+          "success": true
+        },
+        {
+          "kind": "decision",
+          "ordinal": 1
+        },
+        {
+          "initial_message_bytes": 2404,
+          "kind": "context_supplied",
+          "packet_bytes": 1708
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 1,
+          "response_bytes": 115
+        },
+        {
+          "kind": "tool",
+          "ordinal": 1,
+          "outcome": "Success",
+          "request_ordinal": 1
+        },
+        {
+          "call_ordinal": 1,
+          "kind": "verification",
+          "observation": {
+            "authority": "Path kernel/candidate evaluator",
+            "classification": "Rejected",
+            "completeness": "SelectedFields",
+            "operation": "language.language.path.evaluate_goal_candidate",
+            "source": {
+              "identity": {
+                "identity": "0",
+                "kind": "scratch_buffer"
+              },
+              "language": "language.path",
+              "revision": 0
+            },
+            "subject": "HypotheticalCandidate"
+          },
+          "request_ordinal": 1
+        },
+        {
+          "kind": "decision",
+          "ordinal": 2
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 2,
+          "response_bytes": 76
+        }
+      ],
+      "scenario": "rejection_refinement",
+      "sequence_ok": false,
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "task_claim_matches_expected": false,
+      "trusted_classifications": [
+        "Rejected"
+      ],
+      "usage": {
+        "conversation_bytes": 4648,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "H3"
+    },
+    {
+      "adapter_errors": 0,
+      "authorization_rejections": 0,
+      "authorized_candidates": [
+        "x"
+      ],
+      "budget_exhausted": false,
+      "callbacks": 10,
+      "calls": 1,
+      "corrections": 0,
+      "cumulative_input_bytes": 22344,
+      "cumulative_output_bytes": 191,
+      "decision_input_bytes": [
+        4166,
+        18178
+      ],
+      "decision_output_bytes": [
+        115,
+        76
+      ],
+      "distinct_feedback_content_bytes": 13884,
+      "distinct_feedback_count": 1,
+      "elapsed_ms": 12087.545333,
+      "final_candidate": "x",
+      "final_candidate_origin": "completion",
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Rejected",
+        "invocations": 1,
+        "outside_agent_budget": true,
+        "subject": "hypothetical candidate, not source proof"
+      },
+      "initial_candidate": "x",
+      "initial_input_bytes": 4166,
+      "input_tokens": null,
+      "lifecycle": [
+        "Ready",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Completed"
+      ],
+      "limits": {
+        "max_conversation_bytes": 196608,
+        "max_decisions": 4,
+        "max_malformed": 1,
+        "max_message_bytes": 65536,
+        "max_tokens_per_decision": 320,
+        "max_tool_calls": 2
+      },
+      "malformed": 0,
+      "model_claim": "rejected",
+      "model_claim_matches_verification": true,
+      "output_tokens": null,
+      "passed": false,
+      "publish_errors": 0,
+      "rejections": 1,
+      "repetition": 2,
+      "request": "Evaluate hypothetical replacement for goal 0 of this unchanged Path source: theorem trial (A : Type 0) (x : A) : Id A x x := ?\n\nFirst call language.language.path.evaluate_goal_candidate with goal_id 0 and replacement \"x\". On rejection, infer a corrected candidate and evaluate it; do not claim success without a kernel-checked result. On incomplete/inconclusive stop unresolved, not verified. Complete with content containing a JSON string object with candidate (the final proposed replacement) and claim (verified, rejected, or unresolved). This is read-only candidate evaluation, not verification of the source containing a hole. /no_think",
+      "safe_decisions": [
+        {
+          "candidate": "x",
+          "fixture_tool": true,
+          "goal_id": 0,
+          "json_parsed": true,
+          "response_bytes": 115,
+          "type": "tool"
+        },
+        {
+          "candidate": "x",
+          "claim": "rejected",
+          "content_bytes": 36,
+          "json_parsed": true,
+          "response_bytes": 76,
+          "type": "complete"
+        }
+      ],
+      "safe_evidence": [
+        {
+          "kind": "decision",
+          "ordinal": 1
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 1,
+          "response_bytes": 115
+        },
+        {
+          "kind": "tool",
+          "ordinal": 1,
+          "outcome": "Success",
+          "request_ordinal": 1
+        },
+        {
+          "kind": "decision",
+          "ordinal": 2
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 2,
+          "response_bytes": 76
+        }
+      ],
+      "scenario": "rejection_refinement",
+      "sequence_ok": false,
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "task_claim_matches_expected": false,
+      "trusted_classifications": [
+        "Rejected"
+      ],
+      "usage": {
+        "conversation_bytes": 18231,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "baseline"
+    },
+    {
+      "adapter_errors": 0,
+      "authorization_rejections": 0,
+      "authorized_candidates": [
+        "?"
+      ],
+      "budget_exhausted": false,
+      "callbacks": 11,
+      "calls": 1,
+      "corrections": 0,
+      "cumulative_input_bytes": 22905,
+      "cumulative_output_bytes": 193,
+      "decision_input_bytes": [
+        3884,
+        19021
+      ],
+      "decision_output_bytes": [
+        115,
+        78
+      ],
+      "distinct_feedback_content_bytes": 15009,
+      "distinct_feedback_count": 1,
+      "elapsed_ms": 11666.994708,
+      "final_candidate": "?",
+      "final_candidate_origin": "completion",
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Inconclusive",
+        "invocations": 1,
+        "outside_agent_budget": true,
+        "subject": "hypothetical candidate, not source proof"
+      },
+      "initial_candidate": "?",
+      "initial_input_bytes": 3884,
+      "input_tokens": null,
+      "lifecycle": [
+        "Ready",
+        "Ready",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Completed"
+      ],
+      "limits": {
+        "max_conversation_bytes": 196608,
+        "max_decisions": 4,
+        "max_malformed": 1,
+        "max_message_bytes": 65536,
+        "max_tokens_per_decision": 320,
+        "max_tool_calls": 2
+      },
+      "malformed": 0,
+      "model_claim": "unresolved",
+      "model_claim_matches_verification": true,
+      "output_tokens": null,
+      "passed": true,
+      "publish_errors": 0,
+      "rejections": 0,
+      "repetition": 2,
+      "request": "Evaluate hypothetical replacement for goal 0 of this unchanged Path source: theorem trial (A : Type 0) (x : A) : Id A x x := ?\n\nFirst call language.language.path.evaluate_goal_candidate with goal_id 0 and replacement \"?\". On rejection, infer a corrected candidate and evaluate it; do not claim success without a kernel-checked result. On incomplete/inconclusive stop unresolved, not verified. Complete with content containing a JSON string object with candidate (the final proposed replacement) and claim (verified, rejected, or unresolved). This is read-only candidate evaluation, not verification of the source containing a hole. /no_think",
+      "safe_decisions": [
+        {
+          "candidate": "?",
+          "fixture_tool": true,
+          "goal_id": 0,
+          "json_parsed": true,
+          "response_bytes": 115,
+          "type": "tool"
+        },
+        {
+          "candidate": "?",
+          "claim": "unresolved",
+          "content_bytes": 38,
+          "json_parsed": true,
+          "response_bytes": 78,
+          "type": "complete"
+        }
+      ],
+      "safe_evidence": [
+        {
+          "bounded": false,
+          "bytes": 1708,
+          "kind": "context_assembly",
+          "success": true
+        },
+        {
+          "kind": "decision",
+          "ordinal": 1
+        },
+        {
+          "initial_message_bytes": 2404,
+          "kind": "context_supplied",
+          "packet_bytes": 1708
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 1,
+          "response_bytes": 115
+        },
+        {
+          "kind": "tool",
+          "ordinal": 1,
+          "outcome": "Success",
+          "request_ordinal": 1
+        },
+        {
+          "kind": "decision",
+          "ordinal": 2
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 2,
+          "response_bytes": 78
+        }
+      ],
+      "scenario": "incomplete",
+      "sequence_ok": true,
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "task_claim_matches_expected": true,
+      "trusted_classifications": [
+        "Inconclusive"
+      ],
+      "usage": {
+        "conversation_bytes": 19076,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "H2"
+    },
+    {
+      "adapter_errors": 0,
+      "authorization_rejections": 0,
+      "authorized_candidates": [
+        "?"
+      ],
+      "budget_exhausted": false,
+      "callbacks": 12,
+      "calls": 1,
+      "corrections": 0,
+      "cumulative_input_bytes": 8476,
+      "cumulative_output_bytes": 193,
+      "decision_input_bytes": [
+        3884,
+        4592
+      ],
+      "decision_output_bytes": [
+        115,
+        78
+      ],
+      "distinct_feedback_content_bytes": 580,
+      "distinct_feedback_count": 1,
+      "elapsed_ms": 1452.721084,
+      "final_candidate": "?",
+      "final_candidate_origin": "completion",
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Inconclusive",
+        "invocations": 1,
+        "outside_agent_budget": true,
+        "subject": "hypothetical candidate, not source proof"
+      },
+      "initial_candidate": "?",
+      "initial_input_bytes": 3884,
+      "input_tokens": null,
+      "lifecycle": [
+        "Ready",
+        "Ready",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Completed"
+      ],
+      "limits": {
+        "max_conversation_bytes": 196608,
+        "max_decisions": 4,
+        "max_malformed": 1,
+        "max_message_bytes": 65536,
+        "max_tokens_per_decision": 320,
+        "max_tool_calls": 2
+      },
+      "malformed": 0,
+      "model_claim": "unresolved",
+      "model_claim_matches_verification": true,
+      "output_tokens": null,
+      "passed": true,
+      "publish_errors": 0,
+      "rejections": 0,
+      "repetition": 2,
+      "request": "Evaluate hypothetical replacement for goal 0 of this unchanged Path source: theorem trial (A : Type 0) (x : A) : Id A x x := ?\n\nFirst call language.language.path.evaluate_goal_candidate with goal_id 0 and replacement \"?\". On rejection, infer a corrected candidate and evaluate it; do not claim success without a kernel-checked result. On incomplete/inconclusive stop unresolved, not verified. Complete with content containing a JSON string object with candidate (the final proposed replacement) and claim (verified, rejected, or unresolved). This is read-only candidate evaluation, not verification of the source containing a hole. /no_think",
+      "safe_decisions": [
+        {
+          "candidate": "?",
+          "fixture_tool": true,
+          "goal_id": 0,
+          "json_parsed": true,
+          "response_bytes": 115,
+          "type": "tool"
+        },
+        {
+          "candidate": "?",
+          "claim": "unresolved",
+          "content_bytes": 38,
+          "json_parsed": true,
+          "response_bytes": 78,
+          "type": "complete"
+        }
+      ],
+      "safe_evidence": [
+        {
+          "bounded": false,
+          "bytes": 1708,
+          "kind": "context_assembly",
+          "success": true
+        },
+        {
+          "kind": "decision",
+          "ordinal": 1
+        },
+        {
+          "initial_message_bytes": 2404,
+          "kind": "context_supplied",
+          "packet_bytes": 1708
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 1,
+          "response_bytes": 115
+        },
+        {
+          "kind": "tool",
+          "ordinal": 1,
+          "outcome": "Success",
+          "request_ordinal": 1
+        },
+        {
+          "call_ordinal": 1,
+          "kind": "verification",
+          "observation": {
+            "authority": "Path kernel/candidate evaluator",
+            "classification": "Inconclusive",
+            "completeness": "SelectedFields",
+            "operation": "language.language.path.evaluate_goal_candidate",
+            "source": {
+              "identity": {
+                "identity": "0",
+                "kind": "scratch_buffer"
+              },
+              "language": "language.path",
+              "revision": 0
+            },
+            "subject": "HypotheticalCandidate"
+          },
+          "request_ordinal": 1
+        },
+        {
+          "kind": "decision",
+          "ordinal": 2
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 2,
+          "response_bytes": 78
+        }
+      ],
+      "scenario": "incomplete",
+      "sequence_ok": true,
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "task_claim_matches_expected": true,
+      "trusted_classifications": [
+        "Inconclusive"
+      ],
+      "usage": {
+        "conversation_bytes": 4647,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "H3"
+    },
+    {
+      "adapter_errors": 0,
+      "authorization_rejections": 0,
+      "authorized_candidates": [
+        "?"
+      ],
+      "budget_exhausted": false,
+      "callbacks": 10,
+      "calls": 1,
+      "corrections": 0,
+      "cumulative_input_bytes": 23469,
+      "cumulative_output_bytes": 193,
+      "decision_input_bytes": [
+        4166,
+        19303
+      ],
+      "decision_output_bytes": [
+        115,
+        78
+      ],
+      "distinct_feedback_content_bytes": 15009,
+      "distinct_feedback_count": 1,
+      "elapsed_ms": 12919.68075,
+      "final_candidate": "?",
+      "final_candidate_origin": "completion",
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Inconclusive",
+        "invocations": 1,
+        "outside_agent_budget": true,
+        "subject": "hypothetical candidate, not source proof"
+      },
+      "initial_candidate": "?",
+      "initial_input_bytes": 4166,
+      "input_tokens": null,
+      "lifecycle": [
+        "Ready",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Completed"
+      ],
+      "limits": {
+        "max_conversation_bytes": 196608,
+        "max_decisions": 4,
+        "max_malformed": 1,
+        "max_message_bytes": 65536,
+        "max_tokens_per_decision": 320,
+        "max_tool_calls": 2
+      },
+      "malformed": 0,
+      "model_claim": "unresolved",
+      "model_claim_matches_verification": true,
+      "output_tokens": null,
+      "passed": true,
+      "publish_errors": 0,
+      "rejections": 0,
+      "repetition": 2,
+      "request": "Evaluate hypothetical replacement for goal 0 of this unchanged Path source: theorem trial (A : Type 0) (x : A) : Id A x x := ?\n\nFirst call language.language.path.evaluate_goal_candidate with goal_id 0 and replacement \"?\". On rejection, infer a corrected candidate and evaluate it; do not claim success without a kernel-checked result. On incomplete/inconclusive stop unresolved, not verified. Complete with content containing a JSON string object with candidate (the final proposed replacement) and claim (verified, rejected, or unresolved). This is read-only candidate evaluation, not verification of the source containing a hole. /no_think",
+      "safe_decisions": [
+        {
+          "candidate": "?",
+          "fixture_tool": true,
+          "goal_id": 0,
+          "json_parsed": true,
+          "response_bytes": 115,
+          "type": "tool"
+        },
+        {
+          "candidate": "?",
+          "claim": "unresolved",
+          "content_bytes": 38,
+          "json_parsed": true,
+          "response_bytes": 78,
+          "type": "complete"
+        }
+      ],
+      "safe_evidence": [
+        {
+          "kind": "decision",
+          "ordinal": 1
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 1,
+          "response_bytes": 115
+        },
+        {
+          "kind": "tool",
+          "ordinal": 1,
+          "outcome": "Success",
+          "request_ordinal": 1
+        },
+        {
+          "kind": "decision",
+          "ordinal": 2
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 2,
+          "response_bytes": 78
+        }
+      ],
+      "scenario": "incomplete",
+      "sequence_ok": true,
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "task_claim_matches_expected": true,
+      "trusted_classifications": [
+        "Inconclusive"
+      ],
+      "usage": {
+        "conversation_bytes": 19358,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "baseline"
+    },
+    {
+      "adapter_errors": 0,
+      "authorization_rejections": 0,
+      "authorized_candidates": [
+        "x"
+      ],
+      "budget_exhausted": false,
+      "callbacks": 11,
+      "calls": 1,
+      "corrections": 0,
+      "cumulative_input_bytes": 21780,
+      "cumulative_output_bytes": 191,
+      "decision_input_bytes": [
+        3884,
+        17896
+      ],
+      "decision_output_bytes": [
+        115,
+        76
+      ],
+      "distinct_feedback_content_bytes": 13884,
+      "distinct_feedback_count": 1,
+      "elapsed_ms": 11646.693791,
+      "final_candidate": "x",
+      "final_candidate_origin": "completion",
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Rejected",
+        "invocations": 1,
+        "outside_agent_budget": true,
+        "subject": "hypothetical candidate, not source proof"
+      },
+      "initial_candidate": "x",
+      "initial_input_bytes": 3884,
+      "input_tokens": null,
+      "lifecycle": [
+        "Ready",
+        "Ready",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Completed"
+      ],
+      "limits": {
+        "max_conversation_bytes": 196608,
+        "max_decisions": 3,
+        "max_malformed": 1,
+        "max_message_bytes": 65536,
+        "max_tokens_per_decision": 320,
+        "max_tool_calls": 2
+      },
+      "malformed": 0,
+      "model_claim": "rejected",
+      "model_claim_matches_verification": true,
+      "output_tokens": null,
+      "passed": false,
+      "publish_errors": 0,
+      "rejections": 1,
+      "repetition": 2,
+      "request": "Evaluate hypothetical replacement for goal 0 of this unchanged Path source: theorem trial (A : Type 0) (x : A) : Id A x x := ?\n\nFirst call language.language.path.evaluate_goal_candidate with goal_id 0 and replacement \"x\". On rejection, infer a corrected candidate and evaluate it; do not claim success without a kernel-checked result. On incomplete/inconclusive stop unresolved, not verified. Complete with content containing a JSON string object with candidate (the final proposed replacement) and claim (verified, rejected, or unresolved). This is read-only candidate evaluation, not verification of the source containing a hole. /no_think",
+      "safe_decisions": [
+        {
+          "candidate": "x",
+          "fixture_tool": true,
+          "goal_id": 0,
+          "json_parsed": true,
+          "response_bytes": 115,
+          "type": "tool"
+        },
+        {
+          "candidate": "x",
+          "claim": "rejected",
+          "content_bytes": 36,
+          "json_parsed": true,
+          "response_bytes": 76,
+          "type": "complete"
+        }
+      ],
+      "safe_evidence": [
+        {
+          "bounded": false,
+          "bytes": 1708,
+          "kind": "context_assembly",
+          "success": true
+        },
+        {
+          "kind": "decision",
+          "ordinal": 1
+        },
+        {
+          "initial_message_bytes": 2404,
+          "kind": "context_supplied",
+          "packet_bytes": 1708
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 1,
+          "response_bytes": 115
+        },
+        {
+          "kind": "tool",
+          "ordinal": 1,
+          "outcome": "Success",
+          "request_ordinal": 1
+        },
+        {
+          "kind": "decision",
+          "ordinal": 2
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 2,
+          "response_bytes": 76
+        }
+      ],
+      "scenario": "tight_recovery",
+      "sequence_ok": false,
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "task_claim_matches_expected": false,
+      "trusted_classifications": [
+        "Rejected"
+      ],
+      "usage": {
+        "conversation_bytes": 17949,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "H2"
+    },
+    {
+      "adapter_errors": 0,
+      "authorization_rejections": 0,
+      "authorized_candidates": [
+        "x"
+      ],
+      "budget_exhausted": false,
+      "callbacks": 12,
+      "calls": 1,
+      "corrections": 0,
+      "cumulative_input_bytes": 8479,
+      "cumulative_output_bytes": 194,
+      "decision_input_bytes": [
+        3884,
+        4595
+      ],
+      "decision_output_bytes": [
+        115,
+        79
+      ],
+      "distinct_feedback_content_bytes": 583,
+      "distinct_feedback_count": 1,
+      "elapsed_ms": 1650.7257499999998,
+      "final_candidate": "x",
+      "final_candidate_origin": "completion",
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Rejected",
+        "invocations": 1,
+        "outside_agent_budget": true,
+        "subject": "hypothetical candidate, not source proof"
+      },
+      "initial_candidate": "x",
+      "initial_input_bytes": 3884,
+      "input_tokens": null,
+      "lifecycle": [
+        "Ready",
+        "Ready",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Completed"
+      ],
+      "limits": {
+        "max_conversation_bytes": 196608,
+        "max_decisions": 3,
+        "max_malformed": 1,
+        "max_message_bytes": 65536,
+        "max_tokens_per_decision": 320,
+        "max_tool_calls": 2
+      },
+      "malformed": 0,
+      "model_claim": "rejected",
+      "model_claim_matches_verification": true,
+      "output_tokens": null,
+      "passed": false,
+      "publish_errors": 0,
+      "rejections": 1,
+      "repetition": 2,
+      "request": "Evaluate hypothetical replacement for goal 0 of this unchanged Path source: theorem trial (A : Type 0) (x : A) : Id A x x := ?\n\nFirst call language.language.path.evaluate_goal_candidate with goal_id 0 and replacement \"x\". On rejection, infer a corrected candidate and evaluate it; do not claim success without a kernel-checked result. On incomplete/inconclusive stop unresolved, not verified. Complete with content containing a JSON string object with candidate (the final proposed replacement) and claim (verified, rejected, or unresolved). This is read-only candidate evaluation, not verification of the source containing a hole. /no_think",
+      "safe_decisions": [
+        {
+          "candidate": "x",
+          "fixture_tool": true,
+          "goal_id": 0,
+          "json_parsed": true,
+          "response_bytes": 115,
+          "type": "tool"
+        },
+        {
+          "candidate": "x",
+          "claim": "rejected",
+          "content_bytes": 39,
+          "json_parsed": true,
+          "response_bytes": 79,
+          "type": "complete"
+        }
+      ],
+      "safe_evidence": [
+        {
+          "bounded": false,
+          "bytes": 1708,
+          "kind": "context_assembly",
+          "success": true
+        },
+        {
+          "kind": "decision",
+          "ordinal": 1
+        },
+        {
+          "initial_message_bytes": 2404,
+          "kind": "context_supplied",
+          "packet_bytes": 1708
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 1,
+          "response_bytes": 115
+        },
+        {
+          "kind": "tool",
+          "ordinal": 1,
+          "outcome": "Success",
+          "request_ordinal": 1
+        },
+        {
+          "call_ordinal": 1,
+          "kind": "verification",
+          "observation": {
+            "authority": "Path kernel/candidate evaluator",
+            "classification": "Rejected",
+            "completeness": "SelectedFields",
+            "operation": "language.language.path.evaluate_goal_candidate",
+            "source": {
+              "identity": {
+                "identity": "0",
+                "kind": "scratch_buffer"
+              },
+              "language": "language.path",
+              "revision": 0
+            },
+            "subject": "HypotheticalCandidate"
+          },
+          "request_ordinal": 1
+        },
+        {
+          "kind": "decision",
+          "ordinal": 2
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 2,
+          "response_bytes": 79
+        }
+      ],
+      "scenario": "tight_recovery",
+      "sequence_ok": false,
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "task_claim_matches_expected": false,
+      "trusted_classifications": [
+        "Rejected"
+      ],
+      "usage": {
+        "conversation_bytes": 4651,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "H3"
+    },
+    {
+      "adapter_errors": 0,
+      "authorization_rejections": 0,
+      "authorized_candidates": [
+        "x"
+      ],
+      "budget_exhausted": false,
+      "callbacks": 10,
+      "calls": 1,
+      "corrections": 0,
+      "cumulative_input_bytes": 22344,
+      "cumulative_output_bytes": 191,
+      "decision_input_bytes": [
+        4166,
+        18178
+      ],
+      "decision_output_bytes": [
+        115,
+        76
+      ],
+      "distinct_feedback_content_bytes": 13884,
+      "distinct_feedback_count": 1,
+      "elapsed_ms": 12569.575625000001,
+      "final_candidate": "x",
+      "final_candidate_origin": "completion",
+      "fresh": true,
+      "independent_final_validation": {
+        "classification": "Rejected",
+        "invocations": 1,
+        "outside_agent_budget": true,
+        "subject": "hypothetical candidate, not source proof"
+      },
+      "initial_candidate": "x",
+      "initial_input_bytes": 4166,
+      "input_tokens": null,
+      "lifecycle": [
+        "Ready",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "Deciding { request_ordinal: 1 }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "ToolRunning { request_ordinal: 1, call_ordinal: 1, name: \"language.language.path.evaluate_goal_candidate\" }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Deciding { request_ordinal: 2 }",
+        "Completed"
+      ],
+      "limits": {
+        "max_conversation_bytes": 196608,
+        "max_decisions": 3,
+        "max_malformed": 1,
+        "max_message_bytes": 65536,
+        "max_tokens_per_decision": 320,
+        "max_tool_calls": 2
+      },
+      "malformed": 0,
+      "model_claim": "rejected",
+      "model_claim_matches_verification": true,
+      "output_tokens": null,
+      "passed": false,
+      "publish_errors": 0,
+      "rejections": 1,
+      "repetition": 2,
+      "request": "Evaluate hypothetical replacement for goal 0 of this unchanged Path source: theorem trial (A : Type 0) (x : A) : Id A x x := ?\n\nFirst call language.language.path.evaluate_goal_candidate with goal_id 0 and replacement \"x\". On rejection, infer a corrected candidate and evaluate it; do not claim success without a kernel-checked result. On incomplete/inconclusive stop unresolved, not verified. Complete with content containing a JSON string object with candidate (the final proposed replacement) and claim (verified, rejected, or unresolved). This is read-only candidate evaluation, not verification of the source containing a hole. /no_think",
+      "safe_decisions": [
+        {
+          "candidate": "x",
+          "fixture_tool": true,
+          "goal_id": 0,
+          "json_parsed": true,
+          "response_bytes": 115,
+          "type": "tool"
+        },
+        {
+          "candidate": "x",
+          "claim": "rejected",
+          "content_bytes": 36,
+          "json_parsed": true,
+          "response_bytes": 76,
+          "type": "complete"
+        }
+      ],
+      "safe_evidence": [
+        {
+          "kind": "decision",
+          "ordinal": 1
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 1,
+          "response_bytes": 115
+        },
+        {
+          "kind": "tool",
+          "ordinal": 1,
+          "outcome": "Success",
+          "request_ordinal": 1
+        },
+        {
+          "kind": "decision",
+          "ordinal": 2
+        },
+        {
+          "kind": "model_response",
+          "ordinal": 2,
+          "response_bytes": 76
+        }
+      ],
+      "scenario": "tight_recovery",
+      "sequence_ok": false,
+      "source_unchanged": true,
+      "stop": "Completed",
+      "store_get_import_valid": true,
+      "task_claim_matches_expected": false,
+      "trusted_classifications": [
+        "Rejected"
+      ],
+      "usage": {
+        "conversation_bytes": 18231,
+        "decisions": 2,
+        "malformed": 0,
+        "tool_calls": 1
+      },
+      "variant": "baseline"
+    }
+  ],
+  "settings": {
+    "max_tokens_per_decision": 320,
+    "seed": null,
+    "temperature": 0.2
+  }
+}

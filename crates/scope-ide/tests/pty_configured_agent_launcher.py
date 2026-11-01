@@ -17,10 +17,11 @@ from pty_editable_workspace import Workspace
 
 
 class AgentWorkspace(Workspace):
-    def read(self, timeout=4):
+    def read(self, timeout=4, *, completed=None):
         # The TUI redraws continuously; don't wait four seconds for a quiet
         # interval after each key sequence. expect() still waits for prompts.
-        return super().read(timeout=min(timeout, 0.5))
+        return super().read(timeout=min(timeout, 0.5) if completed is None else timeout,
+                            completed=completed)
 
 
 class Model(http.server.BaseHTTPRequestHandler):
