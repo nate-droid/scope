@@ -1,19 +1,27 @@
 # H1/H2/H3/H4 Path retained-agent harness
 
+Run commands from the Scope repository root. The repository Cargo configuration
+shares build artifacts in root `target/`, so the binary is
+`target/debug/scope-h1-experiment` (unless the build target directory is overridden).
+Result files are different: the source uses `CARGO_MANIFEST_DIR/target/results`,
+so all modes write under `examples/h1-path-agent/target/results/`, independent of
+the invocation directory and Cargo's build target directory.
+
 ## H4 bounded local-model comparison
 
 With LM Studio serving `qwen3-30b-a3b` at `http://127.0.0.1:1234/v1`:
 
 ```sh
 cargo build --offline --locked --manifest-path examples/h1-path-agent/Cargo.toml
-H4_REPEATS=2 examples/h1-path-agent/target/debug/scope-h1-experiment h4-real
+H4_REPEATS=2 target/debug/scope-h1-experiment h4-real
 cargo test --offline --locked --manifest-path examples/h1-path-agent/Cargo.toml
 ```
 
 `h4-real` runs baseline/H2/H3 for positive, rejection-refinement, incomplete,
 and tight-recovery tasks (24 attempts by default). `H4_REPEATS` accepts 1–10.
 It uses the ordinary retained runner and existing Cell adapter, with no paid API.
-Each attempt is checkpointed to ignored `target/results/h4-summary.json`;
+Each attempt is checkpointed to ignored
+`examples/h1-path-agent/target/results/h4-summary.json`;
 failed task outcomes are retained and do not abort the comparison. Successful
 process exit means the evaluation finished, **not** that every task passed.
 Independent Path checks run outside the agent's unchanged budgets. Token counts
@@ -22,10 +30,11 @@ Fixture-specific safe decision fields are retained, not arbitrary model prose or
 native reports. This evaluation sends fixture context to the configured local
 server; routine tests never require that server.
 
-See [the H4 evaluation](../../docs/h4-evaluation.md) for conditions, both live
-batches, individual failures, feedback limitations and next milestone, and
-[the human UX audit](../../docs/h4-human-ux.md) for actual workbench PTY evidence.
-The Path experiment is not an ordinary workbench action.
+The retained [initial H4 summary](evidence/h4-initial-summary.json) and
+[H4 summary](evidence/h4-summary.json) preserve historical outcomes, not a
+prediction of future model behavior. The Path experiment is not an ordinary
+workbench action; see the current [Agents guide](../../docs/agents.md) for host
+workflow and authorization boundaries.
 
 Standalone Cargo workspace; does not change Scope's root dependencies. Required checkout layout:
 
@@ -36,20 +45,20 @@ parent/
 └── path/                     # Path checkout with crates/path-scope
 ```
 
-Both the harness and Path must resolve Scope libraries from this same `scope/` checkout. Path's `scope-language` dependency must not point to another checkout or git/registry source. The committed lockfile pins external dependencies; it does not pin the path-dependent working trees. See [the report](../../docs/h1-experiment.md) for original revisions and the current-working-tree caveat.
+Both the harness and Path must resolve Scope libraries from this same `scope/` checkout. Path's `scope-language` dependency must not point to another checkout or git/registry source. The committed lockfile pins external dependencies; it does not pin the path-dependent working trees. Reproduction uses the current sibling working trees; the lockfile alone cannot recreate their historical state.
 
 From the Scope root:
 
 ```sh
 cargo build --offline --locked --manifest-path examples/h1-path-agent/Cargo.toml
-examples/h1-path-agent/target/debug/scope-h1-experiment fake
-examples/h1-path-agent/target/debug/scope-h1-experiment fake-h2
+target/debug/scope-h1-experiment fake
+target/debug/scope-h1-experiment fake-h2
 curl --noproxy '*' --connect-timeout 3 --max-time 10 -fsS http://127.0.0.1:1234/v1/models
-examples/h1-path-agent/target/debug/scope-h1-experiment real
-examples/h1-path-agent/target/debug/scope-h1-experiment real-h2
+target/debug/scope-h1-experiment real
+target/debug/scope-h1-experiment real-h2
 ```
 
-`fake` scripts only model decisions; it still calls the real Path LanguageService and kernel. `real` uses CellAgent with local LM Studio model `qwen3-30b-a3b` at `http://127.0.0.1:1234/v1`, without credentials or a paid endpoint. Inspect the model list first. The report provides externally bounded commands; the existing adapter also has its own request timeout. Offline builds require dependencies already cached; otherwise populate the cache with a separately authorized online build.
+`fake` scripts only model decisions; it still calls the real Path LanguageService and kernel. `real` uses CellAgent with local LM Studio model `qwen3-30b-a3b` at `http://127.0.0.1:1234/v1`, without credentials or a paid endpoint. Inspect the model list first. The existing adapter has its own request timeout; these direct invocations do not add an external process deadline. Offline builds require dependencies already cached; otherwise populate the cache with a separately authorized online build.
 
 `fake-h2` and `real-h2` opt into `run_retained_scratch_agent_semantic_observed`
 with `SemanticContextOptions::default()`. Their baseline counterparts retain the
@@ -91,7 +100,9 @@ budgets (one additional validation per run). Retained snapshots are published,
 queried through `scope.agent.get` in a separate session, imported, and checked for
 matching verification metadata and absence of native output.
 
-Runs write `target/results/h3-control-summary.json`, not the historical evidence.
+Runs write `examples/h1-path-agent/target/results/h3-control-summary.json`,
+not the historical evidence. The copy source below remains example-local even
+though the executable is built in root `target/debug/`.
 To explicitly refresh the sanitized evidence snapshot after a successful run:
 
 ```sh
@@ -163,4 +174,4 @@ Sanitized summaries are checked in as `evidence/h2-baseline-summary.json` and
 
 Source freshness is checked against the live `&ScratchBuffer`: its process-local evaluation identity must match, as must the typed source binding's tagged ID, revision, and language. The serialized typed binding remains owner-local; two independent buffer owners can both have scratch ID 0. Serialized snapshots alone therefore do not establish cross-owner freshness. The private evaluation identity is not serialized.
 
-Runs write sanitized snapshots and summaries to ignored `target/results/`, never over the committed historical `evidence/`. No build outputs are included. Evidence copies preserve the original exercise's results, not a claim that every future model run will behave identically. Raw prompts, responses, traces, native tool outputs, local filesystem metadata, and credentials are not included.
+Runs write sanitized snapshots and summaries to ignored `examples/h1-path-agent/target/results/`, never over the committed historical `evidence/`. No build outputs are included. Evidence copies preserve the original exercise's results, not a claim that every future model run will behave identically. Raw prompts, responses, traces, native tool outputs, local filesystem metadata, and credentials are not included.

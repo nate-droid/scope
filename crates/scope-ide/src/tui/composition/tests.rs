@@ -2369,3 +2369,140 @@ fn path_f1_dirty_draft_disables_all_handoffs_and_rechecks_captured_tokens() {
     h.render();
     assert!(h.pane_text("editor").contains("draft original"));
 }
+
+struct DocumentStatusProbe;
+impl Pane for DocumentStatusProbe {
+    fn id(&self) -> &'static str {
+        "document-status-probe"
+    }
+    fn render(&self, frame: &mut ratatui::Frame<'_>, area: Rect, ctx: &TuiContext<'_>) {
+        frame.render_widget(
+            Paragraph::new(format!(
+                "status={:?}; drafts={}",
+                ctx.selected_document_status(),
+                ctx.has_editor_drafts()
+            )),
+            area,
+        );
+    }
+}
+
+#[test]
+fn read_only_document_status_reports_selected_name_and_committed_dirty_state() {
+    let root = TempWorkspace::new("read-only-document-status");
+    root.write_file("notes.txt", "disk source");
+    let mut h = EditableWorkspace::new(&root, true);
+    assert_eq!(TuiContext::new(&h.app).selected_document_status(), None);
+    assert!(!TuiContext::new(&h.app).has_editor_drafts());
+    let empty = ScratchBuffers::default();
+    assert_eq!(
+        TuiContext::with_view_sources(&h.app, false, 0, Some(&empty)).selected_document_status(),
+        None
+    );
+    let scratch = h.sources.selected().unwrap().id();
+    let file = h
+        .sources
+        .open(h.app.workspace(), h.app.languages(), "notes.txt")
+        .unwrap();
+    for dirty in [false, true] {
+        if dirty {
+            h.sources
+                .selected_mut()
+                .unwrap()
+                .apply_edit(crate::text::TextEdit::insert(
+                    crate::text::Position::new(0, 0),
+                    "committed ",
+                ))
+                .unwrap();
+        }
+        let before = format!("{:?}", h.sources);
+        let bound = h.sources.bound_source();
+        root.write_file(
+            "notes.txt",
+            "external change must not be read or overwritten",
+        );
+        for _ in 0..2 {
+            let ctx = TuiContext::with_view_sources(&h.app, false, 0, Some(&h.sources));
+            assert_eq!(
+                ctx.selected_document_status(),
+                Some(("notes.txt".into(), dirty))
+            );
+            assert!(!ctx.has_editor_drafts());
+        }
+        assert_eq!(format!("{:?}", h.sources), before);
+        assert_eq!(h.sources.bound_source(), bound);
+        assert_eq!(h.sources.selected().unwrap().id(), file);
+        assert_eq!(
+            root.read_file("notes.txt"),
+            "external change must not be read or overwritten"
+        );
+    }
+    h.sources.select(scratch).unwrap();
+    let before = format!("{:?}", h.sources);
+    assert_eq!(
+        TuiContext::with_view_sources(&h.app, false, 0, Some(&h.sources))
+            .selected_document_status(),
+        Some(("Untitled document".into(), true))
+    );
+    assert_eq!(format!("{:?}", h.sources), before);
+}
+
+#[test]
+fn render_context_reports_global_visible_and_hidden_drafts_without_mutation() {
+    let root = TempWorkspace::new("render-global-draft-status");
+    root.write_file("selected.txt", "clean selected source");
+    let mut h = EditableWorkspace::new(&root, true);
+    h.ui.register("status", DocumentStatusProbe).unwrap();
+    h.ui.layout(
+        "status-editor",
+        View::horizontal([View::leaf("editor"), View::leaf("status")]),
+    )
+    .unwrap();
+    h.ui.layout("status-only", View::leaf("status")).unwrap();
+    h.ui.select_layout("status-editor").unwrap();
+    h.render();
+    assert!(h.pane_text("status").contains("drafts=false"));
+    h.ui.focus_named("editor").unwrap();
+    let draft_id = h.sources.selected().unwrap().id();
+    h.event(Event::Paste("unpublished ".into()));
+    h.render();
+    let draft_text = h.pane_text("editor");
+    assert!(draft_text.contains("unpublished original"));
+    assert!(h.pane_text("status").contains("drafts=true"));
+    h.sources
+        .open(h.app.workspace(), h.app.languages(), "selected.txt")
+        .unwrap();
+    h.render();
+    for layout in ["status-editor", "status-only"] {
+        h.ui.select_layout(layout).unwrap();
+        let before = format!("{:?}", h.sources);
+        let bound = h.sources.bound_source();
+        let blocker = h.ui.draft_blocker();
+        assert!(blocker.is_some());
+        for _ in 0..2 {
+            h.render();
+            let text = h.pane_text("status");
+            assert!(
+                text.contains("status=Some((\"selected.txt\", false))"),
+                "{text}"
+            );
+            assert!(text.contains("drafts=true"), "{text}");
+            assert_eq!(format!("{:?}", h.sources), before);
+            assert_eq!(h.sources.bound_source(), bound);
+            assert_eq!(h.ui.draft_blocker(), blocker);
+        }
+    }
+    h.sources.select(draft_id).unwrap();
+    h.ui.select_layout("status-editor").unwrap();
+    h.render();
+    h.ui.focus_named("editor").unwrap();
+    h.render();
+    assert_eq!(h.pane_text("editor"), draft_text);
+    assert_eq!(h.sources.selected().unwrap().text(), "original");
+    assert_eq!(root.read_file("selected.txt"), "clean selected source");
+    h.ui.focus_named("editor").unwrap();
+    h.control('s');
+    h.render();
+    assert!(h.pane_text("status").contains("drafts=false"));
+    assert_eq!(h.sources.selected().unwrap().text(), "unpublished original");
+}

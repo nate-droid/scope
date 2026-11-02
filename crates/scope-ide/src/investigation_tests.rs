@@ -75,6 +75,27 @@ fn investigate_mode(
     assessment: InvestigationCompletion,
     compact: bool,
 ) -> InvestigationResult {
+    investigate_objective(
+        decisions,
+        options,
+        initial_operations,
+        authorize,
+        assessment,
+        compact,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn investigate_objective(
+    decisions: Vec<String>,
+    options: SemanticInvestigationOptions,
+    initial_operations: Vec<String>,
+    authorize: bool,
+    assessment: InvestigationCompletion,
+    compact: bool,
+    objective: Option<SemanticInvestigationObjective>,
+) -> InvestigationResult {
     let target = Target;
     let service = Service {
         language: "mock",
@@ -92,7 +113,37 @@ fn investigate_mode(
     } else {
         run_semantic_investigation_with_discovery
     };
-    let run = runner(
+    macro_rules! run {
+        ($model:expr, $controller:expr, $target:expr, $service:expr, $request:expr, $options:expr, $discovery:expr, $policy:expr, $completion:expr $(,)?) => {
+            if let Some(objective) = objective {
+                run_semantic_investigation_with_objective_and_discovery(
+                    $model,
+                    $controller,
+                    $target,
+                    $service,
+                    $request,
+                    $options,
+                    $discovery,
+                    objective,
+                    $policy,
+                    $completion,
+                )
+            } else {
+                runner(
+                    $model,
+                    $controller,
+                    $target,
+                    $service,
+                    $request,
+                    $options,
+                    $discovery,
+                    $policy,
+                    $completion,
+                )
+            }
+        };
+    }
+    let run = run!(
         &mut model,
         &mut controller,
         &target,
@@ -1105,5 +1156,99 @@ fn compact_investigation_detail_obeys_tool_and_model_budgets() {
         );
         assert_eq!((result.dispatches, result.policies), (0, 0));
         assert!(result.run.discovered_operations.is_empty());
+    }
+}
+
+#[test]
+fn construction_changes_only_system_objective() {
+    let run = |objective, decisions, authorize, assessment| {
+        investigate_objective(
+            decisions,
+            investigation_options(),
+            vec![READ.into()],
+            authorize,
+            assessment,
+            false,
+            objective,
+        )
+    };
+    for (decisions, authorize, assessment, outcome, counts) in [
+        (
+            vec![tool(READ), complete()],
+            true,
+            InvestigationCompletion::Completed,
+            EditOutcome::InvestigationCompleted,
+            (1, 1, 1),
+        ),
+        (
+            vec![tool(READ), complete()],
+            true,
+            InvestigationCompletion::Inconclusive,
+            EditOutcome::InvestigationInconclusive,
+            (1, 1, 1),
+        ),
+        (
+            vec![tool(READ)],
+            false,
+            InvestigationCompletion::Completed,
+            EditOutcome::AuthorizationFailure,
+            (0, 1, 0),
+        ),
+        (
+            vec![tool(READ), tool(READ)],
+            true,
+            InvestigationCompletion::Completed,
+            EditOutcome::NoProgress,
+            (1, 1, 0),
+        ),
+        (
+            vec![complete()],
+            true,
+            InvestigationCompletion::Completed,
+            EditOutcome::InvestigationInconclusive,
+            (0, 0, 1),
+        ),
+    ] {
+        let old = run(None, decisions.clone(), authorize, assessment);
+        let default = run(
+            Some(SemanticInvestigationObjective::default()),
+            decisions.clone(),
+            authorize,
+            assessment,
+        );
+        let construction = run(
+            Some(SemanticInvestigationObjective::HypotheticalConstruction),
+            decisions,
+            authorize,
+            assessment,
+        );
+        assert_eq!(old.conversations, default.conversations);
+        assert_eq!(old.contexts, construction.contexts);
+        assert_eq!(construction.run.outcome, outcome);
+        assert_eq!(
+            (
+                construction.dispatches,
+                construction.policies,
+                construction.completions
+            ),
+            counts
+        );
+        assert_eq!(old.run.evidence.len(), construction.run.evidence.len());
+        let original = old.conversations[0][0].as_str().unwrap();
+        let changed = construction.conversations[0][0].as_str().unwrap();
+        let suffix = " For language tools, put only operation-specific domain fields directly in the decision arguments object, matching invocation_schema. The host binds the exact source, revision, target, scope and selection. Do not send expected_version, expected_source, an arguments wrapper, or catalog metadata. Escape literal newlines inside JSON strings as \\n.";
+        assert_eq!(
+            original,
+            format!(
+                "{PROTOCOL}\nThis is a bounded read-only investigation. Discover and invoke permitted read operations, inspect evidence, then complete with an evidence-backed conclusion or explicit uncertainty. Never propose, apply or save. Completion is assessed by the host, not proof of semantic correctness.{suffix}"
+            )
+        );
+        assert!(changed.starts_with(&format!(
+            "{PROTOCOL}\nThis is a bounded hypothetical construction task."
+        )));
+        assert!(changed.ends_with(suffix));
+        for (a, b) in old.conversations.iter().zip(&construction.conversations) {
+            assert_eq!(&a[1..], &b[1..]);
+        }
     }
 }

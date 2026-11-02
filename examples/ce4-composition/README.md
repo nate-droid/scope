@@ -1,6 +1,10 @@
 # CE4: Forth → explicit Church adapter → Path kernel
 
-A standalone workspace using the real sibling Forth and Path providers. See [the CE4 report](../../docs/CE4_CROSS_PROVIDER_COMPOSITION.md) for the architecture audit, exact contracts, measurements and limitations.
+A standalone workspace using the real sibling Forth and Path providers. The
+checked-in [deterministic evaluation evidence](deterministic.json) records the
+reported arms; the controls and limitations below explain its scope. For current
+host integration and authorization contracts, see the [Integration guide](../../docs/integration.md)
+and [Agents guide](../../docs/agents.md).
 
 From the Scope root, with sibling `../scope-forth` and `../path` checkouts and cached dependencies:
 

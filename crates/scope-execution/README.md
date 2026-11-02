@@ -14,8 +14,20 @@ cooperative deadlines/cancellation, and logical envelope payload limits. Existin
 `execute` remains unconfigured and compatible. Both paths share typed validation
 and artifact retention; no host capabilities are installed implicitly.
 
-See [SE1 managed execution](../../docs/SE1_MANAGED_COMPONENT_EXECUTION.md) for
-budget semantics, structured errors, containment limitations, and Cross adoption.
+Ordinary hosts can import `Cell`, `ExecutionPolicy`, `CancellationToken` and
+`ExecutionErrorKind` directly from `scope_execution`. These re-export Cell's
+original types and retain Cell's existing API; they do not duplicate policy.
+Managed execution configures limits without a mutable Wasmtime-store escape
+hatch. Specialized capability installers may still intentionally depend on Cell crates.
+See the [language integration route](../../docs/integration.md#language-integration-the-host-facing-route)
+for source binding, authorization and evidence association, and the
+[upstream transfer correction](../../docs/integration.md#upstream-transfer-correction-local-verification-publication-pending)
+for the opt-in diagnostic and pending publication boundary.
+
+See [managed component execution](../../docs/integration.md#managed-component-execution)
+for budget semantics and containment limitations, the
+[execution API](src/lib.rs) for structured errors and phases, and
+[policy tests](tests/policy.rs) for concrete budgets, cancellation and partial failures.
 Run `cargo test -p scope-execution` for both legacy and managed execution tests.
 
 ## Run the tests and demonstration

@@ -9,6 +9,7 @@ pub struct TuiContext<'a> {
     sources: Option<&'a crate::scratch::ScratchBuffers>,
     focused: bool,
     scroll: u16,
+    editor_drafts: bool,
 }
 
 impl<'a> TuiContext<'a> {
@@ -18,6 +19,7 @@ impl<'a> TuiContext<'a> {
             sources: None,
             focused: false,
             scroll: 0,
+            editor_drafts: false,
         }
     }
 
@@ -36,6 +38,7 @@ impl<'a> TuiContext<'a> {
             sources,
             focused,
             scroll,
+            editor_drafts: false,
         }
     }
 
@@ -59,6 +62,28 @@ impl<'a> TuiContext<'a> {
             },
             version: buffer.version(),
         })
+    }
+
+    /// Presentation metadata from the existing selected buffer; no disk read.
+    pub fn selected_document_status(&self) -> Option<(String, bool)> {
+        let buffer = self.sources?.selected().ok()?;
+        Some((
+            buffer
+                .destination_path()
+                .map(|path| path.to_string())
+                .unwrap_or_else(|| "Untitled document".into()),
+            buffer.is_dirty(),
+        ))
+    }
+
+    /// True if any editor draft would block execution, including parked drafts.
+    pub fn has_editor_drafts(&self) -> bool {
+        self.editor_drafts
+    }
+
+    pub(super) fn with_editor_drafts(mut self, dirty: bool) -> Self {
+        self.editor_drafts = dirty;
+        self
     }
 
     pub fn is_focused(&self) -> bool {

@@ -10,7 +10,6 @@ default = ["tools"]
 tools = []
 logging = ["dep:cell-capability-log"]
 agent = ["tools", "dep:cell-capability-openai", "dep:serde"]
-# H5b development-only sibling capability; existing Cell pins remain unchanged.
 agent-lmstudio = ["agent", "dep:cell-capability-lmstudio"]
 tui = ["dep:ratatui", "tools"]
 
@@ -34,8 +33,7 @@ cell.workspace = true
 cell-capability-fs.workspace = true
 cell-capability-log = { workspace = true, optional = true }
 cell-capability-openai = { workspace = true, optional = true }
-# Isolated standalone crate depends on Cell v0.0.2, not sibling Cell HEAD.
-cell-capability-lmstudio = { path = "../../../cell/crates/capability-lmstudio", optional = true }
+cell-capability-lmstudio = { workspace = true, optional = true }
 cell-guest.workspace = true
 scope-language = { path = "../scope-language" }
 scope-meta = { path = "../scope-meta" }

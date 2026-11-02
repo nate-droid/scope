@@ -363,6 +363,10 @@ impl WorkspaceTui {
         sources: Option<&crate::scratch::ScratchBuffers>,
     ) {
         self.geometry(area);
+        let editor_drafts = self
+            .instances
+            .values()
+            .any(|instance| instance.pane.has_dirty_draft());
         for (id, area) in &self.visible {
             let instance = &self.instances[id];
             let focused = self.focused.as_ref() == Some(id);
@@ -379,7 +383,8 @@ impl WorkspaceTui {
             instance.pane.render(
                 frame,
                 inner,
-                &TuiContext::with_view_sources(app, focused, instance.scroll, sources),
+                &TuiContext::with_view_sources(app, focused, instance.scroll, sources)
+                    .with_editor_drafts(editor_drafts),
             );
         }
     }

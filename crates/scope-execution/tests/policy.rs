@@ -1,7 +1,9 @@
 mod support;
 
-use cell::{CancellationToken, Cell, ExecutionErrorKind, ExecutionPolicy};
-use scope_execution::{ExecutionError, ExecutionPhase, ExecutionResult, execute_with_policy};
+use scope_execution::{
+    CancellationToken, Cell, ExecutionError, ExecutionErrorKind, ExecutionPhase, ExecutionPolicy,
+    ExecutionResult, execute_with_policy,
+};
 use scope_types::{Capabilities, Diagnostic, Endpoint};
 use std::time::{Duration, Instant};
 use support::*;

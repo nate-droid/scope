@@ -9,7 +9,7 @@ description = "Synchronous typed pipeline execution through Cell"
 cell.workspace = true
 cell-capability-log = { workspace = true, optional = true }
 scope-types = { path = "../scope-types" }
-wasmtime = { version = "47.0.3", features = ["component-model"] }
+wasmtime = { version = "50.0.1", features = ["component-model"] }
 
 [dev-dependencies]
 wat = "1"

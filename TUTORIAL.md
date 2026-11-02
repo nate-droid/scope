@@ -249,8 +249,8 @@ These commands are not keybindings in the raw editor.
 
 Command mode starts at the beginning and **inserts**, rather than replacing the
 old program when you reenter source. Inspect with `:show` before revising.
-See the [architecture diagnosis](docs/design/SCRATCH_EDITOR_DIAGNOSIS.md) for why
-repeated diagnostics can result from duplicated source, not parser state.
+Repeated diagnostics can result from duplicated source, not parser state; inspect
+the complete draft before inserting it again.
 
 Editing does not grant save authority, run providers, or accept agent proposals.
 Use explicit save and evaluation commands separately. See
@@ -404,9 +404,8 @@ editor. Plain Tab and `q` remain pane input rather than workspace navigation.
 
 F2 handoffs retain this launcher's scratches; shell commands may explicitly
 change them. Workspace and shell share terminal ownership sequentially, never
-read concurrently. For the measured transition-count comparison, current limits
-and test evidence, see [UX2 assessment](docs/design/UX2_WORKSPACE_ACTIONS.md) and the
-historical [UX1 baseline](docs/design/UX1_WORKSPACE_ASSESSMENT.md). F1/F5 are tested
+read concurrently. The [workspace PTY scenarios](crates/scope-workbench/tests/pty_workspace.py)
+exercise these transitions. F1/F5 are tested
 with xterm sequences; terminal emulators or OS shortcut mappings may intercept
 function keys. The same actions can be selected by name through F1.
 

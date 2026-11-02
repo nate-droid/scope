@@ -124,11 +124,11 @@ Offline regression coverage includes lifecycle edge enforcement, duplicate event
 * The offline `retained_semantic_agent` example ran successfully and inspected its retained turn through `scope.agent.get`.
 * The full workspace test command exceeded its 120-second limit while running existing downstream-launcher PTY coverage; this is not a complete workspace pass.
 
-See [the real Path experiment](h1-experiment.md) and tracked `examples/h1-path-agent/` harness. A local LM Studio model performed a real kernel-backed Path operation; an independent tool session inspected the completed turn. A deterministic decision model exercised the same real service without a model dependency. The example is optional and outside the root workspace, so routine CI does not require Path or a running model.
+See the tracked [Path harness and retained evidence](../examples/h1-path-agent/README.md). A local LM Studio model performed a real kernel-backed Path operation; an independent tool session inspected the completed turn. A deterministic decision model exercised the same real service without a model dependency. The example is optional and outside the root workspace, so routine CI does not require Path or a running model.
 
-## Subsequent milestones
+## Semantic context and verification feedback
 
-[H2](h2-semantic-context.md) adds opt-in bounded initial context with compact assembly and delivery evidence. [H3](h3-evidence-continuation.md) adds explicitly selected, revision- and invocation-attributed verification metadata through the ordinary tool-feedback path. `Completed` remains protocol completion, not domain success; native payloads remain excluded from public snapshots.
+The [semantic agent guide](agents.md) describes opt-in bounded initial context with compact assembly and delivery evidence. The [Path feedback control](../examples/h1-path-agent/README.md#h3-feedback-driven-offline-control) exercises explicitly selected, revision- and invocation-attributed verification metadata through the ordinary tool-feedback path. `Completed` remains protocol completion, not domain success; native payloads remain excluded from public snapshots.
 
 ## Historical H2 prerequisites and deferred decisions
 
@@ -146,3 +146,18 @@ Deliberately deferred: durable conversation sessions, resumption, model re-execu
 ### Final design answer
 
 Scope can now describe **ordinary decision-loop execution** through its existing semantic tool discovery/invocation infrastructure: nominally identified typed turn records, observed transitions, source revisions, bounded usage and retained outcome metadata are shared by UI and non-UI consumers. The type system did not need to become a workflow engine. It does **not yet describe every specialized agent path or domain verification payload** through that envelope, and nominal `TypeId` metadata is not a general structural schema for semantic results. H2 should first bind safe, attributed context and evidence references to these existing contracts—not introduce another abstraction layer.
+
+## Opt-in hypothetical construction objective
+
+`run_semantic_investigation_with_objective_and_discovery` accepts
+`SemanticInvestigationObjective::HypotheticalConstruction` to prioritize a checked
+hypothetical artifact. Only the system objective changes: permitted read operations,
+host authorization, source binding, discovery, argument schemas, budgets, duplicate
+suppression and host-assessed completion remain unchanged. This grants no persistent
+mutation authority, and prose or guidance is not checker evidence.
+
+The existing discovery runner retains its exact investigation objective;
+`Investigation` is the enum default. Existing signatures and options struct literals
+remain compatible. This additive public API requires Full verification under
+[the verification policy](verification.md); focused investigation tests alone do not
+satisfy that obligation.

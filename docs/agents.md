@@ -7,7 +7,7 @@ execution see [Integration](integration.md).
 
 For typed decision-loop state, read-only turn inspection, cancellation boundaries,
 and the H1 coverage assessment, see [Typed agent turns](agent-lifecycle.md).
-The [real Path exercise](h1-experiment.md) includes a reproducible local-model harness.
+The [Path harness](../examples/h1-path-agent/README.md) includes deterministic controls and opt-in local-model runs.
 
 ## Choose an agent surface
 
@@ -122,8 +122,9 @@ can edit/save. A model cannot authorize its own writes. The legacy
 
 The opt-in, development-only `agent-lmstudio` feature adds a separate Cell native
 transport without changing this lifecycle or the default OpenAI-compatible adapter.
-See [H5b native reasoning](h5b-native-reasoning.md) for sibling dependency setup,
-bounds, live evidence, and outstanding assurance. Effective reasoning mode remains
+The [native adapter and deterministic tests](../crates/scope-ide/src/agent_lmstudio.rs)
+record requested settings separately from backend acceptance. Cell setup follows
+[Development](development.md#toolchain-and-cell). Effective reasoning mode remains
 unknown unless independently established; reasoning is never decision content.
 
 Cell's default chat capability accepts text messages, not native function calls
@@ -197,10 +198,10 @@ rolled back. These budgets do not cancel synchronous model/provider calls, impos
 wall-clock deadlines, or independently verify endpoint token/billing limits.
 No transcript is persisted by default. For an explicitly opted-in investigation,
 `agent::run_session_traced` records ordered raw protocol events to a host-owned
-`ProtocolTrace<W: std::io::Write>` without changing validation or dispatch. See
-[Agent protocol trace](design/AGENT_PROTOCOL_TRACE.md) for sensitive-data
-handling, downstream integration, transport limitations, and the deterministic
-read-only fixture. Do not send raw traces to normal logs.
+`ProtocolTrace<W: std::io::Write>` without changing validation or dispatch. See the [trace API](../crates/scope-ide/src/agent_trace.rs) and deterministic
+[read-only fixture](../crates/scope-ide/examples/read_only_trace.rs) for integration.
+Raw traces can contain source, prompts, responses, and tool payloads; protect access
+and retention, and do not send them to normal logs.
 Context and feedback are transmitted
 to the configured endpoint, so choose providers and retention policies accordingly.
 
@@ -502,12 +503,12 @@ are the snapshot baseline; unsaved editor text is neither copied nor overwritten
 
 ## Compact discovery and bounded compound tools
 
-[CE1 context economy](CE1_CONTEXT_ECONOMY.md) documents the opt-in compact
-investigation catalog and canonical detail requests. Discovery remains metadata,
-not authorization. Its measured message-content bytes are not token counts or
-proof of improved model task completion.
+The opt-in compact investigation catalog and canonical detail requests are
+covered by the [investigation regression tests](../crates/scope-ide/src/investigation_tests.rs).
+Discovery remains metadata, not authorization. Message-content byte counts are
+not token counts or proof of improved model task completion.
 
-[CE2 bounded workflows](CE2_AGENT_WORKFLOWS.md) uses `AgentWorkflow`,
+Bounded workflows use `AgentWorkflow`,
 `AgentWorkflowContext::invoke`, and `run_session_with_workflows` in the existing
 loop. Each outer attempt **and each inner attempted call** consumes the shared
 `max_tool_calls`; inner calls re-enter the actual call-aware policy and must be
@@ -517,8 +518,9 @@ Adapters remain trusted code and must terminate. Result-size checks happen after
 provider return and cannot bound allocations or undo effects. This is not an
 arbitrary agent-authored Script execution permission.
 
-[CE3 evidence-guided refinement](CE3_EVIDENCE_GUIDED_REFINEMENT.md) distinguishes
-provider rejection evidence from model completion and proposal acceptance. A
+Evidence-guided refinement distinguishes provider rejection evidence from model
+completion and proposal acceptance. The [composition harness](../examples/ce4-composition/README.md)
+exercises bounded workflows with real provider rejection and retained evidence. A
 successful returned envelope does not by itself prove a candidate. Interpret the
 actual provider contract; do not infer generic `Evaluated` evidence from a domain
 status string. Retain full source-bound evidence separately from compact model

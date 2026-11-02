@@ -17,10 +17,10 @@ model loops, call-aware tool policy, budgets and filesystem proposals.
 
 Use a local Scope checkout. Scope path dependencies are development paths, not
 portable distribution; no registry release or MSRV guarantee is assumed. Cell
-comes from Git tag `v0.0.2`; no sibling Cell checkout is needed. Direct consumer
+comes from Git tag `v0.0.3`; no sibling Cell checkout is needed. Direct consumer
 Cell dependencies should use the same URL/tag. Host integrations need no Wasm
 target or model server. Guest development follows the matching
-[Cell tag](https://github.com/nate-droid/cell/tree/v0.0.2).
+[Cell tag](https://github.com/nate-droid/cell/tree/v0.0.3).
 
 `scope-ide` defaults to `tools`; `agent` and `tui` opt in and include tools.
 `logging` is separate. Downstream CLI features must explicitly forward dependency
@@ -273,8 +273,11 @@ Complete [consumer](../crates/scope-script/examples/downstream_shell.rs) and
 
 `ReadOnlyCommand::compositions()` registers explicit `:scope DOMAIN COMMAND`
 sequences of typed create/open/select/edit/bind and downstream steps, not recursive
-shell fragments or mutable App access. Registration grants nothing. Use
-[bounded compositions](BOUNDED_HOST_COMPOSITIONS.md) for complete examples and limits.
+shell fragments or mutable App access. Registration grants nothing. At most 64 compositions with 1–32 steps each are
+accepted; commands take no additional arguments. Editing cancellation stops later
+steps, and downstream dispatch requires an explicit binding to the pinned source.
+See the [complete host example](../crates/scope-ide/examples/bounded_composition.rs)
+and [typed steps, registration limits and dispatch checks](../crates/scope-ide/src/cli/composition.rs).
 
 ## Interactive language sessions
 
@@ -312,7 +315,9 @@ forwards exact text to `evaluate`. Buffer source IDs and versions distinguish di
 revisions; independent submissions get fresh identities. `Diagnostic::locations`
 can identify primary/related historical source revisions. Retain exact source text
 and identities yourself; Scope does not load locations from disk or retain your
-runtime history. See [source evaluation](SOURCE_EVALUATION.md).
+runtime history. The [source-aware embedding tests](../crates/scope-ide/tests/source_evaluation.rs)
+demonstrate exact request snapshots and diagnostics referring to retained historical
+revisions, including host-owned resolution and reset/close cleanup.
 
 ### Embedding an existing runtime
 
@@ -451,9 +456,10 @@ is best-effort, not atomic compare-and-swap or a multi-file transaction.
 Exclusive creation is Unix-only and has no fsync durability guarantee. Cell's
 contract requires a parent without hostile writers: interference with the named
 temporary source can invalidate content/revision guarantees. This is not a
-hostile-directory transaction. The pinned Cell `v0.0.2` (`86145d1`) already exposes
-this API; the locally inspected newer `31f760f` source has the same contract, so
-no dependency upgrade or direct host-filesystem fallback is needed. Retained
+hostile-directory transaction. Historical inspection established that Cell
+`v0.0.2` (`86145d1`) already exposed this API and that the then-newer inspected
+`31f760f` source had the same contract; no dependency upgrade or direct
+host-filesystem fallback was needed for this API. Retained
 editor Save/Save As still refuse any dirty draft (including parked drafts);
 publish remains separate from persistence and approvals are unchanged.
 
@@ -525,7 +531,10 @@ on candidate allocation or applied edits. No multi-buffer transaction is provide
 Workspace F4 shares a retained source-edit controller across submissions and blocks
 acceptance on unresolved editor drafts. Trusted hosts may borrow it through
 `WorkspaceCommandOutput::source_edit_controller` / `WorkspaceTui::source_edit_controller`.
-See [complete lifecycle and public consumer](RETAINED_SOURCE_PROPOSALS.md).
+See the [public proposal bridge tests](../crates/scope-ide/tests/retained_proposal_bridge.rs)
+for host-produced proposals, explicit acceptance and authorization denial, and the
+[launcher/PTY consumer](../crates/scope-ide/tests/source_proposal_launcher.rs) for
+retention and draft guards through the ordinary workspace.
 
 ### Contracted semantic editing in the ordinary workspace (W8b)
 
@@ -536,7 +545,9 @@ retains host commands, validated contract, authorization/model settings and prop
 controller. Configured evaluation never falls back to unevaluated generation.
 Evaluation authority is not proposal-production authority, acceptance does not
 certify semantics, and there is no separate revocable scratch-acceptance callback.
-See [contract/configuration](CONTRACTED_WORKSPACE_EDITING.md) and the complete
+See the [configuration API](../crates/scope-ide/src/cli/source_proposals.rs),
+[configured-edit tests](../crates/scope-ide/src/cli/source_proposals/configured_tests.rs)
+for candidate evidence and acceptance without saving or reevaluation, and the
 [host adapter](../crates/scope-ide/examples/contracted_workspace.rs).
 
 ### Normal agent against retained semantic source (SI7)
@@ -546,8 +557,8 @@ to investigate only the bound scratch via an operation allowlist and per-call
 policy. Missing/closed/wrong-language targets fail before model execution, with no
 App/disk fallback. Immutable borrowing pins revision; the observer gets attribution,
 termination/counts and bounded protocol bytes. Returning `None` preserves ordinary
-agent behavior. See [SI7](SI7.md) and the complete
-[offline example](../crates/scope-ide/examples/retained_semantic_agent.rs).
+agent behavior. See the [binding and dispatch implementation](../crates/scope-ide/src/cli/retained_agent.rs)
+and complete [offline example](../crates/scope-ide/examples/retained_semantic_agent.rs).
 
 ## TUI integration
 
@@ -555,8 +566,11 @@ Enable the dependency feature `tui`. `Tui::builder().with_default_panes()` adds
 Files/Document/Language; `.pane(...)` adds custom `Pane`s. Without default panes
 only yours are installed. Distinguish this App browser from editable scratch-based
 `WorkspaceTui`; browser opening refuses dirty App documents but custom panes must
-enforce their own replacement safety. Use [composable workspace examples](COMPOSABLE_TUI.md)
-for nested layouts, stable instances and shell handoffs.
+enforce their own replacement safety. Use the
+[composable workspace example](../crates/scope-ide/examples/composable_workspace.rs)
+for nested layouts and independent pane instances, and the
+[retained workspace example](../crates/scope-ide/examples/retained_workspace.rs)
+for source ownership across shell handoffs.
 
 ### Custom TUI panes
 
@@ -593,6 +607,100 @@ is historical, not semantic approval. Complete [W7b consumer and limits](DOWNSTR
 Pure F5 Script (`supports_direct_script` / `invoke_script_direct`) is distinct from
 authorized target-bound Script. Default workbench uses a fresh interpreter with
 `NoHost`: no semantic/filesystem authority or persistent bindings. See [Script](scope-script.md).
+
+## Language integration: the host-facing route
+
+Scope is the normal host-facing integration surface; Cell remains its execution
+engine. A trusted native `LanguageService` need not run in Wasm. Language guests
+own syntax, evaluation and their artifacts, not document authority or host grants.
+
+Reuse these existing boundaries rather than building a language SDK:
+
+| Responsibility | Existing interface / ownership |
+| --- | --- |
+| Language registration and semantics | `LanguageService`, `LanguageDocument`, semantic operation descriptors and results in `scope-language`; IDE language routing selects the registered service. Interactive providers are separate optional sessions. |
+| Exact source binding | IDE documents and document-bound semantic providers; source evaluation uses `SourceId` / `RevisionId` and an exact historical resolver. Document-session `Revision` is a separate opaque persisted-source token. Do not invent another identity system or use path/version alone as a cross-document cache key. |
+| Typed composition | `scope_types::{Registry, Transformation, TypeId, Port}` and validated graphs/pipelines. Exact nominal versions and adapter-owned encodings; requirements are declarations, not grants. |
+| Approved component execution | `scope_execution::{Binding, Bindings, Value, execute_with_policy}`. The host selects exact artifact bytes, export, port types, inputs, planning grants and managed policy. |
+| Runtime policy | `scope_execution` re-exports Cell's `Cell`, `ExecutionPolicy`, `CancellationToken`, and `ExecutionErrorKind`. These are the original types, not a competing policy or executor. Ordinary import-free host adapters need no direct Cell or Wasmtime dependency. |
+| Capability installation | Cell and its capability crates. Specialized hosts may intentionally depend on them to install/configure approved imports. A planning grant installs nothing. |
+| Human/agent dispatch | The same semantic operation and document provider; call-aware host policy before dispatch, source freshness checks, structured semantic results, and separate proposal approval/save. Discovery grants no execution authority. |
+| Evidence | Language semantic observations/diagnostics, exact-source proposal evidence, and `ExecutionResult` typed artifacts / structured managed node-phase-kind errors. Cell's optional execution records are lower-level metadata, not authorization attestations. |
+
+A minimal language evaluation adapter should:
+
+1. Implement/register its trusted language semantics; optionally supply a component
+   implementing the existing port envelope. Keep trusted native analysis native.
+2. Register a semantic operation descriptor and, where typed composition is
+   needed, a `Transformation` in the existing `Registry`. These registrations are
+   distinct: there is no automatic semantic-operation-to-transformation bridge.
+3. Use the document-bound provider to capture exact identity, language, revision,
+   and source bytes. Resolve historical evaluations exactly, never against current
+   disk contents as a fallback. Preserve Scope's existing pre/post freshness checks.
+4. Obtain explicit host execution approval for that operation and snapshot. Select
+   call-aware policy dispatch: unrestricted `AgentSession::invoke` allows registered
+   tools and is not an authorization boundary. Do not register untrusted evaluation
+   merely because analysis or tool discovery is available.
+5. Host-bind the approved artifact/export, transformation and request/result
+   encoding, choose Cell limits and installed capabilities, and delegate to
+   `execute_with_policy`. Never derive grants from declarations or guest data.
+6. Require no execution errors and a selected typed output. Validate decoded
+   language evidence and associate it with the host-retained snapshot, operation,
+   arguments, artifact and effective policy. Guest-returned identity is data to
+   compare, not authenticated evidence. Do not publish partial failure as success.
+7. Expose this same authorized operation to a human or an authorized agent only
+   after the host integration is complete. Invocation, candidate validation,
+   proposal acceptance and saving remain separate decisions.
+
+The concrete missing piece is **language-owned adapter code**, not a new registry,
+source identity or sandbox: mapping the semantic request to typed ports, deciding
+snapshot-specific authorization, decoding results, and associating execution and
+language evidence. Scope does not automatically attach Cell's full recorded
+provenance to semantic results; a host that needs it must retain that association.
+No generic bridge abstraction is justified by the current consumers.
+
+### Dependency audit (2026-11-03)
+
+Inspected Scope and available sibling Lisp, Cross, Path and Hilb sources. Direct
+Cell imports are not automatically defects; distinguish hosts from Wasm guests:
+
+- **Scope:** `scope-execution` intentionally owns Wasmtime envelope/type inspection
+  and delegates managed execution to Cell. IDE workspace, logging and model
+  adapters intentionally configure Cell capabilities; `cell-guest` path types in
+  IDE code do not mean the IDE is a language guest. Runtime and capability-policy
+  internals belong in Cell, not downstream language adapters.
+- **Lisp:** ordinary/core manifests have no direct Cell/Wasmtime dependency. Its
+  separate `tests/fixtures/cell-lifting` host diagnostic intentionally uses Cell
+  v0.0.3. It is neither a Lisp guest nor a production evaluation adapter. The
+  existing native bounded evaluator is explicitly trusted-caller-only, with no
+  registered Agent evaluation capability.
+- **Cross:** host `src/wasm.rs` and `src/numerical.rs` select Cell/policy, check
+  host-configured route grants and retained arguments, then call Scope's managed
+  executor. This is intentional host orchestration, not another Wasmtime executor.
+  Its direct Cell import can use Scope's re-exports for ordinary execution; its
+  `cell-compose` inspection/digest/packaging usage remains justified low-level
+  tooling. Guest packages use `wit-bindgen`, not Cell or Wasmtime. Cross still pins
+  Cell v0.0.2 (`86145d1…`, Wasmtime 47.0.4); align with Scope before passing its
+  Cell types into current Scope. This incompatibility was observed in source,
+  not established by building Cross during this audit.
+- **Path / Hilb:** inspected manifests and Rust sources use Scope language/IDE
+  interfaces; no direct Cell runtime or Wasmtime dependency was found. Rust's
+  `std::cell::Cell` and `RefCell` are unrelated.
+
+Cross's useful pattern is approval of exact route/arguments before dispatch,
+empty-capability Cell construction, explicit budgets, and retaining actual
+execution failures before publishing observations. Reuse the pattern through
+existing Scope interfaces; do not move Cross's domain routing, promises or
+numerical evidence into Scope automatically.
+
+**Smallest Lisp follow-up:** after publishing/pinning the upstream correction
+below, link the reusable evaluator core into one minimal component with a bounded,
+versioned request/result encoding and no hosted imports. Exercise its existing
+count/probe baseline through an explicitly authorized host adapter, including
+stale-source, denial, trap and no-partial-publication cases. An rlib compiled for
+Wasm is not yet a linked component. Do not implement or register an Agent adapter
+until that deterministic host-only vertical slice and Lisp-specific containment
+checks pass. No Agent execution authority is added here.
 
 ## Execute a typed pipeline through Cell
 
@@ -672,10 +780,152 @@ calls cannot be forcibly interrupted. Payload limits follow construction/lifting
 not host allocation, and do not bound total process memory/aggregate artifacts.
 Identity pipelines run no component and do not apply these Cell checks.
 
+### Upstream transfer correction: local verification, publication pending
+
+**The normal v0.0.3 Git pin does not yet include this correction.** The sibling
+Cell working tree adds `ExecutionPolicy::host_transfer_bytes` and a distinct
+`ExecutionErrorKind::Transfer`. Until a corrected Cell revision is published and
+Scope pins it, use the opt-in diagnostic below, not those fields in ordinary
+consumers. The root dependency and existing standalone lockfiles are unchanged.
+
+The correction preserves four different limits:
+
+- `fuel`: Wasm instruction budget, refreshed for startup and invocation.
+- `memory_bytes`: per-guest-linear-memory ceiling.
+- `host_transfer_bytes`: Wasmtime's approximate byte-oriented guest-to-host
+  transfer/lifting budget **per crossing**, configured on the managed store before
+  invocation/startup with `set_hostcall_fuel`; no mutable store is exposed.
+  `None` explicitly resolves to **128 MiB**, preserving the previous effective
+  Wasmtime default; `Some(0)` is zero, not unlimited. Cell exposes the effective
+  value and records configured and effective values in recorded execution limits.
+- `output_bytes`: recursive logical output admission **after** lifting.
+
+Finite 64 KiB string/list tests with logical output `8` distinguish `Transfer`
+with transfer `8` from `Output` with a sufficient transfer allowance. The latter
+has already constructed the lifted value. Wasmtime charges representation costs,
+so a dynamic byte-list envelope needs more transfer fuel than its payload length;
+these units are not interchangeable. Cell's private store accessor is asserted in
+its regression, while the Scope diagnostic proves policy propagation behaviorally.
+
+Wasmtime currently keeps its exhaustion error type private. Cell uses a narrowly
+isolated exact error-chain-message match for this version, tested against prefix
+and suffix false matches; revisit that fallback on Wasmtime upgrades. Hosts consume
+the structured `Transfer` kind rather than repeating this matching. Wasmtime call
+failure poisons the store; create a fresh store/instance. Post-lift logical
+rejection does not poison it. Scope already uses fresh managed stores, so a failed
+invocation does not poison subsequent executions on the same Cell.
+
+This is **not** a bound on total host heap, RSS, compilation, retained application
+artifacts, cumulative transfers over multiple crossings, or arbitrary native host
+calls. It adds no authorization and rolls back no host effects. New public policy
+and recorded-limit fields and the new error variant require updating exhaustive
+struct literals/matches when consuming the corrected Cell revision.
+
+The [host-only diagnostic](../examples/managed-transfer/src/lib.rs) has no direct
+Cell/Wasmtime dependency, import, Lisp guest or Agent adapter. Its standalone
+manifest deliberately patches only Cell to the sibling checkout; it is not part
+of ordinary builds and requires that corrected checkout:
+
+```sh
+cargo test --offline --locked --manifest-path examples/managed-transfer/Cargo.toml
+```
+
+It registers an exact typed transformation, binds host-selected bytes/export,
+checks a denied planning grant, rejects a 64 KiB component envelope before lifting
+with transfer `8`, rejects it after lifting with logical output `8`, and succeeds
+with admitted typed evidence on a fresh managed store. A 16 MiB transfer budget is
+used for the admitted dynamic list representation, not claimed as a minimal limit.
+
+#### Verification evidence and remaining gaps
+
+Tests used Scope `be402cf3e1cc7bf207e290beab42692988a4fb2e` plus these local changes,
+Cell `268b2ac53e25f60806063e732888d9f660c0767e` plus the transfer correction. Cell's
+own lock uses Wasmtime **50.0.0**; Scope and the diagnostic resolve **50.0.1**.
+Host: macOS, `rustc 1.97.1 (8bab26f4f 2026-07-14)`.
+The supplied Lisp and Path working trees contain other local work; neither was
+modified. No Lisp component or agent adapter was built.
+
+Direct Cell commands (run from Scope, each with
+`CARGO_TARGET_DIR=/Users/nathaniel.ham/Projects/THEWORK/scope/target`):
+
+```sh
+cargo test --manifest-path ../cell/Cargo.toml --locked -p cell --lib host_transfer
+cargo test --manifest-path ../cell/Cargo.toml --locked -p cell -p cell-compose --all-features
+cargo test --manifest-path ../cell/Cargo.toml --locked -p cell --all-features --test hello
+cargo test --manifest-path ../cell/Cargo.toml --locked -p cell --all-features --doc
+cargo test --manifest-path ../cell/Cargo.toml --locked -p cell-compose --all-features
+cargo test --manifest-path ../cell/Cargo.toml --locked -p cell --test fs_demo
+cargo fmt --manifest-path ../cell/Cargo.toml --all -- --check
+```
+
+Transfer regressions: **2 passed**; Cell library: **35 passed, 1 manual timing probe
+ignored**; hello: **1 passed**; compose: **21 passed**. The combined command first
+stopped at three filesystem-fixture path errors: that harness reads hard-coded
+`cell/target`. A local `cell/target -> ../scope/target` symlink restored shared-target
+lookup; the explicit `fs_demo` rerun then passed all **3**, including missing and
+read-only capability denials. No harness source or artifacts were deleted.
+
+Scope's local overlay patches all six Cell host/capability packages to sibling
+paths in ignored `target/se1-overlay.toml`. Lockfiles were temporarily resolved
+for that overlay and restored byte-for-byte; published-pin availability is not
+established by overlay results. Each verification command was bounded to 180 s.
+The commands below use `--config target/se1-overlay.toml` plus `--offline`; locked
+runs follow temporary resolution, not the unchanged checked-in root lockfile:
+
+```sh
+cargo test -p scope-execution --test execution --test policy
+cargo test -p scope-execution --all-features --locked
+cargo test --workspace --all-features --locked
+cargo test --workspace --locked
+cargo test -p scope-ide --no-default-features --locked
+cargo test -p scope-ide --features tools --locked
+cargo test -p scope-ide --features tui --locked
+```
+
+- Execution: **14 + 13 passed**, also **27 passed** with all features. The standalone
+  managed-transfer diagnostic: **1 passed**. Its first run correctly rejected the
+  supposedly sufficient 1 MiB allowance; the fixture was corrected to 16 MiB for
+  the dynamic list representation and passed.
+- Full all-features: **789 passed, 3 local HTTP fixture failures** (first sandbox
+  bind denials, then `WouldBlock` with proxy settings). Targeted LM Studio native
+  fixture rerun with `NO_PROXY` and `no_proxy` set to `127.0.0.1,localhost,::1`:
+  **4 passed**. This is not a successful complete Full rerun.
+- Default workspace: **606 passed, 1 ignored**, then **180 s timeout** in
+  `source_proposal_launcher`; no broad rerun after that timeout.
+- IDE no-default/tools: **345 / 488 passed**. TUI: **492 passed, 1 failed, 1 ignored**;
+  `downstream_actions_through_real_launcher` missed the post-submission prompt for
+  `:scope scratch open fixture.consumer`.
+- All-feature IDE public API, authorization, evidence and retained-source selection
+  (15 integration targets): **87 passed**. Remaining seven workspace packages with
+  all features: **309 passed**. These selections do not replace the incomplete PTYs.
+- Full Clippy commands from the [verification policy](verification.md#full--repository-wide--high-risk--publication)
+  ran with the same overlay: default workspace, tools and TUI passed; all-features
+  failed on 11 IDE lint diagnostics; no-default failed on unused `set_validation`
+  and `set_evidence` methods. These unrelated findings were not changed.
+- Full all-feature rustdoc with `RUSTDOCFLAGS='-D warnings'` passed. Standalone
+  downstream/harness tests passed **4 / 7**, and the harness run passed. Their
+  lockfiles were also restored. Subsequently, `cargo run --offline --locked -p
+  xtask -- check-downstream --offline` passed against the unchanged published pin,
+  including all **3** generated-language tests and the generated launcher. This
+  establishes ordinary scaffold compatibility, not unpublished transfer support.
+- After restoring all ordinary lockfiles, `cargo test --offline --locked -p
+  scope-execution --test execution --test policy` also passed **14 + 13** against
+  the unchanged published Cell pin, including use of Scope's host-type re-exports.
+- Formatting, Python documentation tests (**5**) and local Markdown links passed.
+
+**Full is not green.** Resolve the PTY/lint blockers and complete required CI and
+verification before claiming complete confidence or release readiness.
+The next dependency change must publish the Cell correction, update Scope's pin,
+move the opt-in regression into ordinary policy coverage, and remove the temporary
+sibling diagnostic patch. Do not silently add a sibling requirement to normal
+Scope builds.
+
 Handle `ExecutionError::Managed { node, phase, kind, message }` structurally, not
 by parsing message text. New exhaustive matches need a `Managed` arm. Partial
-artifacts remain failure evidence, not successful computation. See the complete
-[policy example, phases and limitations](SE1_MANAGED_COMPONENT_EXECUTION.md).
+artifacts remain failure evidence, not successful computation. See the
+[policy tests](../crates/scope-execution/tests/policy.rs) for concrete budgets,
+startup/invocation failures and retained artifacts, and the
+[execution API](../crates/scope-execution/src/lib.rs) for structured phases/errors.
 
 ## Checked-in standalone consumer
 

@@ -4,8 +4,8 @@ Build, features, crate inventory and validation live here. See
 [Integration](integration.md) for language/session/component contracts and
 [Agents and harnesses](agents.md) for model loops, tool policy and proposals.
 Contribution expectations are in [CONTRIBUTING.md](../CONTRIBUTING.md).
-The [entry-point audit](ux0-entry-points.md) records launcher and feature boundaries;
-the [quickstart](quickstart.md) is the canonical user setup guide.
+The [quickstart](quickstart.md) is the canonical user setup guide; launcher and
+feature boundaries are described below.
 
 ## Workspace inventory
 
@@ -39,8 +39,8 @@ rustc --version
 cargo --version
 ```
 
-Workspace Cell dependencies use Git tag **`v0.0.2`** from
-[Cell](https://github.com/nate-droid/cell/tree/v0.0.2). Cargo fetches them directly;
+Workspace Cell dependencies use Git tag **`v0.0.3`** from
+[Cell](https://github.com/nate-droid/cell/tree/v0.0.3). Cargo fetches them directly;
 no sibling Cell checkout, `CELL_REPOSITORY`, or relocation is required. Scope
 member crates use local path dependencies. `Cargo.lock` pins the resolved Git
 revision and registry versions; include it when reporting reproducibility issues.

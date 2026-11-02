@@ -7,7 +7,7 @@ interfaces and formats are unstable; do not assume compatibility across releases
 
 Use [Development](docs/development.md) for the configured toolchain, crate
 inventory, feature matrix, build commands, standalone consumer checks and CI
-expectations. Cell is fetched from Git tag `v0.0.2`; no sibling Cell checkout or
+expectations. Cell is fetched from Git tag `v0.0.3`; no sibling Cell checkout or
 `CELL_REPOSITORY` is required. Include the Scope revision, `Cargo.lock`, toolchain,
 platform and local changes when reporting reproducibility problems.
 

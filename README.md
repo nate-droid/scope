@@ -30,7 +30,7 @@ cargo run
 This launches **Scope**, the retained workbench editor, using the pinned Rust
 toolchain and default features. No package selection, feature flags, model server,
 API key, or Wasm target is required. The first build downloads dependencies,
-including Cell `v0.0.2`; the application does not contact a model on startup.
+including Cell `v0.0.3`; the application does not contact a model on startup.
 
 1. Press **F1**, search **New Script**, then Enter to create and select a scratch.
 2. Type `print(2 + 3)` in the editor.

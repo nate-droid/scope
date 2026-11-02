@@ -1,4 +1,6 @@
 //! Synchronous, language-neutral execution. Cell alone supplies runtime authority.
+// These remain Cell's types and authority model, not a second executor policy.
+pub use cell::{CancellationToken, Cell, ExecutionErrorKind, ExecutionPolicy};
 use scope_types::{Capabilities, Diagnostic, Endpoint, Pipeline, Source, TypeId};
 use std::collections::{BTreeMap, BTreeSet};
 

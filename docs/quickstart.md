@@ -115,9 +115,10 @@ text becomes the committed source; focus the editor to continue, publish with
 Ctrl-S, and run with F5. Script proposal checks establish syntax only—not name or
 type resolution, runtime success, effects, safety, or task correctness.
 
-See [UX3 findings](ux3-document-workflow.md), [PTY evidence](ux3-pty-evidence.md),
-and the [UX4 live local-model session](ux4-live-session.md) for tested behavior,
-reproducible LM Studio steps, and remaining limitations.
+The [document workflow PTY scenarios](../crates/scope-workbench/tests/pty_ux3_documents.py)
+and [deterministic agent scenarios](../crates/scope-workbench/tests/pty_ux3b_agent.py)
+cover the retained workflow. See [Agents](agents.md) for model configuration and
+authority limits; live model runs are optional, not routine verification.
 
 ## Know which context you are in
 
@@ -166,5 +167,4 @@ falls back to the shell, not the recommended normal workflow.
 - [Integration](integration.md) and [downstream example](../examples/downstream/README.md):
   compile-time language registration and launcher composition.
 - [Architecture](architecture.md): ownership, revisions, proposals, and boundaries.
-- [Entry-point audit](ux0-entry-points.md), [PTY evidence](ux0-pty-evidence.md), and
-  [development](development.md): compatibility interfaces, features, validation.
+- [Development](development.md): compatibility interfaces, features, and validation.

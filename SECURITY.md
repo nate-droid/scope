@@ -27,7 +27,7 @@ Scope describes, validates, discovers, binds, and orchestrates typed operations;
 
 Capability requirements, tool declarations, composition manifests, and discovery metadata describe intended operations; they do not grant authority. Importing a manifest or binding a component does not supply permission grants. Actual runtime authority depends on the host's Cell configuration. Do not confuse a validated plan with a security approval, or extend Cell's WASM isolation claims to native `LanguageService` or `ToolProvider` implementations.
 
-See [README.md](README.md) and [Development](docs/development.md) for the architecture and capability setup. Review Cell too: workspace dependencies use https://github.com/nate-droid/cell at tag `v0.0.2`, and Scope's Cargo lockfile pins the resolved Git commit. No sibling Cell checkout is required; Scope crates still use local path dependencies.
+See [README.md](README.md) and [Development](docs/development.md) for the architecture and capability setup. Review Cell too: workspace dependencies use https://github.com/nate-droid/cell at tag `v0.0.3`, and Scope's Cargo lockfile pins the resolved Git commit. No sibling Cell checkout is required; Scope crates still use local path dependencies.
 
 ## Model data and privacy
 

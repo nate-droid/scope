@@ -42,7 +42,7 @@ retention failure after dispatch does not undo a read. These are logical budgets
 not allocator limits or host cancellation. Native providers are trusted,
 synchronous code: Script adds no sandbox, hard deadline, or rollback.
 
-For multi-operation downstream composition, see the [SI7 integration contract](../../docs/scope-script.md#composing-downstream-semantic-reads-si7)
+For multi-operation downstream composition, see the [semantic-read composition guide](../../docs/scope-script.md#composing-downstream-semantic-reads)
 and runnable [multi-operation example](examples/multi_semantic.rs). Exposure and
 per-operation authorization are separate; existing single-operation constructors
 remain supported.
@@ -53,5 +53,10 @@ remain supported.
 cargo test -p scope-script --all-targets --locked --offline
 ```
 
-For contract inspection, nominal identity, explicit adapters, and authority
-boundaries, see [interoperability](../../docs/design/INTEROPERABILITY.md).
+For contract inspection and per-operation authorization, see
+[semantic-read composition](../../docs/scope-script.md#composing-downstream-semantic-reads).
+Typed component planning uses [exact nominal identities](../scope-types/README.md#model),
+not structural equivalence; [explicit adapters](../scope-types/README.md#registering-future-language-or-cell-components)
+declare domain meaning separately from component wiring and authority. Script
+provider installation and concrete-call authorization remain the
+[embedding host's responsibility](../../docs/scope-script.md#host-support-is-explicit).

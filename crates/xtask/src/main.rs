@@ -378,7 +378,7 @@ fn render_cargo_manifest(
     }
 
     format!(
-        "[package]\nname = \"{package_name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n# Local development paths into this checkout, not portable downstream dependencies.\n# Scope dependencies remain local paths into this checkout.\n# Cell uses workspace dependencies from https://github.com/nate-droid/cell\n# at tag v0.0.1; no sibling Cell checkout is required.\n[dependencies]\n{dependencies}\n[workspace]\n",
+        "[package]\nname = \"{package_name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n# Local development paths into this checkout, not portable downstream dependencies.\n# Scope dependencies remain local paths into this checkout.\n# Cell uses workspace dependencies from https://github.com/nate-droid/cell\n# at tag v0.0.3; no sibling Cell checkout is required.\n[dependencies]\n{dependencies}\n[workspace]\n",
         package_name = options.package_name,
     )
 }
@@ -596,7 +596,7 @@ mod tests {
         assert!(manifest.contains("not portable downstream dependencies"));
         assert!(manifest.contains("Scope dependencies remain local paths"));
         assert!(manifest.contains("https://github.com/nate-droid/cell"));
-        assert!(manifest.contains("tag v0.0.1"));
+        assert!(manifest.contains("tag v0.0.3"));
         assert!(manifest.contains("no sibling Cell checkout is required"));
         assert!(!manifest.contains("../cell"));
     }

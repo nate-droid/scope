@@ -108,8 +108,10 @@ Candidate evaluation reports evidence separately from proposal acceptance.
 
 Keep Cell-facing capability execution in the host/execution layers; languages
 remain responsible for domain semantics, not Scope's approval policy. The
-[interoperability guide](design/INTEROPERABILITY.md) explains the limits of
-structural compatibility.
+[semantic type model](../crates/scope-types/README.md#model) uses exact nominal
+identities; adapters must not infer domain meaning merely from matching WIT
+layouts. See [adapter registration and the Cell boundary](../crates/scope-types/README.md#registering-future-language-or-cell-components)
+for the separation of declarations, bindings and runtime authority.
 
 For integration details, see the [Downstream Guide](../docs/integration.md),
 [Harness Guide](../docs/agents.md), and [Security Policy](../SECURITY.md).

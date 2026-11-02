@@ -722,6 +722,7 @@ fn run_edit_session_inventory(
         None,
         false,
         false,
+        SemanticInvestigationObjective::default(),
     )
 }
 
@@ -741,6 +742,7 @@ fn run_objective_session_inventory(
     mut completion: Option<&mut CompletionPolicy<'_>>,
     projected_arguments: bool,
     compact_discovery: bool,
+    objective: SemanticInvestigationObjective,
 ) -> EditRun {
     use EditOutcome::*;
     let mut run = EditRun::default();
@@ -780,7 +782,11 @@ fn run_objective_session_inventory(
     );
     let mut messages = Vec::new();
     let system = if projected_arguments {
-        let objective = if completion.is_some() {
+        let objective = if completion.is_some()
+            && objective == SemanticInvestigationObjective::HypotheticalConstruction
+        {
+            "This is a bounded hypothetical construction task. Produce a checked hypothetical artifact using permitted operations on authorized hypothetical state, not persistent mutation. Inspection and guidance support construction but do not complete it. Once sufficiently informed, prefer testing a construction over further inspection. Duplicate calls on unchanged state add no evidence. Prose is not a checked artifact. The host assesses actual checker evidence for completion; report blockers or uncertainty when a checked construction cannot be established. Never propose, apply or save."
+        } else if completion.is_some() {
             "This is a bounded read-only investigation. Discover and invoke permitted read operations, inspect evidence, then complete with an evidence-backed conclusion or explicit uncertainty. Never propose, apply or save. Completion is assessed by the host, not proof of semantic correctness."
         } else {
             "This is a bounded edit task. During Inspect use read tools or complete to advance to Propose. During Propose invoke one permitted semantic edit tool. A proposal ends execution; never apply it. Complete without a proposal means unsupported request."
@@ -1417,6 +1423,14 @@ pub enum InvestigationCompletion {
 type CompletionPolicy<'a> =
     dyn FnMut(&str, &[InvestigationEvidence]) -> InvestigationCompletion + 'a;
 
+/// High-priority model objective only; grants no additional authority.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum SemanticInvestigationObjective {
+    #[default]
+    Investigation,
+    HypotheticalConstruction,
+}
+
 #[derive(Debug, Default)]
 pub struct SemanticInvestigationOptions {
     /// Explicitly exposed read operations; independent authorization still applies.
@@ -1436,6 +1450,34 @@ pub fn run_semantic_investigation_with_discovery<T: SourceTarget>(
     request: AgentEditRequest<'_>,
     options: &SemanticInvestigationOptions,
     discovery: &SemanticDiscoveryOptions,
+    policy: impl for<'a> FnMut(crate::tool::semantic::SemanticAuthorization<'a>) -> bool,
+    completion: impl FnMut(&str, &[InvestigationEvidence]) -> InvestigationCompletion,
+) -> EditRun {
+    run_semantic_investigation_with_objective_and_discovery(
+        model,
+        controller,
+        target,
+        service,
+        request,
+        options,
+        discovery,
+        SemanticInvestigationObjective::default(),
+        policy,
+        completion,
+    )
+}
+
+/// Select only the system objective; all investigation contracts remain unchanged.
+#[allow(clippy::too_many_arguments)]
+pub fn run_semantic_investigation_with_objective_and_discovery<T: SourceTarget>(
+    model: &mut (impl DecisionModel + ?Sized),
+    controller: &mut SourceEditController,
+    target: &T,
+    service: &dyn scope_language::LanguageService,
+    request: AgentEditRequest<'_>,
+    options: &SemanticInvestigationOptions,
+    discovery: &SemanticDiscoveryOptions,
+    objective: SemanticInvestigationObjective,
     policy: impl for<'a> FnMut(crate::tool::semantic::SemanticAuthorization<'a>) -> bool,
     mut completion: impl FnMut(&str, &[InvestigationEvidence]) -> InvestigationCompletion,
 ) -> EditRun {
@@ -1458,6 +1500,7 @@ pub fn run_semantic_investigation_with_discovery<T: SourceTarget>(
         Some(discovery),
         Some(&mut completion),
         false,
+        objective,
     )
 }
 
@@ -1493,6 +1536,7 @@ pub fn run_semantic_investigation_with_compact_discovery<T: SourceTarget>(
         Some(discovery),
         Some(&mut completion),
         true,
+        SemanticInvestigationObjective::default(),
     )
 }
 
@@ -1564,7 +1608,17 @@ fn run_semantic_edit_inventory<T: SourceTarget>(
     discovery: Option<&SemanticDiscoveryOptions>,
 ) -> EditRun {
     run_semantic_objective_inventory(
-        model, controller, target, service, request, options, policy, discovery, None, false,
+        model,
+        controller,
+        target,
+        service,
+        request,
+        options,
+        policy,
+        discovery,
+        None,
+        false,
+        SemanticInvestigationObjective::default(),
     )
 }
 
@@ -1583,6 +1637,7 @@ fn run_semantic_objective_inventory<T: SourceTarget>(
     discovery: Option<&SemanticDiscoveryOptions>,
     completion: Option<&mut CompletionPolicy<'_>>,
     compact_discovery: bool,
+    objective: SemanticInvestigationObjective,
 ) -> EditRun {
     let snapshot = ToolValue::object([
         ("source_id", format!("{:?}", target.source_id()).into()),
@@ -1675,6 +1730,7 @@ fn run_semantic_objective_inventory<T: SourceTarget>(
             completion,
             true,
             compact_discovery,
+            objective,
         )
     })();
     EditRun {
@@ -2123,6 +2179,7 @@ mod inventory_tests {
                 None,
                 false,
                 true,
+                SemanticInvestigationObjective::default(),
             );
             assert_eq!(run.outcome, EditOutcome::OperationBudgetExhausted);
             assert!(run.discovered_operations.is_empty());
