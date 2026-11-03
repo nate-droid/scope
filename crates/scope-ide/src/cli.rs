@@ -2595,7 +2595,7 @@ fn print_outline(app: &App, output: &mut impl Write) -> std::io::Result<()> {
     }
 }
 
-fn print_diagnostics(app: &App, output: &mut impl Write) -> std::io::Result<()> {
+pub(crate) fn print_diagnostics(app: &App, output: &mut impl Write) -> std::io::Result<()> {
     match app.open_diagnostics() {
         Ok(diagnostics) if diagnostics.is_empty() => writeln!(output, "diagnostics: clean"),
         Ok(diagnostics) => {

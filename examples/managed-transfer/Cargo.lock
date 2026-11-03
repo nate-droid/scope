@@ -85,6 +85,7 @@ dependencies = [
 [[package]]
 name = "cell"
 version = "0.1.0"
+source = "git+https://github.com/nate-droid/cell?tag=v0.0.4#8ece6bf88497b402a6a417c95adf9bf1a6bd6aae"
 dependencies = [
  "anyhow",
  "sha2",

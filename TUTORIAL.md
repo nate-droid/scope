@@ -269,7 +269,33 @@ cargo run --locked -- workspace .
 Use a real interactive terminal. Startup selects an empty `text` scratch, focuses
 the editor, and leaves the semantic target unbound. Nothing runs or saves.
 
-### Edit, run, inspect, correct
+### App document: open, run, check, save
+
+**Ctrl-O** opens an App document by path. Edit it, then press **Ctrl-R** to
+publish the exact focused draft in memory using its checked baseline. Run selects
+exactly one eligible zero-argument, read-only document `CandidateEvaluation`
+operation and opens source review. **Enter** explicitly authorizes one invocation;
+opening review does not run it. Missing or ambiguous eligible operations require
+explicit inspection instead. There is no fallback to the selected scratch.
+
+**Shift-F5** publishes and checks diagnostics, leaving editor focus in place.
+Neither Run nor Check saves to disk. **Ctrl-S remains Publish**, not disk Save;
+use **Ctrl-G** → **Save** for explicit persistence. Ctrl-G opens actions/help;
+**F1** remains an alias. The primary catalog still exposes advanced actions.
+
+Semantic feedback shows the provider's summary (at most 240 characters), outcome,
+and current/stale source status. Press **d** for **Details**, including full retained
+evidence. Scope does not parse provider prose to infer success or certification.
+Esc cancels pending modal confirmation first, then closes the modal on a subsequent
+Esc. Outside a modal, Esc stays in the App editor workspace; **F2** opens the
+advanced shell. Scratch/legacy Esc still hands off to the shell.
+
+**Ctrl-Q** warns if editor drafts, the App document or the selected scratch are
+dirty. A second Ctrl-Q discards and exits; **Esc** cancels quitting. This is not an
+automatic save. See the [experience status and evidence limits](docs/ux/minimal-programming-experience.md)
+for what has and has not been verified.
+
+### Edit, run, inspect, correct (Script scratch)
 
 Press **F1**, type `New Script`, then Enter to invoke **New Script scratch
 (select and edit)**. This explicitly selects a new `scope-script` scratch; the semantic
@@ -314,7 +340,7 @@ can fail before any prints execute. Error details scroll with the result.
 
 F4 → `:scope script run` remains supported and uses the separate command
 transcript. F1 → **Show command transcript** returns to that view; direct history
-is still retained. F5 never invokes a bound semantic target.
+is still retained. In the Script scratch context, F5 never invokes a bound semantic target.
 
 ### Local editing, selection and history
 
@@ -376,8 +402,11 @@ Script runner has no downstream authority, even with a target bound.
 
 | Control / F4 text | Effect |
 | --- | --- |
-| F1 | Search bounded workspace actions; Escape cancels; disabled actions explain why. |
-| F5 | Run selected committed `scope-script`; retains editor focus. |
+| Ctrl-G / F1 | Search workspace actions/help; Escape cancels; disabled actions explain why. |
+| Ctrl-O | Open an App document by path. |
+| Ctrl-R | Publish focused App draft, then review unique eligible candidate evaluation; Enter confirms one invocation. |
+| Shift-F5 | Publish focused App draft and check diagnostics; retain editor focus. |
+| F5 | App editor: publish and open candidate evaluation review; Script scratch: run selected committed Script. |
 | F3 | Focus previous visible pane. |
 | Alt-Left / Alt-Right | Previous / next retained direct Script result. |
 | F4 | Open command input; Enter submits; Escape or F4 cancels without dispatch. |
@@ -391,8 +420,9 @@ Script runner has no downstream authority, even with a target bound.
 | Ctrl-Z / Ctrl-Y in editor | Undo / redo local edits, not committed revisions. |
 | Shift-arrows / Shift-Home / Shift-End in editor | Extend selection; typing/paste replaces it, Delete/Backspace removes it. |
 | Up / Down, PageUp / PageDown with output focused | Scroll current structured result or command transcript independently of editor. |
-| F2 or Escape outside command input | Suspend workspace for the normal shell; `:scope quit` returns. |
-| Ctrl-Q outside command input | Exit workspace. |
+| F2 | Suspend workspace for the advanced shell; `:scope quit` returns. |
+| Escape outside command input/modals | App editor: stay in workspace; scratch/legacy: suspend for shell. |
+| Ctrl-Q outside command input/modals | Warn if drafts/App/selected scratch are dirty; second Ctrl-Q discards and exits, Esc cancels. |
 
 F4 forwards existing single-line `:scope` commands unchanged, including
 `:scope scratch list`, `:scope scratch select ID`, and `:scope script run`.

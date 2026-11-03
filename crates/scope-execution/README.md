@@ -10,7 +10,8 @@ host transformation callbacks.
 
 Use `execute_with_policy(&cell, &pipeline, &bindings, inputs, &granted, &policy)`
 with Cell's `ExecutionPolicy` to enforce managed fuel, per-linear-memory limits,
-cooperative deadlines/cancellation, and logical envelope payload limits. Existing
+cooperative deadlines/cancellation, per-crossing host transfer budgets and logical
+envelope payload limits through Cell v0.0.4. Existing
 `execute` remains unconfigured and compatible. Both paths share typed validation
 and artifact retention; no host capabilities are installed implicitly.
 
@@ -21,8 +22,11 @@ Managed execution configures limits without a mutable Wasmtime-store escape
 hatch. Specialized capability installers may still intentionally depend on Cell crates.
 See the [language integration route](../../docs/integration.md#language-integration-the-host-facing-route)
 for source binding, authorization and evidence association, and the
-[upstream transfer correction](../../docs/integration.md#upstream-transfer-correction-local-verification-publication-pending)
-for the opt-in diagnostic and pending publication boundary.
+[published Cell transfer policy and host workflow](../../docs/integration.md#published-cell-transfer-policy-and-host-workflow)
+for the retained diagnostic, effective 128 MiB per-crossing transfer default,
+post-lift output admission, structured `ExecutionErrorKind::Transfer`, and
+provenance/memory limitations. The diagnostic uses the normal published remote
+dependency graph and covers finite string and byte-list transfers.
 
 See [managed component execution](../../docs/integration.md#managed-component-execution)
 for budget semantics and containment limitations, the

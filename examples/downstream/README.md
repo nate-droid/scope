@@ -8,10 +8,11 @@ cargo run -p xtask -- check-downstream --offline
 ```
 
 The Scope dependency paths are for local development in this repository, not
-portable external dependencies. Cell is fetched from
-https://github.com/nate-droid/cell at tag `v0.0.3`; Scope crates inherit it through
-workspace dependencies, while this standalone workspace declares its direct Cell
-dependency with the same Git URL and tag. No sibling Cell checkout is required.
+portable external dependencies. Cell is fetched from published tag `v0.0.4` at
+https://github.com/nate-droid/cell, using the same remote URL/tag for Scope's
+workspace dependencies and this standalone workspace's direct dependency.
+No sibling Cell checkout or overlay is required. See
+[development setup](../../docs/development.md#toolchain-and-cell).
 Offline commands require cached dependencies, including the Cell Git source.
 
 ## Authority and component boundary
@@ -44,7 +45,7 @@ not exercise WIT synchronization, component composition, or missing-import
 instantiation failures. Native registration is not sandboxed WASM execution.
 
 For Scope setup, see [development setup](../../docs/development.md#toolchain-and-cell).
-If extending this example with a Cell guest, consult the [Cell v0.0.3 guest documentation](https://github.com/nate-droid/cell/tree/v0.0.3):
+If extending this example with a Cell guest, consult the [Cell v0.0.4 guest documentation](https://github.com/nate-droid/cell/tree/v0.0.4):
 use Cell bindings rather than guest `std::fs`, synchronize filesystem WIT
 (including `metadata` and `symlink-metadata`) with the host and `cell-guest`,
 inspect the encoded component boundary, and explicitly validate any composition

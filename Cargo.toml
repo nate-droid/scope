@@ -18,12 +18,12 @@ members = ["crates/scope-workbench", "crates/scope-ide", "crates/scope-language"
 
 
 [workspace.dependencies]
-cell-capability-fs = { git = "https://github.com/nate-droid/cell", tag = "v0.0.3" }
-cell = { git = "https://github.com/nate-droid/cell", tag = "v0.0.3" }
-cell-capability-log = { git = "https://github.com/nate-droid/cell", tag = "v0.0.3" }
-cell-capability-openai = { git = "https://github.com/nate-droid/cell", tag = "v0.0.3" }
-cell-capability-lmstudio = { git = "https://github.com/nate-droid/cell", tag = "v0.0.3" }
-cell-guest = { git = "https://github.com/nate-droid/cell", tag = "v0.0.3" }
+cell-capability-fs = { git = "https://github.com/nate-droid/cell", tag = "v0.0.4" }
+cell = { git = "https://github.com/nate-droid/cell", tag = "v0.0.4" }
+cell-capability-log = { git = "https://github.com/nate-droid/cell", tag = "v0.0.4" }
+cell-capability-openai = { git = "https://github.com/nate-droid/cell", tag = "v0.0.4" }
+cell-capability-lmstudio = { git = "https://github.com/nate-droid/cell", tag = "v0.0.4" }
+cell-guest = { git = "https://github.com/nate-droid/cell", tag = "v0.0.4" }
 
 [workspace.package]
 version = "0.1.0"

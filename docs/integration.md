@@ -17,10 +17,12 @@ model loops, call-aware tool policy, budgets and filesystem proposals.
 
 Use a local Scope checkout. Scope path dependencies are development paths, not
 portable distribution; no registry release or MSRV guarantee is assumed. Cell
-comes from Git tag `v0.0.3`; no sibling Cell checkout is needed. Direct consumer
-Cell dependencies should use the same URL/tag. Host integrations need no Wasm
-target or model server. Guest development follows the matching
-[Cell tag](https://github.com/nate-droid/cell/tree/v0.0.3).
+comes from published Git tag `v0.0.4`, commit
+`8ece6bf88497b402a6a417c95adf9bf1a6bd6aae`.
+The dependency graph fetches Cell remotely, with no sibling overlay;
+direct consumer Cell dependencies should use the same URL/tag. Host integrations
+need no Wasm target or model server. Guest development follows the matching
+[Cell tag](https://github.com/nate-droid/cell/tree/v0.0.4).
 
 `scope-ide` defaults to `tools`; `agent` and `tui` opt in and include tools.
 `logging` is separate. Downstream CLI features must explicitly forward dependency
@@ -780,145 +782,72 @@ calls cannot be forcibly interrupted. Payload limits follow construction/lifting
 not host allocation, and do not bound total process memory/aggregate artifacts.
 Identity pipelines run no component and do not apply these Cell checks.
 
-### Upstream transfer correction: local verification, publication pending
+### Published Cell transfer policy and host workflow
 
-**The normal v0.0.3 Git pin does not yet include this correction.** The sibling
-Cell working tree adds `ExecutionPolicy::host_transfer_bytes` and a distinct
-`ExecutionErrorKind::Transfer`. Until a corrected Cell revision is published and
-Scope pins it, use the opt-in diagnostic below, not those fields in ordinary
-consumers. The root dependency and existing standalone lockfiles are unchanged.
+Scope uses published Cell **v0.0.4**, commit
+`8ece6bf88497b402a6a417c95adf9bf1a6bd6aae`, through the normal remote Git
+dependency graph for the workspace and standalone consumers. No sibling checkout
+or local overlay is required.
 
-The correction preserves four different limits:
+Ordinary hosts import `Cell`, `ExecutionPolicy`, `CancellationToken` and
+`ExecutionErrorKind` from `scope_execution`. These are re-exports of Cell's own
+types, not a second policy implementation. Scope owns typed bindings, preflight,
+output validation and artifact publication; Cell owns managed stores, runtime
+limits and installed capability enforcement. No mutable Wasmtime store is exposed.
+
+Choose these distinct budgets explicitly:
 
 - `fuel`: Wasm instruction budget, refreshed for startup and invocation.
 - `memory_bytes`: per-guest-linear-memory ceiling.
 - `host_transfer_bytes`: Wasmtime's approximate byte-oriented guest-to-host
-  transfer/lifting budget **per crossing**, configured on the managed store before
-  invocation/startup with `set_hostcall_fuel`; no mutable store is exposed.
-  `None` explicitly resolves to **128 MiB**, preserving the previous effective
-  Wasmtime default; `Some(0)` is zero, not unlimited. Cell exposes the effective
-  value and records configured and effective values in recorded execution limits.
-- `output_bytes`: recursive logical output admission **after** lifting.
+  transfer/lifting budget **per crossing**, installed on the managed store before
+  startup/invocation. `None` resolves to an effective **128 MiB**; `Some(0)` is
+  zero, not unlimited. It is not a cumulative execution-wide transfer budget.
+- `output_bytes`: recursive logical output admission **after lifting**. Rejection
+  here occurs after the host has constructed the lifted value; it is not a
+  pre-allocation memory bound.
 
-Finite 64 KiB string/list tests with logical output `8` distinguish `Transfer`
-with transfer `8` from `Output` with a sufficient transfer allowance. The latter
-has already constructed the lifted value. Wasmtime charges representation costs,
-so a dynamic byte-list envelope needs more transfer fuel than its payload length;
-these units are not interchangeable. Cell's private store accessor is asserted in
-its regression, while the Scope diagnostic proves policy propagation behaviorally.
+Wasmtime charges representation costs, so a dynamic byte-list envelope can need
+far more transfer budget than its payload length. Transfer and logical-output
+units are not interchangeable. Handle transfer exhaustion through the structured
+`ExecutionErrorKind::Transfer` in `ExecutionError::Managed`, not message parsing;
+logical output rejection is `ExecutionErrorKind::Output`. Include the
+policy/recorded-limit fields and error variant in exhaustive literals and matches.
 
-Wasmtime currently keeps its exhaustion error type private. Cell uses a narrowly
-isolated exact error-chain-message match for this version, tested against prefix
-and suffix false matches; revisit that fallback on Wasmtime upgrades. Hosts consume
-the structured `Transfer` kind rather than repeating this matching. Wasmtime call
-failure poisons the store; create a fresh store/instance. Post-lift logical
-rejection does not poison it. Scope already uses fresh managed stores, so a failed
-invocation does not poison subsequent executions on the same Cell.
+A Wasmtime call failure poisons its store: use a fresh store/instance, not a retry
+on that store. Post-lift logical rejection does not itself poison the store.
+Scope creates fresh managed stores/instances per node, so a failed invocation
+does not poison later executions on the same Cell. Outputs become artifacts only
+after typed validation and policy admission; earlier successful artifacts remain
+failure evidence when a later node fails.
 
-This is **not** a bound on total host heap, RSS, compilation, retained application
-artifacts, cumulative transfers over multiple crossings, or arbitrary native host
-calls. It adds no authorization and rolls back no host effects. New public policy
-and recorded-limit fields and the new error variant require updating exhaustive
-struct literals/matches when consuming the corrected Cell revision.
-
-The [host-only diagnostic](../examples/managed-transfer/src/lib.rs) has no direct
-Cell/Wasmtime dependency, import, Lisp guest or Agent adapter. Its standalone
-manifest deliberately patches only Cell to the sibling checkout; it is not part
-of ordinary builds and requires that corrected checkout:
+The retained [host-only diagnostic](../examples/managed-transfer/src/lib.rs) uses
+Scope's re-exports with no direct Cell/Wasmtime dependency, Lisp guest or Agent
+adapter. It uses the published remote dependency graph. Run from the Scope root:
 
 ```sh
-cargo test --offline --locked --manifest-path examples/managed-transfer/Cargo.toml
+cargo test --locked --manifest-path examples/managed-transfer/Cargo.toml
 ```
 
-It registers an exact typed transformation, binds host-selected bytes/export,
-checks a denied planning grant, rejects a 64 KiB component envelope before lifting
-with transfer `8`, rejects it after lifting with logical output `8`, and succeeds
-with admitted typed evidence on a fresh managed store. A 16 MiB transfer budget is
-used for the admitted dynamic list representation, not claimed as a minimal limit.
+Add `--offline` only when dependencies are cached. The standalone workspace is
+not covered by root `--workspace`. Its finite string and byte-list fixtures check
+missing-export rejection, planning-grant denial, pre-lift `Transfer` rejection,
+post-lift `Output` rejection, and admitted typed output on fresh managed stores.
+The admitted transfer allowance accounts for the dynamic representation; it is
+not a claimed minimum.
 
-#### Verification evidence and remaining gaps
+Cell exposes the effective transfer limit and records configured and effective
+limits in its execution provenance. Scope does not automatically attach Cell's
+full recorded provenance to semantic results: the host must retain the association
+with the exact source snapshot, authorization, binding and execution evidence it
+needs. A structured failure or nominal type alone is not proof of source identity,
+semantic validity or authorization.
 
-Tests used Scope `be402cf3e1cc7bf207e290beab42692988a4fb2e` plus these local changes,
-Cell `268b2ac53e25f60806063e732888d9f660c0767e` plus the transfer correction. Cell's
-own lock uses Wasmtime **50.0.0**; Scope and the diagnostic resolve **50.0.1**.
-Host: macOS, `rustc 1.97.1 (8bab26f4f 2026-07-14)`.
-The supplied Lisp and Path working trees contain other local work; neither was
-modified. No Lisp component or agent adapter was built.
-
-Direct Cell commands (run from Scope, each with
-`CARGO_TARGET_DIR=/Users/nathaniel.ham/Projects/THEWORK/scope/target`):
-
-```sh
-cargo test --manifest-path ../cell/Cargo.toml --locked -p cell --lib host_transfer
-cargo test --manifest-path ../cell/Cargo.toml --locked -p cell -p cell-compose --all-features
-cargo test --manifest-path ../cell/Cargo.toml --locked -p cell --all-features --test hello
-cargo test --manifest-path ../cell/Cargo.toml --locked -p cell --all-features --doc
-cargo test --manifest-path ../cell/Cargo.toml --locked -p cell-compose --all-features
-cargo test --manifest-path ../cell/Cargo.toml --locked -p cell --test fs_demo
-cargo fmt --manifest-path ../cell/Cargo.toml --all -- --check
-```
-
-Transfer regressions: **2 passed**; Cell library: **35 passed, 1 manual timing probe
-ignored**; hello: **1 passed**; compose: **21 passed**. The combined command first
-stopped at three filesystem-fixture path errors: that harness reads hard-coded
-`cell/target`. A local `cell/target -> ../scope/target` symlink restored shared-target
-lookup; the explicit `fs_demo` rerun then passed all **3**, including missing and
-read-only capability denials. No harness source or artifacts were deleted.
-
-Scope's local overlay patches all six Cell host/capability packages to sibling
-paths in ignored `target/se1-overlay.toml`. Lockfiles were temporarily resolved
-for that overlay and restored byte-for-byte; published-pin availability is not
-established by overlay results. Each verification command was bounded to 180 s.
-The commands below use `--config target/se1-overlay.toml` plus `--offline`; locked
-runs follow temporary resolution, not the unchanged checked-in root lockfile:
-
-```sh
-cargo test -p scope-execution --test execution --test policy
-cargo test -p scope-execution --all-features --locked
-cargo test --workspace --all-features --locked
-cargo test --workspace --locked
-cargo test -p scope-ide --no-default-features --locked
-cargo test -p scope-ide --features tools --locked
-cargo test -p scope-ide --features tui --locked
-```
-
-- Execution: **14 + 13 passed**, also **27 passed** with all features. The standalone
-  managed-transfer diagnostic: **1 passed**. Its first run correctly rejected the
-  supposedly sufficient 1 MiB allowance; the fixture was corrected to 16 MiB for
-  the dynamic list representation and passed.
-- Full all-features: **789 passed, 3 local HTTP fixture failures** (first sandbox
-  bind denials, then `WouldBlock` with proxy settings). Targeted LM Studio native
-  fixture rerun with `NO_PROXY` and `no_proxy` set to `127.0.0.1,localhost,::1`:
-  **4 passed**. This is not a successful complete Full rerun.
-- Default workspace: **606 passed, 1 ignored**, then **180 s timeout** in
-  `source_proposal_launcher`; no broad rerun after that timeout.
-- IDE no-default/tools: **345 / 488 passed**. TUI: **492 passed, 1 failed, 1 ignored**;
-  `downstream_actions_through_real_launcher` missed the post-submission prompt for
-  `:scope scratch open fixture.consumer`.
-- All-feature IDE public API, authorization, evidence and retained-source selection
-  (15 integration targets): **87 passed**. Remaining seven workspace packages with
-  all features: **309 passed**. These selections do not replace the incomplete PTYs.
-- Full Clippy commands from the [verification policy](verification.md#full--repository-wide--high-risk--publication)
-  ran with the same overlay: default workspace, tools and TUI passed; all-features
-  failed on 11 IDE lint diagnostics; no-default failed on unused `set_validation`
-  and `set_evidence` methods. These unrelated findings were not changed.
-- Full all-feature rustdoc with `RUSTDOCFLAGS='-D warnings'` passed. Standalone
-  downstream/harness tests passed **4 / 7**, and the harness run passed. Their
-  lockfiles were also restored. Subsequently, `cargo run --offline --locked -p
-  xtask -- check-downstream --offline` passed against the unchanged published pin,
-  including all **3** generated-language tests and the generated launcher. This
-  establishes ordinary scaffold compatibility, not unpublished transfer support.
-- After restoring all ordinary lockfiles, `cargo test --offline --locked -p
-  scope-execution --test execution --test policy` also passed **14 + 13** against
-  the unchanged published Cell pin, including use of Scope's host-type re-exports.
-- Formatting, Python documentation tests (**5**) and local Markdown links passed.
-
-**Full is not green.** Resolve the PTY/lint blockers and complete required CI and
-verification before claiming complete confidence or release readiness.
-The next dependency change must publish the Cell correction, update Scope's pin,
-move the opt-in regression into ordinary policy coverage, and remove the temporary
-sibling diagnostic patch. Do not silently add a sibling requirement to normal
-Scope builds.
+These limits do **not** bound total host heap/RSS, compilation, aggregate retained
+artifacts, cumulative transfers across crossings, or arbitrary native host calls.
+Deadlines/cancellation remain cooperative, not hard process isolation. Limits add
+no capabilities or authorization and roll back no host effects. Identity pipelines
+run no component and therefore do not apply Cell's managed checks.
 
 Handle `ExecutionError::Managed { node, phase, kind, message }` structurally, not
 by parsing message text. New exhaustive matches need a `Managed` arm. Partial

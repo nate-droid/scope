@@ -195,6 +195,12 @@ pub struct WorkspaceTui {
     focused: Option<String>,
     last_focused: Option<String>,
     command_line: Option<String>,
+    open_app_prompt: bool,
+    open_suggestions: super::quick_open::QuickOpen,
+    app_editor: bool,
+    // Display hints only: invocation always rediscovers and captures from App.
+    action_document_present: bool,
+    action_candidate_available: bool,
     pending_prompt: Option<actions::PendingPrompt>,
     output: crate::cli::workspace_command::WorkspaceCommandOutput,
     output_errors: String,
@@ -202,6 +208,8 @@ pub struct WorkspaceTui {
     output_area: Option<Rect>,
     visible: Vec<(String, Rect)>,
     picker: Option<actions::Picker>,
+    semantic_inspection: Option<super::semantic::SemanticInspection>,
+    retained_inspection: Option<super::semantic::SemanticInspection>,
     downstream_actions: Vec<DownstreamAction>,
     results: Vec<crate::cli::ScriptPresentation>,
     result_index: Option<usize>,
@@ -217,6 +225,46 @@ pub enum WorkspaceInput {
 impl WorkspaceTui {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Open a confined workspace file directly into App and edit that same document.
+    /// Refuses unpublished drafts and unsaved App changes; never copies into scratch.
+    pub fn open_app_document(&mut self, app: &mut App, path: &str) -> Result<(), String> {
+        if let Some(reason) = self.draft_blocker() {
+            return Err(reason);
+        }
+        if app
+            .open_document()
+            .is_some_and(|document| document.is_dirty())
+        {
+            return Err("cannot replace App document with unsaved changes".into());
+        }
+        if path.is_empty() || path.contains(['\n', '\r']) {
+            return Err("enter one workspace-relative App file path".into());
+        }
+        let editor = self
+            .visible_focus_ids()
+            .into_iter()
+            .find(|id| {
+                self.instances
+                    .get(id)
+                    .is_some_and(|instance| instance.editable)
+            })
+            .ok_or("no visible editable pane")?;
+        app.open_path(path).map_err(|error| error.to_string())?;
+        self.focus_named(&editor)?;
+        self.app_editor = true;
+        self.refresh_action_context(app);
+        Ok(())
+    }
+
+    /// Latest complete semantic observation, retained across modal close/reopen.
+    /// Consumers must check `InspectionResult::is_fresh_app` before presenting it as current.
+    pub fn inspection_result(&self) -> Option<&crate::semantic_inspection::InspectionResult> {
+        self.semantic_inspection
+            .as_ref()
+            .or(self.retained_inspection.as_ref())?
+            .result()
     }
     pub fn register(
         &mut self,
@@ -362,6 +410,7 @@ impl WorkspaceTui {
         app: &App,
         sources: Option<&crate::scratch::ScratchBuffers>,
     ) {
+        self.refresh_action_context(app);
         self.geometry(area);
         let editor_drafts = self
             .instances
@@ -384,8 +433,12 @@ impl WorkspaceTui {
                 frame,
                 inner,
                 &TuiContext::with_view_sources(app, focused, instance.scroll, sources)
-                    .with_editor_drafts(editor_drafts),
+                    .with_editor_drafts(editor_drafts)
+                    .with_app_editor(self.app_editor && instance.editable),
             );
+        }
+        if let Some(inspection) = &self.semantic_inspection {
+            inspection.render(frame, frame.area(), app);
         }
     }
     /// Host shortcuts: F4 command bar; Esc/F2 shell; F6/Shift-F6 focus; F7 next layout;
@@ -411,6 +464,7 @@ impl WorkspaceTui {
         app: &mut App,
         mut sources: Option<&mut crate::scratch::ScratchBuffers>,
     ) -> WorkspaceInput {
+        self.refresh_action_context(app);
         let key = match &input {
             Event::Key(key) => *key,
             Event::Paste(_) => KeyEvent::new(KeyCode::Null, event::KeyModifiers::NONE),
@@ -419,7 +473,17 @@ impl WorkspaceTui {
         if key.kind != KeyEventKind::Press {
             return WorkspaceInput::Ignored;
         }
+        if let Some(inspection) = &mut self.semantic_inspection {
+            if inspection.handle_key(key, app) {
+                self.retained_inspection = self.semantic_inspection.take();
+            }
+            return WorkspaceInput::Handled;
+        }
         match key.code {
+            KeyCode::Char('g') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                self.picker = Some(actions::Picker::default());
+                return WorkspaceInput::Handled;
+            }
             KeyCode::F(1) => {
                 self.picker = Some(actions::Picker::default());
                 return WorkspaceInput::Handled;
@@ -429,7 +493,14 @@ impl WorkspaceTui {
                 return WorkspaceInput::Handled;
             }
             KeyCode::F(4) => {
+                self.open_app_prompt = false;
                 self.command_line = Some(String::new());
+                return WorkspaceInput::Handled;
+            }
+            KeyCode::Esc if self.app_editor => {
+                if self.focused.as_deref() == Some("output") {
+                    let _ = self.focus_named("last");
+                }
                 return WorkspaceInput::Handled;
             }
             KeyCode::Esc | KeyCode::F(2) => return WorkspaceInput::Shell,
@@ -510,9 +581,21 @@ impl WorkspaceTui {
                     });
                 match result {
                     Ok(_) => {
+                        self.app_editor = false;
                         let _ = self.focus_named("editor");
                     }
                     Err(error) => self.output_errors.push_str(&format!("{error}\n")),
+                }
+                return WorkspaceInput::Handled;
+            }
+            if instance.editable && self.app_editor {
+                if let Some(document) = app.open_document_mut() {
+                    instance
+                        .pane
+                        .handle_source_event(input, &mut super::ScratchEditAccess::app(document));
+                } else {
+                    self.output_errors
+                        .push_str("App document is no longer open; draft retained.\n");
                 }
                 return WorkspaceInput::Handled;
             }
@@ -550,6 +633,28 @@ impl WorkspaceTui {
         )
     }
 
+    fn open_document_event(&mut self, input: &Event, app: &App) -> Option<String> {
+        self.open_suggestions
+            .set_query(self.command_line.as_deref().unwrap_or_default());
+        if let Event::Key(key) = input
+            && key.kind == KeyEventKind::Press
+        {
+            if self.open_suggestions.navigate(key.code, app) {
+                return None;
+            }
+            if matches!(key.code, KeyCode::Tab | KeyCode::Enter) {
+                self.command_line = Some(self.open_suggestions.selected_path(app)?);
+                if key.code == KeyCode::Tab {
+                    return None;
+                }
+            }
+        }
+        let submitted = self.command_event(input);
+        self.open_suggestions
+            .set_query(self.command_line.as_deref().unwrap_or_default());
+        submitted
+    }
+
     // Returns a submission only on Enter. All command editing is isolated from panes.
     fn command_event(&mut self, input: &Event) -> Option<String> {
         if let Some(pending) = self.pending_prompt.as_mut()
@@ -578,6 +683,8 @@ impl WorkspaceTui {
             Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
                 KeyCode::Esc | KeyCode::F(4) => {
                     self.command_line = None;
+                    self.open_app_prompt = false;
+                    self.open_suggestions = Default::default();
                     self.pending_prompt = None;
                 }
                 KeyCode::Enter => return self.command_line.take(),
@@ -693,6 +800,19 @@ impl WorkspaceTui {
         #[cfg(feature = "agent")] observer: &mut dyn FnMut(&crate::agent::AgentTurn),
     ) {
         self.show_result = false;
+        if self.open_app_prompt {
+            self.open_app_prompt = false;
+            self.open_suggestions = Default::default();
+            let result = self.open_app_document(app, line);
+            if let Err(error) = result {
+                self.output_errors.push_str(&format!("{error}\n"));
+            }
+            return;
+        }
+        let selected_before = sources
+            .selected()
+            .ok()
+            .map(|source| source.evaluation_source_id().clone());
         let result = match PaneAction::parse(line) {
             Some(PaneAction::Focus(name)) => self.focus_named(&name),
             Some(PaneAction::Help) => {
@@ -735,8 +855,34 @@ impl WorkspaceTui {
                 }
             }
         };
+        if selected_before
+            != sources
+                .selected()
+                .ok()
+                .map(|source| source.evaluation_source_id().clone())
+        {
+            self.app_editor = false;
+        }
         if let Err(error) = result {
             self.output_errors.push_str(&format!("{error}\n"));
+        }
+    }
+
+    fn document_shortcut(key: KeyEvent) -> Option<WorkspaceAction> {
+        if key.kind != KeyEventKind::Press {
+            return None;
+        }
+        match (key.code, key.modifiers) {
+            (KeyCode::Enter, event::KeyModifiers::ALT) => {
+                Some(WorkspaceAction::CheckCurrentDocument)
+            }
+            (KeyCode::Char('r'), event::KeyModifiers::CONTROL) => {
+                Some(WorkspaceAction::RunCurrentDocument)
+            }
+            (KeyCode::Char('o'), event::KeyModifiers::CONTROL) => {
+                Some(WorkspaceAction::OpenAppDocument)
+            }
+            _ => None,
         }
     }
 
@@ -774,8 +920,8 @@ impl WorkspaceTui {
             frame.render_widget(paragraph.scroll((scroll, 0)), areas[2]);
         } else {
             frame.render_widget(Paragraph::new(self.command_line.as_ref()
-                .map(|s| format!("> {s}"))
-                .unwrap_or_else(|| "F1 actions • F5 run • F3 previous pane • F4 command • F6 focus • F7 layout • F2/Esc shell • Ctrl-Q exit".into())), area);
+                .map(|s| format!("{}> {s}", if self.open_app_prompt { "Open document: " } else { "" }))
+                .unwrap_or_else(|| "Ctrl-O open • Ctrl-R run • Alt-Enter check • Ctrl-S publish (memory) • Ctrl-G actions/Save • Ctrl-Q quit".into())), area);
         }
     }
 
@@ -812,6 +958,7 @@ impl WorkspaceTui {
         }
         let mut fallback_sources = crate::scratch::ScratchBuffers::default();
         let mut terminal = Some(TerminalSession::enter()?);
+        let mut quit_pending = false;
         loop {
             terminal.as_mut().unwrap().draw(|frame| {
                 let output_height = (frame.area().height / 3).clamp(1, 8);
@@ -840,15 +987,57 @@ impl WorkspaceTui {
                     .scroll((self.output_scroll, 0)),
                     areas[1],
                 );
-                self.render_footer(frame, areas[2]);
+                if quit_pending {
+                    frame.render_widget(
+                        Paragraph::new(
+                            "Unsaved work: Ctrl-Q again to discard and quit • Esc/Ctrl-C cancel",
+                        ),
+                        areas[2],
+                    );
+                } else {
+                    self.render_footer(frame, areas[2]);
+                }
+                if self.open_app_prompt {
+                    self.open_suggestions.render_titled(
+                        frame,
+                        areas[1],
+                        app,
+                        "Open document — ↑/↓ select · Tab complete · Enter open · Esc cancel",
+                    );
+                }
                 self.render_picker(
                     frame,
                     sources.as_deref().unwrap_or(&fallback_sources),
                     command.as_ref().is_some_and(|h| h.supports_direct_script()),
                 );
+                if let Some(inspection) = &self.semantic_inspection {
+                    inspection.render(frame, frame.area(), app);
+                }
             })?;
             if event::poll(std::time::Duration::from_millis(250))? {
                 let input = event::read()?;
+                if quit_pending {
+                    if let Event::Key(key) = &input
+                        && key.kind == KeyEventKind::Press
+                    {
+                        if key.code == KeyCode::Char('q')
+                            && key.modifiers.contains(event::KeyModifiers::CONTROL)
+                        {
+                            break;
+                        }
+                        if key.code == KeyCode::Esc
+                            || (key.code == KeyCode::Char('c')
+                                && key.modifiers.contains(event::KeyModifiers::CONTROL))
+                        {
+                            quit_pending = false;
+                        }
+                    }
+                    continue;
+                }
+                if self.semantic_inspection.is_some() {
+                    self.handle_event_optional_sources(input, app, sources.as_deref_mut());
+                    continue;
+                }
                 let supported = command.as_ref().is_some_and(|h| h.supports_direct_script());
                 let action = if self.picker.is_some() {
                     let action = self.picker_event(
@@ -863,7 +1052,14 @@ impl WorkspaceTui {
                 } else if self.command_line.is_none() {
                     match &input {
                         Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                            KeyCode::F(5) => Some(WorkspaceAction::RunScript),
+                            _ if Self::document_shortcut(*key).is_some() => {
+                                Self::document_shortcut(*key)
+                            }
+                            KeyCode::F(5) => self.primary_f5_action(
+                                key.modifiers,
+                                sources.as_deref().unwrap_or(&fallback_sources),
+                            ),
+
                             KeyCode::Left if key.modifiers.contains(event::KeyModifiers::ALT) => {
                                 Some(WorkspaceAction::PreviousResult)
                             }
@@ -892,7 +1088,12 @@ impl WorkspaceTui {
                     continue;
                 }
                 if self.command_line.is_some() {
-                    if let Some(line) = self.command_event(&input) {
+                    let submitted = if self.open_app_prompt {
+                        self.open_document_event(&input, app)
+                    } else {
+                        self.command_event(&input)
+                    };
+                    if let Some(line) = submitted {
                         if self.pending_prompt.is_some() {
                             if let Err(error) = self.submit_prompt(
                                 line,
@@ -959,7 +1160,20 @@ impl WorkspaceTui {
                     continue;
                 }
                 match self.handle_event_optional_sources(input, app, sources.as_deref_mut()) {
-                    WorkspaceInput::Quit => break,
+                    WorkspaceInput::Quit => {
+                        let unsaved = self.draft_blocker().is_some()
+                            || app
+                                .open_document()
+                                .is_some_and(|document| document.is_dirty())
+                            || sources.as_deref().is_some_and(|sources| {
+                                sources.list().any(|source| source.is_dirty())
+                            });
+                        if unsaved {
+                            quit_pending = true;
+                        } else {
+                            break;
+                        }
+                    }
                     WorkspaceInput::Shell => {
                         drop(terminal.take());
                         let command = command

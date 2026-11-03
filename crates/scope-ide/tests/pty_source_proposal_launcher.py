@@ -79,6 +79,7 @@ def main():
             command(':scope source-proposals', '0 pending source proposals')
             command(':scope source-accept 2')
             command(':scope downstream consumer inspect rejected')
+            workspace.expect('Unsaved', workspace.send(b'\x11'))
             workspace.send(b'\x11')
             assert workspace.wait_exit() == 0, bytes(workspace.raw)
             assert source.read_text() == original, 'proposal lifecycle saved the source'

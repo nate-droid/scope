@@ -9,8 +9,3 @@ publish = false
 [dependencies]
 scope-execution = { path = "../../crates/scope-execution" }
 scope-types = { path = "../../crates/scope-types" }
-
-# Opt-in upstream diagnostic only. Normal Scope consumers still use the Git pin.
-# Requires the sibling Cell managed-transfer correction until it is published.
-[patch."https://github.com/nate-droid/cell"]
-cell = { path = "../../../cell/crates/cell" }

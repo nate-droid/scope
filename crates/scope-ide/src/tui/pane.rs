@@ -10,6 +10,7 @@ pub struct TuiContext<'a> {
     focused: bool,
     scroll: u16,
     editor_drafts: bool,
+    app_editor: bool,
 }
 
 impl<'a> TuiContext<'a> {
@@ -20,6 +21,7 @@ impl<'a> TuiContext<'a> {
             focused: false,
             scroll: 0,
             editor_drafts: false,
+            app_editor: false,
         }
     }
 
@@ -39,6 +41,7 @@ impl<'a> TuiContext<'a> {
             focused,
             scroll,
             editor_drafts: false,
+            app_editor: false,
         }
     }
 
@@ -62,6 +65,28 @@ impl<'a> TuiContext<'a> {
             },
             version: buffer.version(),
         })
+    }
+
+    pub(super) fn with_app_editor(mut self, enabled: bool) -> Self {
+        self.app_editor = enabled;
+        self
+    }
+
+    /// Whether this editable pane targets App rather than the selected scratch.
+    pub(super) fn is_app_editor(&self) -> bool {
+        self.app_editor
+    }
+
+    /// Current editor target, without granting publication authority.
+    /// `selected_source` remains the independent scratch selection.
+    pub(super) fn editor_source(&self) -> Option<super::ScratchEditSnapshot> {
+        if self.app_editor {
+            self.app
+                .open_document()
+                .map(super::ScratchEditAccess::document_snapshot)
+        } else {
+            self.selected_source()
+        }
     }
 
     /// Presentation metadata from the existing selected buffer; no disk read.
@@ -153,6 +178,11 @@ impl<'a> TuiContextMut<'a> {
 pub trait Pane {
     /// Whether execution would overlook an uncommitted local source draft.
     fn has_dirty_draft(&self) -> bool {
+        false
+    }
+
+    /// Whether a retained unpublished draft belongs to an App document.
+    fn has_dirty_app_draft(&self) -> bool {
         false
     }
 

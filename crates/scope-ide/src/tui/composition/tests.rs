@@ -1096,7 +1096,14 @@ fn workspace_action_dirty_selected_and_parked_unrelated_drafts_block_with_metada
     };
     let script = h.sources.create("scope-script", "committed");
     h.render();
-    assert!(h.ui.actions(&h.sources, true)[0].disabled_reason.is_none());
+    assert!(
+        h.ui.actions(&h.sources, true)
+            .iter()
+            .find(|action| action.action == WorkspaceAction::RunScript)
+            .unwrap()
+            .disabled_reason
+            .is_none()
+    );
     h.event(Event::Paste("draft ".into()));
     for unrelated in [false, true] {
         if unrelated {
@@ -1278,6 +1285,163 @@ fn workspace_action_results_retain_owned_revisions_and_history_attribution() {
             .unwrap()
             .contains("source closed or unavailable")
     );
+}
+
+struct MenuLanguage(Vec<scope_language::SemanticOperationDescription>);
+impl scope_language::LanguageService for MenuLanguage {
+    fn language_id(&self) -> &'static str {
+        "menu-fixture"
+    }
+    fn language_name(&self) -> &'static str {
+        "Menu fixture"
+    }
+    fn matches_path(&self, _: &scope_language::LanguagePath<'_>) -> bool {
+        true
+    }
+    fn analyze(&self, _: scope_language::LanguageDocument<'_>) -> scope_language::LanguageAnalysis {
+        scope_language::LanguageAnalysis::default()
+    }
+    fn semantic_operations(&self) -> Vec<scope_language::SemanticOperationDescription> {
+        self.0.clone()
+    }
+}
+
+#[test]
+fn primary_menu_discloses_only_contextual_actions_and_keeps_advanced_searchable() {
+    use scope_language::*;
+    let root = TempWorkspace::new("primary-menu");
+    root.write_file("program.fixture", "program");
+    let candidate = SemanticOperationDescription {
+        id: "evaluate".into(),
+        description: "Evaluate".into(),
+        arguments: vec![],
+        effect: SemanticOperationEffect::Read,
+        target: SemanticTargetRequirement::Document,
+        constraints: None,
+    }
+    .with_purpose(SemanticOperationPurpose::CandidateEvaluation)
+    .unwrap();
+    let exploration = candidate
+        .clone()
+        .with_purpose(SemanticOperationPurpose::Exploration)
+        .unwrap();
+    let mut argument_candidate = candidate.clone();
+    argument_candidate.arguments.push(SemanticArgument {
+        name: "input".into(),
+        kind: SemanticArgumentKind::String,
+        required: false,
+        description: "Input".into(),
+    });
+    let mut proposal = candidate.clone();
+    proposal.effect = SemanticOperationEffect::ProposeChanges;
+    let mut duplicate = candidate.clone();
+    duplicate.id = "second".into();
+    for (operations, runnable) in [
+        (vec![], false),
+        (vec![exploration], false),
+        (vec![argument_candidate], false),
+        (vec![proposal], false),
+        (vec![candidate.clone(), duplicate], false),
+        (vec![candidate], true),
+    ] {
+        let service = Box::leak(Box::new(MenuLanguage(operations)));
+        let mut app = App::builder(root.workspace())
+            .language(service)
+            .build()
+            .unwrap();
+        let mut ui = WorkspaceTui::new();
+        ui.register_editable("editor", crate::tui::EditableScratchPane::new())
+            .unwrap();
+        ui.layout("main", View::leaf("editor")).unwrap();
+        ui.geometry(Rect::new(0, 0, 80, 20));
+        let mut sources = crate::scratch::ScratchBuffers::default();
+        ui.refresh_action_context(&app);
+        ui.picker = Some(actions::Picker::default());
+        let labels = |ui: &WorkspaceTui, sources: &crate::scratch::ScratchBuffers| {
+            ui.picker_items(sources, true)
+                .into_iter()
+                .map(|item| item.label)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(labels(&ui, &sources), ["Open", "More actions"]);
+        ui.open_app_document(&mut app, "program.fixture").unwrap();
+        let expected = if runnable {
+            vec!["Run", "Check", "Open", "Save", "Inspect", "More actions"]
+        } else {
+            vec!["Check", "Open", "Save", "Inspect", "More actions"]
+        };
+        assert_eq!(labels(&ui, &sources), expected);
+        assert_eq!(
+            ui.actions(&sources, true)
+                .iter()
+                .any(|item| item.action == WorkspaceAction::RunCurrentDocument),
+            runnable
+        );
+        assert_eq!(
+            ui.primary_f5_action(event::KeyModifiers::NONE, &sources),
+            runnable.then_some(WorkspaceAction::RunCurrentDocument)
+        );
+        // Empty-query More exposes the catalog, and search does so without an extra step.
+        ui.invoke_action(WorkspaceAction::MoreActions, &mut app, &mut sources, None)
+            .unwrap();
+        assert!(
+            ui.picker_items(&sources, true)
+                .iter()
+                .any(|item| item.action == WorkspaceAction::NewScript)
+        );
+        ui.picker = Some(actions::Picker::default());
+        for ch in "scratch.new-script".chars() {
+            ui.picker_event(
+                &Event::Key(KeyEvent::new(KeyCode::Char(ch), event::KeyModifiers::NONE)),
+                &sources,
+                true,
+            );
+        }
+        assert_eq!(ui.picker_items(&sources, true).len(), 1);
+        assert_eq!(
+            ui.picker_items(&sources, true)[0].action,
+            WorkspaceAction::NewScript
+        );
+        sources.create("other-language", "not executable");
+        ui.app_editor = false;
+        ui.picker = Some(actions::Picker::default());
+        assert_eq!(labels(&ui, &sources), ["Open", "More actions"]);
+        assert_eq!(
+            ui.primary_f5_action(event::KeyModifiers::NONE, &sources),
+            None
+        );
+        sources.create("scope-script", "1");
+        assert_eq!(labels(&ui, &sources), ["Run", "Open", "More actions"]);
+        assert_eq!(
+            ui.primary_f5_action(event::KeyModifiers::NONE, &sources),
+            Some(WorkspaceAction::RunScript)
+        );
+        assert!(
+            !ui.picker_items(&sources, false)
+                .iter()
+                .any(|item| item.label == "Run")
+        );
+        assert_eq!(
+            ui.primary_f5_action(event::KeyModifiers::SHIFT, &sources),
+            None
+        );
+        // A previous availability hint cannot authorize a different/missing App source.
+        let mut no_document = App::new(root.workspace()).unwrap();
+        ui.app_editor = true;
+        assert!(
+            ui.invoke_action(
+                WorkspaceAction::RunCurrentDocument,
+                &mut no_document,
+                &mut sources,
+                None
+            )
+            .is_err()
+        );
+        assert_eq!(labels(&ui, &sources), ["Open", "More actions"]);
+        assert!(ui.semantic_inspection.is_none());
+        assert_eq!(sources.selected().unwrap().text(), "1");
+        assert_eq!(root.read_file("program.fixture"), "program");
+    }
 }
 
 #[test]
@@ -2344,6 +2508,28 @@ fn path_f1_dirty_draft_disables_all_handoffs_and_rechecks_captured_tokens() {
     path_f1_propose(&mut h);
     let tokens = path_f1_actions(&h);
     h.event(Event::Paste("draft ".into()));
+    let inspect =
+        h.ui.actions(&h.sources, false)
+            .into_iter()
+            .find(|a| a.action == WorkspaceAction::InspectDocument)
+            .unwrap();
+    assert!(inspect.disabled_reason.is_some());
+    assert!(
+        h.ui.invoke_action(inspect.action, &mut h.app, &mut h.sources, None)
+            .is_err()
+    );
+    assert!(h.ui.semantic_inspection.is_none());
+    let diagnostics =
+        h.ui.actions(&h.sources, false)
+            .into_iter()
+            .find(|a| a.id == "document.diagnostics")
+            .unwrap();
+    assert_eq!(diagnostics.label, "Check document diagnostics");
+    assert!(diagnostics.disabled_reason.is_some());
+    assert!(
+        h.ui.invoke_action(diagnostics.action, &mut h.app, &mut h.sources, None)
+            .is_err()
+    );
     let before = h.sources.bound_source();
     let disabled = path_f1_actions(&h);
     assert_eq!(disabled.len(), 4);
@@ -2505,4 +2691,407 @@ fn render_context_reports_global_visible_and_hidden_drafts_without_mutation() {
     h.render();
     assert!(h.pane_text("status").contains("drafts=false"));
     assert_eq!(h.sources.selected().unwrap().text(), "unpublished original");
+}
+
+#[test]
+fn inspection_action_requires_live_app_document_and_modal_captures_escape() {
+    let root = TempWorkspace::new("workspace-inspection-modal");
+    root.write_file("sample.txt", "saved");
+    let mut app = App::new(root.workspace()).unwrap();
+    let mut ui = WorkspaceTui::new();
+    let mut sources = crate::scratch::ScratchBuffers::default();
+    sources.create("scope-script", "unrelated scratch");
+    let action = ui
+        .actions(&sources, false)
+        .into_iter()
+        .find(|a| a.id == "document.evaluate")
+        .unwrap()
+        .action;
+    assert_eq!(action, WorkspaceAction::InspectDocument);
+    assert!(
+        ui.invoke_action(action.clone(), &mut app, &mut sources, None)
+            .is_err()
+    );
+    assert!(ui.semantic_inspection.is_none());
+    app.open_path("sample.txt").unwrap();
+    ui.invoke_action(action, &mut app, &mut sources, None)
+        .unwrap();
+    assert!(ui.semantic_inspection.is_some());
+    let key = KeyEvent::new(KeyCode::Esc, event::KeyModifiers::NONE);
+    assert_eq!(ui.handle_key(key, &mut app), WorkspaceInput::Handled);
+    assert!(ui.semantic_inspection.is_none());
+    assert_eq!(ui.handle_key(key, &mut app), WorkspaceInput::Shell);
+}
+
+#[test]
+fn f1_editor_focus_and_document_diagnostics_have_deterministic_labels() {
+    let root = TempWorkspace::new("f1-editor-diagnostics");
+    root.write_file("sample.txt", "App source");
+    let mut app = App::new(root.workspace()).unwrap();
+    let mut ui = WorkspaceTui::new();
+    ui.register_editable("editor", crate::tui::EditableScratchPane::new())
+        .unwrap();
+    ui.layout("main", View::leaf("editor")).unwrap();
+    ui.geometry(Rect::new(0, 0, 80, 20));
+    ui.output_area = Some(Rect::new(0, 20, 80, 5));
+    let mut sources = crate::scratch::ScratchBuffers::default();
+    sources.create("scope-script", "unrelated scratch");
+    let actions = ui.actions(&sources, false);
+    let focus = actions.iter().find(|a| a.id == "focus.editor").unwrap();
+    assert_eq!(focus.label, "Focus editor");
+    ui.focus_named("output").unwrap();
+    ui.invoke_action(focus.action.clone(), &mut app, &mut sources, None)
+        .unwrap();
+    assert_eq!(ui.focused(), Some("editor"));
+    let check = actions
+        .iter()
+        .find(|a| a.id == "document.diagnostics")
+        .unwrap();
+    assert_eq!(check.label, "Check document diagnostics");
+    assert!(
+        ui.invoke_action(check.action.clone(), &mut app, &mut sources, None)
+            .is_err()
+    );
+    app.open_path("sample.txt").unwrap();
+    let before = app.open_document().unwrap().clone();
+    ui.invoke_action(check.action.clone(), &mut app, &mut sources, None)
+        .unwrap();
+    assert!(ui.output_text().contains("App sample.txt — revision 0"));
+    assert!(ui.output_text().contains("diagnostics: clean"));
+    assert_eq!(ui.focused(), Some("editor"));
+    assert!(ui.command_line.is_none());
+    assert_eq!(app.open_document().unwrap(), &before);
+    assert_eq!(sources.selected().unwrap().text(), "unrelated scratch");
+}
+
+#[test]
+fn workspace_open_and_editor_publish_do_not_replace_app_document() {
+    let root = TempWorkspace::new("workspace-app-ownership");
+    root.write_file("app.txt", "App source");
+    root.write_file("editor.txt", "editor source");
+    let mut app = App::new(root.workspace()).unwrap();
+    app.open_path("app.txt").unwrap();
+    let before = app.open_document().unwrap().clone();
+    let mut ui = WorkspaceTui::new();
+    ui.register_editable("editor", crate::tui::EditableScratchPane::new())
+        .unwrap();
+    ui.layout("main", View::leaf("editor")).unwrap();
+    ui.geometry(Rect::new(0, 0, 80, 20));
+    let mut sources = crate::scratch::ScratchBuffers::default();
+    let mut session = InteractiveSession::new();
+    ui.submit_command(
+        ":scope open editor.txt",
+        &mut app,
+        &mut session,
+        None,
+        &mut sources,
+    );
+    assert_eq!(sources.selected().unwrap().text(), "editor source");
+    ui.handle_event_with_sources(Event::Paste("changed ".into()), &mut app, &mut sources);
+    ui.handle_event_with_sources(
+        Event::Key(KeyEvent::new(
+            KeyCode::Char('s'),
+            event::KeyModifiers::CONTROL,
+        )),
+        &mut app,
+        &mut sources,
+    );
+    assert!(sources.selected().unwrap().text().contains("changed "));
+    assert_eq!(app.open_document().unwrap(), &before);
+}
+
+#[test]
+fn portable_check_shortcut_and_publication_help_are_explicit() {
+    use event::KeyModifiers as M;
+    let shortcut =
+        |code, modifiers| WorkspaceTui::document_shortcut(KeyEvent::new(code, modifiers));
+    assert_eq!(
+        shortcut(KeyCode::Enter, M::ALT),
+        Some(WorkspaceAction::CheckCurrentDocument)
+    );
+    assert_eq!(
+        shortcut(KeyCode::Char('r'), M::CONTROL),
+        Some(WorkspaceAction::RunCurrentDocument)
+    );
+    for (code, modifiers) in [
+        (KeyCode::Char('r'), M::CONTROL | M::SHIFT),
+        (KeyCode::Char('R'), M::CONTROL | M::SHIFT),
+        (KeyCode::Char('t'), M::CONTROL),
+        (KeyCode::Enter, M::NONE),
+        (KeyCode::Enter, M::ALT | M::CONTROL),
+        (KeyCode::Char('d'), M::CONTROL),
+    ] {
+        assert_eq!(shortcut(code, modifiers), None);
+    }
+    let mut ui = WorkspaceTui::new();
+    let mut sources = crate::scratch::ScratchBuffers::default();
+    assert_eq!(ui.primary_f5_action(M::SHIFT, &sources), None);
+    ui.app_editor = true;
+    assert_eq!(
+        ui.primary_f5_action(M::SHIFT, &sources),
+        Some(WorkspaceAction::CheckCurrentDocument)
+    );
+    let items = ui.actions(&sources, false);
+    assert_eq!(
+        items
+            .iter()
+            .find(|item| item.action == WorkspaceAction::CheckCurrentDocument)
+            .unwrap()
+            .shortcut,
+        Some("Alt-Enter / Shift-F5")
+    );
+    let root = TempWorkspace::new("publication-help");
+    let mut app = App::new(root.workspace()).unwrap();
+    ui.invoke_action(WorkspaceAction::Help, &mut app, &mut sources, None)
+        .unwrap();
+    assert!(ui.output_errors.contains("Ctrl-S publishes in memory only"));
+    assert!(
+        ui.output_errors
+            .contains("explicit Save action to write to disk")
+    );
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(160, 2)).unwrap();
+    terminal
+        .draw(|frame| ui.render_footer(frame, frame.area()))
+        .unwrap();
+    let screen: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(screen.contains("Alt-Enter check"));
+    assert!(screen.contains("Ctrl-S publish (memory)"));
+    assert!(screen.contains("actions/Save"));
+}
+
+#[test]
+fn current_draft_check_publishes_in_memory_and_rejects_stale_baseline() {
+    let root = TempWorkspace::new("current-draft-check");
+    root.write_file("document.txt", "baseline");
+    let mut app = App::new(root.workspace()).unwrap();
+    let mut ui = WorkspaceTui::new();
+    ui.register_editable("editor", crate::tui::EditableScratchPane::new())
+        .unwrap();
+    ui.layout("main", View::leaf("editor")).unwrap();
+    ui.geometry(Rect::new(0, 0, 80, 20));
+    let mut sources = crate::scratch::ScratchBuffers::default();
+    ui.open_app_document(&mut app, "document.txt").unwrap();
+    ui.handle_event_with_sources(Event::Paste("draft ".into()), &mut app, &mut sources);
+    assert_eq!(
+        ui.handle_event_with_sources(
+            Event::Key(KeyEvent::new(
+                KeyCode::Char('d'),
+                event::KeyModifiers::CONTROL
+            )),
+            &mut app,
+            &mut sources
+        ),
+        WorkspaceInput::Handled
+    );
+    assert!(ui.draft_blocker().is_some());
+    assert_eq!(
+        ui.handle_event_with_sources(
+            Event::Key(KeyEvent::new(KeyCode::F(2), event::KeyModifiers::NONE)),
+            &mut app,
+            &mut sources
+        ),
+        WorkspaceInput::Shell
+    );
+    assert!(ui.draft_blocker().is_some());
+    ui.invoke_action(
+        WorkspaceTui::document_shortcut(KeyEvent::new(KeyCode::Enter, event::KeyModifiers::ALT))
+            .unwrap(),
+        &mut app,
+        &mut sources,
+        None,
+    )
+    .unwrap();
+    assert_eq!(app.open_document().unwrap().text(), "draft baseline");
+    assert!(ui.draft_blocker().is_none());
+    assert_eq!(root.read_file("document.txt"), "baseline");
+    assert!(sources.selected().is_err());
+    ui.handle_event_with_sources(Event::Paste("parked ".into()), &mut app, &mut sources);
+    let document = app.open_document_mut().unwrap();
+    let range = document
+        .buffer()
+        .range_for_span(crate::text::Span::new(0, 0))
+        .unwrap();
+    document
+        .apply_edit(crate::text::TextEdit::replace(range, "external "))
+        .unwrap();
+    let before = app.open_document().unwrap().clone();
+    for action in [
+        WorkspaceAction::CheckCurrentDocument,
+        WorkspaceAction::RunCurrentDocument,
+    ] {
+        assert!(
+            ui.invoke_action(action, &mut app, &mut sources, None)
+                .is_err()
+        );
+        assert_eq!(app.open_document().unwrap(), &before);
+        assert!(ui.semantic_inspection.is_none());
+        assert!(ui.draft_blocker().is_some());
+    }
+    assert_eq!(root.read_file("document.txt"), "baseline");
+}
+
+#[test]
+fn primary_run_never_falls_back_to_selected_script() {
+    let root = TempWorkspace::new("primary-run-no-fallback");
+    let mut app = App::new(root.workspace()).unwrap();
+    let mut ui = WorkspaceTui::new();
+    let mut sources = crate::scratch::ScratchBuffers::default();
+    sources.create("scope-script", "1");
+    assert!(
+        ui.invoke_action(
+            WorkspaceAction::RunCurrentDocument,
+            &mut app,
+            &mut sources,
+            None
+        )
+        .is_err()
+    );
+    assert!(ui.results.is_empty());
+    assert!(ui.semantic_inspection.is_none());
+}
+
+#[test]
+fn open_document_suggestions_spaces_ambiguity_navigation_and_no_matches() {
+    let root = TempWorkspace::new("open-suggestions");
+    root.write_file("a file.txt", "first");
+    root.write_file("b file.txt", "second");
+    let mut app = App::new(root.workspace()).unwrap();
+    // Suggestions must use the authorized snapshot, not rescan the filesystem.
+    root.write_file("c file.txt", "not in snapshot");
+    let mut ui = WorkspaceTui::new();
+    ui.register_editable("editor", crate::tui::EditableScratchPane::new())
+        .unwrap();
+    ui.layout("main", View::leaf("editor")).unwrap();
+    ui.geometry(Rect::new(0, 0, 80, 20));
+    let mut sources = crate::scratch::ScratchBuffers::default();
+    let mut session = InteractiveSession::new();
+    ui.invoke_action(
+        WorkspaceAction::OpenAppDocument,
+        &mut app,
+        &mut sources,
+        None,
+    )
+    .unwrap();
+    let key = |code| Event::Key(KeyEvent::new(code, event::KeyModifiers::NONE));
+    ui.open_document_event(&Event::Paste("file".into()), &app);
+    for code in [
+        KeyCode::End,
+        KeyCode::Down,
+        KeyCode::Up,
+        KeyCode::Home,
+        KeyCode::Down,
+    ] {
+        assert!(ui.open_document_event(&key(code), &app).is_none());
+    }
+    assert!(ui.open_document_event(&key(KeyCode::Tab), &app).is_none());
+    assert_eq!(ui.command_line.as_deref(), Some("b file.txt"));
+    assert!(app.open_document().is_none());
+    let path = ui.open_document_event(&key(KeyCode::Enter), &app).unwrap();
+    ui.submit_command(&path, &mut app, &mut session, None, &mut sources);
+    assert_eq!(app.open_document().unwrap().text(), "second");
+    ui.invoke_action(
+        WorkspaceAction::OpenAppDocument,
+        &mut app,
+        &mut sources,
+        None,
+    )
+    .unwrap();
+    ui.open_document_event(&Event::Paste("missing".into()), &app);
+    for code in [
+        KeyCode::Up,
+        KeyCode::Down,
+        KeyCode::Home,
+        KeyCode::End,
+        KeyCode::Tab,
+        KeyCode::Enter,
+    ] {
+        assert!(ui.open_document_event(&key(code), &app).is_none());
+        assert_eq!(ui.command_line.as_deref(), Some("missing"));
+    }
+    assert!(ui.open_app_prompt);
+    ui.open_document_event(&key(KeyCode::Esc), &app);
+    assert!(!ui.open_app_prompt);
+    assert_eq!(app.open_document().unwrap().text(), "second");
+}
+
+#[test]
+fn f1_app_open_prompt_uses_literal_authorized_path_and_cancel_is_inert() {
+    let root = TempWorkspace::new("app-open-prompt");
+    root.write_file("file with spaces.txt", "App file");
+    let mut app = App::new(root.workspace()).unwrap();
+    let mut ui = WorkspaceTui::new();
+    ui.register_editable("editor", crate::tui::EditableScratchPane::new())
+        .unwrap();
+    ui.layout("main", View::leaf("editor")).unwrap();
+    ui.geometry(Rect::new(0, 0, 80, 20));
+    let mut sources = crate::scratch::ScratchBuffers::default();
+    let mut session = InteractiveSession::new();
+    let action = ui
+        .actions(&sources, false)
+        .into_iter()
+        .find(|a| a.id == "document.open-app")
+        .unwrap();
+    assert_eq!(action.label, "Open");
+    ui.invoke_action(action.action.clone(), &mut app, &mut sources, None)
+        .unwrap();
+    assert!(ui.command_line.as_ref().unwrap().is_empty());
+    assert!(
+        ui.command_event(&Event::Key(KeyEvent::new(
+            KeyCode::Esc,
+            event::KeyModifiers::NONE
+        )))
+        .is_none()
+    );
+    assert!(!ui.open_app_prompt);
+    assert!(app.open_document().is_none());
+    ui.invoke_action(action.action.clone(), &mut app, &mut sources, None)
+        .unwrap();
+    ui.command_event(&Event::Paste("file with spaces.txt".into()));
+    let path = ui
+        .command_event(&Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            event::KeyModifiers::NONE,
+        )))
+        .unwrap();
+    ui.submit_command(&path, &mut app, &mut session, None, &mut sources);
+    assert_eq!(app.open_document().unwrap().text(), "App file");
+    assert!(ui.app_editor);
+    assert_eq!(ui.focused(), Some("editor"));
+    assert!(sources.selected().is_err());
+    let before = app.open_document().unwrap().clone();
+    assert!(ui.open_app_document(&mut app, "../outside.txt").is_err());
+    assert_eq!(app.open_document().unwrap(), &before);
+    assert!(ui.open_app_document(&mut app, "missing.txt").is_err());
+    assert_eq!(app.open_document().unwrap(), &before);
+    ui.handle_event_with_sources(Event::Paste("edit ".into()), &mut app, &mut sources);
+    ui.handle_event_with_sources(
+        Event::Key(KeyEvent::new(
+            KeyCode::Char('s'),
+            event::KeyModifiers::CONTROL,
+        )),
+        &mut app,
+        &mut sources,
+    );
+    assert_eq!(app.open_document().unwrap().text(), "edit App file");
+    assert_eq!(root.read_file("file with spaces.txt"), "App file");
+    assert!(
+        ui.open_app_document(&mut app, "file with spaces.txt")
+            .is_err()
+    );
+    ui.invoke_action(
+        WorkspaceAction::SaveAppDocument,
+        &mut app,
+        &mut sources,
+        None,
+    )
+    .unwrap();
+    assert_eq!(root.read_file("file with spaces.txt"), "edit App file");
+    assert!(!app.open_document().unwrap().is_dirty());
+    assert!(sources.selected().is_err());
 }

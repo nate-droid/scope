@@ -14,6 +14,34 @@ pub(super) struct QuickOpen {
 }
 
 impl QuickOpen {
+    pub(super) fn set_query(&mut self, query: &str) {
+        if self.query != query {
+            self.query = query.into();
+            self.selected = 0;
+            self.error = None;
+        }
+    }
+
+    pub(super) fn selected_path(&self, app: &App) -> Option<String> {
+        let matches = self.matches(app);
+        matches
+            .get(self.selected.min(matches.len().saturating_sub(1)))
+            .map(|&index| app.files()[index].path.display().to_string())
+    }
+
+    pub(super) fn navigate(&mut self, code: KeyCode, app: &App) -> bool {
+        let last = self.matches(app).len().saturating_sub(1);
+        self.selected = self.selected.min(last);
+        match code {
+            KeyCode::Home => self.selected = 0,
+            KeyCode::End => self.selected = last,
+            KeyCode::Up => self.selected = self.selected.saturating_sub(1),
+            KeyCode::Down => self.selected = self.selected.saturating_add(1).min(last),
+            _ => return false,
+        }
+        true
+    }
+
     fn matches(&self, app: &App) -> Vec<usize> {
         let query = self.query.to_lowercase();
         app.files()
@@ -32,6 +60,9 @@ impl QuickOpen {
     }
 
     pub(super) fn handle_key(&mut self, key: KeyEvent, app: &mut App) -> bool {
+        if self.navigate(key.code, app) {
+            return false;
+        }
         match key.code {
             KeyCode::Esc => return true,
             KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -44,17 +75,10 @@ impl QuickOpen {
                 self.selected = 0;
                 self.error = None;
             }
-            KeyCode::Home => self.selected = 0,
-            KeyCode::End => self.selected = self.matches(app).len().saturating_sub(1),
-            KeyCode::Up => {
-                self.selected = self.selected.min(self.matches(app).len().saturating_sub(1));
-                self.selected = self.selected.saturating_sub(1);
-            }
-            KeyCode::Down => {
-                self.selected = self
-                    .selected
-                    .saturating_add(1)
-                    .min(self.matches(app).len().saturating_sub(1));
+            KeyCode::Tab => {
+                if let Some(path) = self.selected_path(app) {
+                    self.set_query(&path);
+                }
             }
             KeyCode::Enter => {
                 let matches = self.matches(app);
@@ -84,6 +108,21 @@ impl QuickOpen {
     }
 
     pub(super) fn render(&self, frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
+        self.render_titled(
+            frame,
+            area,
+            app,
+            "Quick open — Home/End first/last · Esc cancels",
+        );
+    }
+
+    pub(super) fn render_titled(
+        &self,
+        frame: &mut ratatui::Frame<'_>,
+        area: Rect,
+        app: &App,
+        title: &str,
+    ) {
         let width = area.width.min(80);
         let height = area.height.min(20);
         let modal = Rect::new(
@@ -93,9 +132,7 @@ impl QuickOpen {
             height,
         );
         frame.render_widget(Clear, modal);
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title("Quick open — Home/End first/last · Esc cancels");
+        let block = Block::default().borders(Borders::ALL).title(title);
         let inner = block.inner(modal);
         frame.render_widget(block, modal);
         if inner.is_empty() {

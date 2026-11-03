@@ -39,10 +39,14 @@ rustc --version
 cargo --version
 ```
 
-Workspace Cell dependencies use Git tag **`v0.0.3`** from
-[Cell](https://github.com/nate-droid/cell/tree/v0.0.3). Cargo fetches them directly;
-no sibling Cell checkout, `CELL_REPOSITORY`, or relocation is required. Scope
-member crates use local path dependencies. `Cargo.lock` pins the resolved Git
+Workspace Cell dependencies use published Git tag
+**`v0.0.4`**, commit `8ece6bf88497b402a6a417c95adf9bf1a6bd6aae`, from
+[Cell](https://github.com/nate-droid/cell/tree/v0.0.4). The supported setup fetches
+Cell directly through the normal remote graph: no sibling checkout, overlay,
+`CELL_REPOSITORY`, or relocation. Scope member crates retain local path dependencies.
+
+Standalone consumers, including `examples/managed-transfer`, use the same
+published remote Cell dependency graph. `Cargo.lock` records the resolved Git
 revision and registry versions; include it when reporting reproducibility issues.
 
 The first build may need network access for the toolchain and dependencies.

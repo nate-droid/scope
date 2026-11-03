@@ -102,7 +102,7 @@ authorization, feature-matrix or cross-platform correctness.
 
 | Report | Useful retained conclusion |
 | --- | --- |
-| [Verification audit](verification.md#audit-and-bounded-evaluation-2026-11-01) | Historical manifest cold compilation/wall 4.60/4.94 s; small-target artifact reduction 3.7%, no demonstrated warm latency gain |
+| [Verification audit](#audit-and-bounded-evaluation-2026-11-01) | Historical manifest cold compilation/wall 4.60/4.94 s; small-target artifact reduction 3.7%, no demonstrated warm latency gain |
 | [DX2 development costs](development-costs.md) | Same-feature execution/policy batching retained 27 tests; median 1.746 → 1.591 s; partial-cache builds and conditional reclamation plan |
 | [Terminal verification performance](terminal-verification-performance.md) | Downstream scenario approximately 24% faster; broad default/all-feature costs above; binary reuse already present |
 | [Terminal synchronization](terminal-test-synchronization.md) | Warm launcher median 57.755 → 54.774 s; no demonstrated workbench speedup; retained negative waits |
@@ -172,3 +172,126 @@ Full, PTY suites, Clippy, Rustdoc and standalone builds were not run: these are
 prose/workflow edits with no dependency/profile/public behavior change. Their
 coverage is not claimed. Historical Full results are context, not validation of
 this checkout. No tests or assurance levels were weakened.
+
+## Audit and bounded evaluation (2026-11-01)
+
+Measured on macOS arm64, Cargo/Rust 1.97.1, offline dependencies already cached.
+No `cargo clean`, network fetch, full runtime build, or deletion of existing
+artifacts was used. Filesystem reported 17 GiB available on a 460 GiB volume.
+Measurements are single observations, not statistically reliable benchmarks.
+
+### Existing costs
+
+- Nine root packages; default member `scope-workbench`. Local edges:
+  workbench → IDE + Script; Script → IDE + language + terminal;
+  IDE → language + meta + terminal (types in dev dependencies);
+  meta → types; execution → types. Language/types/terminal/xtask do not pull the
+  Cell execution runtime through local normal dependencies.
+- Root target was absent. Existing standalone targets: downstream **2.7 GiB**,
+  harness **2.0 GiB**, h1-path-agent **3.1 GiB** (`du -sh`, rounded).
+  Downstream debug deps/build/incremental: **2.3 GiB / 118 MiB / 203 MiB**;
+  harness: **1.7 GiB / 119 MiB / 100 MiB**. Cargo caches were separately
+  **868 MiB registry / 2.7 MiB Git**. These are occupied bytes, not proven reclaimable
+  duplicates; features and profiles can legitimately differ.
+- Root dev/test already used `debug = "line-tables-only"`, incremental enabled.
+  Standalone consumers use their own defaults. No repository AGENTS.md previously
+  supplied a narrower verification contract.
+- CONTRIBUTING listed workspace default + all-features tests and all-feature
+  Clippy as the principal workflow. CI on both Linux/macOS runs four test and four
+  Clippy configurations, docs and standalone consumers. These are broad compile
+  workloads; CI's standalone defaults formerly put artifacts in separate roots.
+  No representative agent command history was available: identifying these as
+  typical dominant commands is an inference from instructions, not telemetry.
+
+### Measured small workflow
+
+Command: `cargo test --locked --offline -p scope-types --test manifest` (10 tests).
+Baseline used the initially absent root target. Post-change used a fresh isolated
+`--target-dir target/dx-compact` so old artifacts did not inflate the comparison.
+
+| Observation | Before | Dependency debug omitted |
+| --- | ---: | ---: |
+| Cold baseline Cargo compilation / wall time | 4.60 s / 4.94 s | not compared |
+| Warm wall time | 0.24 s | 0.36 s |
+| Test execution reported by harness | 0.00 s | 0.00 s |
+| deps (`du -sk`, KiB) | 49,464 | 46,364 |
+| build (`du -sk`, KiB) | 6,816 | 6,376 |
+| incremental (`du -sk`, KiB) | 13,852 | 14,780 |
+| Sum of these three artifact directories | 68.49 MiB | 65.94 MiB |
+
+This is **3.7% less artifact storage** for this small target, not a whole-workspace
+savings estimate. Incremental storage increased. Warm latency did not improve;
+0.12 s difference is too small and insufficiently sampled to attribute. Larger
+Cell/Wasmtime savings and cold compilation speedups are **unmeasured**.
+The modified cold build passed; its wall time is not used to claim improvement.
+A subsequent complete `scope-types` + `scope-meta` test run, including doctests,
+passed in **4.55 s wall time** using the compact target. That is a different
+workload, not a comparison with the manifest-only baseline.
+The same complete types/meta suite then passed warm in **1.24 s wall time**
+(Cargo reported 0.16 s): 43 integration tests and one doctest.
+Metadata confirmed the independent harness resolves its target to root `target`,
+both from the repository root and from the harness directory.
+No shared-consumer rebuild was attempted, so reuse savings are not quantified.
+The root target grew during the audit beyond the initial baseline; only the
+immediate per-directory snapshots above are used for the comparison. At the final
+snapshot it occupied 1.0 GiB, including the 119 MiB compact measurement target.
+The audit did not reclaim disk space: existing artifacts and measurement builds
+were retained, and total root growth cannot be attributed solely to these checks.
+
+### Compile versus runtime evidence (static unless noted)
+
+- Types manifest tests execute below the harness's 0.01 s reporting precision;
+  measured cold compilation dominates this target.
+- Execution directly pulls Wasmtime 47 with default features and Cell. IDE,
+  Script and workbench have many integration targets. These are inferred compile
+  hotspots, not measured whole-suite timings.
+- `scope-execution/tests/support/mod.rs` constructs/parses real WAT fixtures and
+  creates bindings repeatedly; preparation compiles/preflights through Cell.
+  `tests/policy.rs` deliberately warms real components and tests four combinations
+  of loop phase and deadline/cancellation with 250 ms timers. This is meaningful
+  runtime work, not dead scaffolding.
+- Script/workbench PTY suites start Python and application processes repeatedly.
+  Workbench milestone scripts share launcher/loopback setup but test different
+  contracts; live UX scripts are not routine deterministic checks. No scaffolding
+  was demonstrated obsolete, so none was deleted or disabled.
+
+### Remaining opportunities, ordered by likely benefit
+
+1. Measure a warm Full run on a machine with headroom, then retain its artifacts;
+   profile Cell/Wasmtime compile/link costs and CI feature overlap before changing
+   the matrix. Default IDE tools and workbench TUI overlap, but feature unification
+   can differ. CI coverage is unchanged here.
+2. Measure standalone artifact reuse after the shared target has been populated;
+   only then consider aligning local profiles without losing independent-consumer
+   validation. Existing directories still occupy disk until the owner reclaims them.
+3. Profile execution fixture setup. Cache immutable WAT bytes if worthwhile;
+   do not share mutable Cells, cancellation tokens or policy state across tests.
+4. Profile PTY startup and Cargo-in-PTY launcher overhead before consolidating
+   helpers. Preserve separate binary/lifecycle/authorization assertions.
+5. Consider opt-in lower-parallelism builds for memory pressure or a compact
+   non-incremental profile only after measuring the storage/iteration tradeoff.
+
+### Final validation and omissions
+
+Passed:
+
+```sh
+cargo test --locked --offline --target-dir target/dx-compact -p scope-types -p scope-meta
+cargo fmt --all -- --check
+git --no-pager diff --check
+python3 -B -m unittest discover -s .github/scripts -p 'test_*.py' -v
+```
+
+The Python suite ran five tests. The repository-wide
+`python3 -B .github/scripts/check_markdown_links.py` failed with **35 existing
+missing-link occurrences** (34 distinct source/target pairs). Comparing with
+`git show HEAD:<path>` through the same link parser found **zero new broken links**.
+These unrelated missing milestone documents were not repaired or suppressed.
+
+Full, heavy integration/PTY suites, Clippy and Rustdoc were not run during this
+bounded audit: the profile change warrants those checks before repository-wide
+assurance, but available disk and avoiding an expensive baseline build constrained
+local validation. No tests, feature checks or CI configurations were removed.
+Dependency debug information is reduced; incremental compilation, Scope line
+tables, assertions and overflow behavior are retained. No demonstrated latency
+improvement or whole-workspace storage reduction is claimed.

@@ -1,4 +1,4 @@
-//! Opt-in host-only regression for the unpublished upstream Cell correction.
+//! Opt-in host-only regression for the published Cell managed-transfer release.
 //! No direct Cell/Wasmtime dependency, language guest, or agent authority.
 
 #[cfg(test)]
@@ -35,7 +35,7 @@ mod tests {
         // Fixed two-page memory; output is a single port with a finite 64 KiB
         // byte list. No imports, growth, loops, or guest allocation are involved.
         let bindings = Bindings::from([(
-            transform.id,
+            transform.id.clone(),
             Binding {
                 export: "evaluate".into(),
                 component: br#"(component
@@ -78,23 +78,96 @@ mod tests {
         assert!(denied.completed.is_empty());
         assert!(denied.artifacts.is_empty());
 
-        for (transfer, logical, expected) in [
-            (8, 8, ExecutionErrorKind::Transfer),
-            (16 * 1024 * 1024, 8, ExecutionErrorKind::Output),
+        // Grants do not make a missing selected export executable.
+        let mut missing_export_bindings = bindings.clone();
+        missing_export_bindings
+            .get_mut(&transform.id)
+            .unwrap()
+            .export = "missing".into();
+        let denied = execute_with_policy(
+            &cell,
+            &pipeline,
+            &missing_export_bindings,
+            BTreeMap::new(),
+            &grants,
+            &base,
+        );
+        assert!(!denied.errors.is_empty(), "{denied:?}");
+        assert!(denied.completed.is_empty());
+        assert!(denied.artifacts.is_empty());
+        assert!(denied.output.is_none());
+
+        // This allowance admits the envelope and small payload, so subsequent
+        // transfer failures depend on the large payload rather than metadata.
+        let mut small_bindings = bindings.clone();
+        let binding = small_bindings.get_mut(&transform.id).unwrap();
+        let component = String::from_utf8(binding.component.clone()).unwrap();
+        let small_component = component.replace(
+            r#"\00\01\00\00\00\00\01\00""#,
+            r#"\00\01\00\00\01\00\00\00""#,
+        );
+        assert_ne!(small_component, component);
+        binding.component = small_component.into_bytes();
+        let small_policy = ExecutionPolicy {
+            host_transfer_bytes: Some(4096),
+            output_bytes: Some(70_000),
+            ..base.clone()
+        };
+        let small = execute_with_policy(
+            &cell,
+            &pipeline,
+            &small_bindings,
+            BTreeMap::new(),
+            &grants,
+            &small_policy,
+        );
+        assert!(small.errors.is_empty(), "{small:?}");
+        assert_eq!(
+            small.output,
+            Some(Value {
+                ty: ty.clone(),
+                bytes: vec![0]
+            })
+        );
+        assert_eq!(
+            ExecutionPolicy::default().effective_host_transfer_bytes(),
+            128 * 1024 * 1024
+        );
+        assert_eq!(
+            ExecutionPolicy {
+                host_transfer_bytes: Some(0),
+                ..Default::default()
+            }
+            .effective_host_transfer_bytes(),
+            0
+        );
+
+        // Keep the port-envelope ABI fixed, but lift a finite 64 KiB port name
+        // before the byte list in this failure-only fixture. Zero-filled memory
+        // is valid UTF-8; the normal fixture remains available for typed success.
+        let mut string_bindings = small_bindings.clone();
+        let binding = string_bindings.get_mut(&transform.id).unwrap();
+        binding.component = String::from_utf8(binding.component.clone())
+            .unwrap()
+            .replace(r"\80\00\00\00\03\00\00\00", r"\00\01\00\00\00\00\01\00")
+            .into_bytes();
+        for (fixture, transfer, expected) in [
+            (&bindings, 4096, ExecutionErrorKind::Transfer),
+            (&bindings, 16 * 1024 * 1024, ExecutionErrorKind::Output),
+            (&string_bindings, 4096, ExecutionErrorKind::Transfer),
+            (
+                &string_bindings,
+                16 * 1024 * 1024,
+                ExecutionErrorKind::Output,
+            ),
         ] {
             let policy = ExecutionPolicy {
                 host_transfer_bytes: Some(transfer),
-                output_bytes: Some(logical),
+                output_bytes: Some(8),
                 ..base.clone()
             };
-            let result = execute_with_policy(
-                &cell,
-                &pipeline,
-                &bindings,
-                BTreeMap::new(),
-                &grants,
-                &policy,
-            );
+            let result =
+                execute_with_policy(&cell, &pipeline, fixture, BTreeMap::new(), &grants, &policy);
             assert!(
                 matches!(result.errors.as_slice(), [ExecutionError::Managed {
                 node, phase: ExecutionPhase::Invoke, kind, message,

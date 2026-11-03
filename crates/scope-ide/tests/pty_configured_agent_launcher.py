@@ -118,6 +118,7 @@ def scenario(binary, denied=False, rejected=False, unavailable=False):
                 command(':scope source-proposals', '0 pending source proposals')
                 assert not server.requests, 'incompatible language must fail before model dispatch'
                 command(':scope downstream consumer inspect unavailable')
+                workspace.expect('Unsaved', workspace.send(b'\x11'))
                 workspace.send(b'\x11')
                 assert workspace.wait_exit() == 0, bytes(workspace.raw)
                 assert source.read_text() == 'old'
@@ -164,6 +165,8 @@ def scenario(binary, denied=False, rejected=False, unavailable=False):
                 command(':scope source-accept 1')
                 command(':scope downstream consumer inspect duplicate')
                 command(':scope show', 'untouched')
+            # The launcher's initial unsaved scratch remains parked in every variant.
+            workspace.expect('Unsaved', workspace.send(b'\x11'))
             workspace.send(b'\x11')
             assert workspace.wait_exit() == 0, bytes(workspace.raw)
             assert len(server.requests) == 1, 'review/acceptance must not call the model'

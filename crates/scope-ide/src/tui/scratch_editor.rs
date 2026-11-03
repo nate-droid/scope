@@ -1,4 +1,4 @@
-//! Explicit, in-memory scratch editing authority. No App, filesystem or execution access.
+//! Explicit, in-memory source editing authority. No filesystem or execution access.
 use std::{io, ops::Range};
 
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -71,6 +71,8 @@ fn matching_delimiters(text: &str, cursor: usize) -> Option<[usize; 2]> {
 /// An owned optimistic-concurrency baseline, including owner-independent identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScratchEditSnapshot {
+    /// Legacy numeric owner key: scratch ID or App DocumentId. Compare the full
+    /// source identity as well; numeric keys from different owners may overlap.
     pub scratch_id: u64,
     pub source: scope_language::SourceSnapshot,
     pub version: u64,
@@ -87,10 +89,10 @@ pub enum ScratchEditError {
 impl std::fmt::Display for ScratchEditError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::Unbound => "no scratch target bound",
-            Self::Closed => "scratch target closed",
-            Self::Rebound => "scratch target rebound",
-            Self::Stale => "conflict: scratch changed",
+            Self::Unbound => "no editor source target bound",
+            Self::Closed => "editor source target closed",
+            Self::Rebound => "editor source target rebound",
+            Self::Stale => "conflict: editor source changed",
             Self::Edit(message) => message,
         })
     }
@@ -98,16 +100,19 @@ impl std::fmt::Display for ScratchEditError {
 impl std::error::Error for ScratchEditError {}
 
 /// Short-lived capability supplied only to explicitly authorized panes.
-/// It cannot select, bind, save, evaluate, or access application state.
+/// It can snapshot/publish only its borrowed source, never select, bind, save,
+/// evaluate, or access other application state.
 pub struct ScratchEditAccess<'a> {
-    sources: &'a mut ScratchBuffers,
+    sources: Option<&'a mut ScratchBuffers>,
+    app_document: Option<&'a mut crate::document::Document>,
     selected: bool,
 }
 impl<'a> ScratchEditAccess<'a> {
     #[cfg(test)]
     pub(super) fn new(sources: &'a mut ScratchBuffers) -> Self {
         Self {
-            sources,
+            sources: Some(sources),
+            app_document: None,
             selected: false,
         }
     }
@@ -115,22 +120,55 @@ impl<'a> ScratchEditAccess<'a> {
     /// Edits the selected scratch independently of the semantic binding.
     pub fn selected(sources: &'a mut ScratchBuffers) -> Self {
         Self {
-            sources,
+            sources: Some(sources),
+            app_document: None,
             selected: true,
         }
     }
 
+    pub(super) fn app(document: &'a mut crate::document::Document) -> Self {
+        Self {
+            sources: None,
+            app_document: Some(document),
+            selected: true,
+        }
+    }
+
+    pub(super) fn document_snapshot(document: &crate::document::Document) -> ScratchEditSnapshot {
+        ScratchEditSnapshot {
+            scratch_id: document.id().as_u64(),
+            source: scope_language::SourceSnapshot {
+                source_id: document.evaluation_source_id().clone(),
+                revision_id: scope_language::RevisionId::from_version(document.version()),
+                text: document.text().into(),
+            },
+            version: document.version(),
+        }
+    }
+
     fn target_id(&self) -> Option<u64> {
+        if let Some(document) = self.app_document.as_ref() {
+            return Some(document.id().as_u64());
+        }
+        let sources = self.sources.as_ref()?;
         if self.selected {
-            self.sources.selected().ok().map(|buffer| buffer.id())
+            sources.selected().ok().map(|buffer| buffer.id())
         } else {
-            self.sources.semantic_target_id()
+            sources.semantic_target_id()
         }
     }
 
     pub fn snapshot(&self) -> Result<ScratchEditSnapshot, ScratchEditError> {
+        if let Some(document) = self.app_document.as_ref() {
+            return Ok(Self::document_snapshot(document));
+        }
         let id = self.target_id().ok_or(ScratchEditError::Unbound)?;
-        let buffer = self.sources.get(id).map_err(|_| ScratchEditError::Closed)?;
+        let buffer = self
+            .sources
+            .as_ref()
+            .ok_or(ScratchEditError::Unbound)?
+            .get(id)
+            .map_err(|_| ScratchEditError::Closed)?;
         let source = scope_language::SourceSnapshot {
             source_id: buffer.evaluation_source_id().clone(),
             revision_id: scope_language::RevisionId::from_version(buffer.version()),
@@ -163,17 +201,27 @@ impl<'a> ScratchEditAccess<'a> {
             let range = TextBuffer::new(current.source.text.as_ref())
                 .range_for_span(Span::new(0, current.source.text.len()))
                 .map_err(|error| ScratchEditError::Edit(error.to_string()))?;
-            self.sources
-                .get_mut(expected.scratch_id)
-                .map_err(|_| ScratchEditError::Closed)?
-                .apply_edit(TextEdit::replace(range, text))
-                .map_err(|error| ScratchEditError::Edit(error.to_string()))?;
+            let edit = TextEdit::replace(range, text);
+            if let Some(document) = self.app_document.as_mut() {
+                document
+                    .apply_edit(edit)
+                    .map_err(|error| ScratchEditError::Edit(error.to_string()))?;
+            } else {
+                self.sources
+                    .as_mut()
+                    .ok_or(ScratchEditError::Unbound)?
+                    .get_mut(expected.scratch_id)
+                    .map_err(|_| ScratchEditError::Closed)?
+                    .apply_edit(edit)
+                    .map_err(|error| ScratchEditError::Edit(error.to_string()))?;
+            }
         }
         self.snapshot()
     }
 }
 
 struct Draft {
+    app_document: bool,
     baseline: ScratchEditSnapshot,
     text: TextBuffer,
     cursor: usize,
@@ -400,6 +448,7 @@ impl EditableScratchPane {
             match access.snapshot() {
                 Ok(baseline) => {
                     self.draft = Some(Draft {
+                        app_document: access.app_document.is_some(),
                         text: TextBuffer::new(baseline.source.text.as_ref()),
                         baseline,
                         cursor: 0,
@@ -449,7 +498,14 @@ impl EditableScratchPane {
             Ok(Some(true)) => match access.commit(&draft.baseline, draft.text.as_str()) {
                 Ok(baseline) => {
                     draft.baseline = baseline;
-                    self.status = Some("committed to scratch (not saved)".into());
+                    self.status = Some(
+                        if access.app_document.is_some() {
+                            "published to App document (not saved)"
+                        } else {
+                            "committed to scratch (not saved)"
+                        }
+                        .into(),
+                    );
                 }
                 Err(error) => {
                     self.status = Some(format!("{error}; draft retained — Ctrl-C cancels"))
@@ -473,11 +529,19 @@ impl Pane for EditableScratchPane {
             .any(|draft| draft.text.as_str() != draft.baseline.source.text.as_ref())
     }
 
+    fn has_dirty_app_draft(&self) -> bool {
+        self.draft.iter().chain(self.parked.iter()).any(|draft| {
+            draft.app_document && draft.text.as_str() != draft.baseline.source.text.as_ref()
+        })
+    }
+
     fn dirty_draft_sources(&self) -> Vec<(u64, String)> {
         self.draft
             .iter()
             .chain(self.parked.iter())
-            .filter(|draft| draft.text.as_str() != draft.baseline.source.text.as_ref())
+            .filter(|draft| {
+                !draft.app_document && draft.text.as_str() != draft.baseline.source.text.as_ref()
+            })
             .map(|draft| {
                 (
                     draft.baseline.scratch_id,
@@ -497,7 +561,7 @@ impl Pane for EditableScratchPane {
         EditableScratchPane::handle_source_event(self, event, access)
     }
     fn render(&self, frame: &mut ratatui::Frame<'_>, area: Rect, ctx: &TuiContext<'_>) {
-        let selected = ctx.selected_source();
+        let selected = ctx.editor_source();
         let draft = selected.as_ref().and_then(|selected| {
             self.draft
                 .iter()
@@ -529,11 +593,25 @@ impl Pane for EditableScratchPane {
             (_, Some(BoundSource::Unavailable { .. })) => {
                 "UNAVAILABLE — bound scratch target is closed"
             }
-            (_, Some(BoundSource::Unbound)) => "UNBOUND — no scratch target bound",
+            (_, Some(BoundSource::Unbound)) => "UNBOUND — no editor source target bound",
             (_, None) => "UNAVAILABLE — no scratch owner supplied",
         };
         let title = format!(
-            "Editor {} | {} | {} | Ctrl-S publish · F5 run · Ctrl-C discard",
+            "Editor {} | {} | {} | {} | Ctrl-S publish · Ctrl-C discard",
+            if ctx.is_app_editor() {
+                ctx.app()
+                    .open_document()
+                    .map(|document| {
+                        format!(
+                            "App {} · revision {}",
+                            document.path().display(),
+                            document.version()
+                        )
+                    })
+                    .unwrap_or_else(|| "App document unavailable".into())
+            } else {
+                "selected scratch".into()
+            },
             if ctx.is_focused() {
                 "FOCUSED"
             } else {
@@ -913,7 +991,10 @@ mod tests {
             access.commit(&baseline, "lost"),
             Err(ScratchEditError::Stale)
         );
-        assert_eq!(access.sources.selected().unwrap().text(), "other");
+        assert_eq!(
+            access.sources.as_ref().unwrap().selected().unwrap().text(),
+            "other"
+        );
     }
     #[test]
     fn clean_draft_follows_committed_changes_before_typing() {
@@ -1241,5 +1322,46 @@ mod tests {
             ScratchEditAccess::new(&mut sources).commit(&baseline, "bad"),
             Err(ScratchEditError::Rebound)
         );
+    }
+}
+
+#[cfg(test)]
+mod app_target_tests {
+    use super::*;
+    use crate::document::{Document, DocumentId};
+
+    #[test]
+    fn app_target_rejects_stale_and_rebound_baselines_without_writes() {
+        let mut document = Document::new(DocumentId::new(1), "file.txt", "original λ");
+        let baseline = ScratchEditAccess::app(&mut document).snapshot().unwrap();
+        let range = document
+            .buffer()
+            .range_for_span(Span::new(0, document.text().len()))
+            .unwrap();
+        document
+            .apply_edit(TextEdit::replace(range, "external"))
+            .unwrap();
+        assert_eq!(
+            ScratchEditAccess::app(&mut document).commit(&baseline, "draft"),
+            Err(ScratchEditError::Stale)
+        );
+        assert_eq!(document.text(), "external");
+        let mut replacement = Document::new(DocumentId::new(1), "file.txt", "original λ");
+        assert_eq!(
+            ScratchEditAccess::app(&mut replacement).commit(&baseline, "draft"),
+            Err(ScratchEditError::Rebound)
+        );
+        assert_eq!(replacement.text(), "original λ");
+        let current = ScratchEditAccess::app(&mut replacement).snapshot().unwrap();
+        let no_op = ScratchEditAccess::app(&mut replacement)
+            .commit(&current, "original λ")
+            .unwrap();
+        assert_eq!(no_op, current);
+        let published = ScratchEditAccess::app(&mut replacement)
+            .commit(&current, "猫\nλ\n")
+            .unwrap();
+        assert_eq!(published.version, 1);
+        assert_eq!(published.source.source_id, current.source.source_id);
+        assert_eq!(replacement.text(), "猫\nλ\n");
     }
 }

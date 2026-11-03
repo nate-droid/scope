@@ -30,7 +30,9 @@ cargo run
 This launches **Scope**, the retained workbench editor, using the pinned Rust
 toolchain and default features. No package selection, feature flags, model server,
 API key, or Wasm target is required. The first build downloads dependencies,
-including Cell `v0.0.3`; the application does not contact a model on startup.
+including published Cell `v0.0.4`; the application does not contact a model on
+startup. See [dependency setup](docs/development.md#toolchain-and-cell) for the
+pinned revision and remote dependency workflow.
 
 1. Press **F1**, search **New Script**, then Enter to create and select a scratch.
 2. Type `print(2 + 3)` in the editor.
@@ -39,12 +41,26 @@ including Cell `v0.0.3`; the application does not contact a model on startup.
    remain in the output pane; use F1 → **Focus output** to inspect it.
 5. Press **F3** to return to editing the same source. **Ctrl-Q** exits Scope.
 
-F1 discovers actions, F4 accepts workbench commands, and F2 temporarily opens the
-shell. Shell `quit` returns to the same workspace. Source text in the editor is
-Script, not a workbench command. Ctrl-S is **not a disk save**. Startup filesystem
+For an App document, **Ctrl-O** opens a path and **Ctrl-R** publishes the exact
+editor draft in memory, then opens source review for the unique eligible candidate
+evaluation. **Enter** explicitly confirms one invocation; Run is unavailable when
+there is no unique eligible operation. **Shift-F5** publishes and checks diagnostics
+without moving editor focus. These require the corresponding language services;
+they do not turn the pure Script runner into a downstream runtime. Use **Ctrl-G**
+for actions/help (**F1** is an alias), including explicit **Save** to disk.
+
+F4 accepts workbench commands, and F2 temporarily opens the advanced shell. Shell
+`quit` returns to the same workspace. Esc stays in the App editor workspace;
+scratch/legacy Esc still opens the shell. Modal Esc cancels pending confirmation,
+then closes the modal on a subsequent Esc. Ctrl-Q warns about dirty editor drafts,
+the App document or selected scratch; press Ctrl-Q again to discard and exit, or
+Esc to cancel quitting. Source text in the editor is Script, not a workbench command.
+Ctrl-S is **not a disk save**; it still publishes in memory. Startup filesystem
 access is read-only; pure Script runs with no host providers or native authority.
 Agent compilation, discovery, and proposal acceptance do not grant authorization.
 
+The [minimal programming experience status](docs/ux/minimal-programming-experience.md)
+records the App controls, safety boundaries and remaining verification/usability gaps.
 The [canonical quickstart](docs/quickstart.md) explains the contexts, draft/run
 boundaries, shell transitions, and saved-file execution. `cargo run -- --help`
 shows the supported CLI; `cargo run -- --version` reports the binary version.

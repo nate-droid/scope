@@ -5,6 +5,18 @@ use crate::{cli::ScriptPresentation, scratch::ScratchBuffers};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WorkspaceAction {
     RunScript,
+    /// Publish the current App editor draft in memory, then review candidate evaluation.
+    RunCurrentDocument,
+    /// Publish the current App editor draft in memory, then check diagnostics.
+    CheckCurrentDocument,
+    /// Review and explicitly confirm a read operation on the active App document.
+    InspectDocument,
+    /// Open a workspace file as the existing editor's App-owned target.
+    OpenAppDocument,
+    SaveAppDocument,
+    FocusAppDocument,
+    /// Check the committed App document, never an unpublished editor draft.
+    CheckDocumentDiagnostics,
     /// Invocation token pins the selected identity and committed revision.
     Downstream {
         id: String,
@@ -28,6 +40,7 @@ pub enum WorkspaceAction {
     ShowTranscript,
     ShowResult,
     Help,
+    MoreActions,
 }
 
 #[derive(Clone, Debug)]
@@ -73,9 +86,36 @@ pub(super) struct PendingPrompt {
 pub(super) struct Picker {
     query: String,
     selected: usize,
+    advanced: bool,
 }
 
 impl WorkspaceTui {
+    pub(super) fn refresh_action_context(&mut self, app: &App) {
+        self.action_document_present = app.open_document().is_some();
+        self.action_candidate_available =
+            super::super::semantic::SemanticInspection::candidate_available(app);
+    }
+
+    pub(super) fn primary_f5_action(
+        &self,
+        modifiers: event::KeyModifiers,
+        sources: &ScratchBuffers,
+    ) -> Option<WorkspaceAction> {
+        if self.app_editor {
+            if modifiers.contains(event::KeyModifiers::SHIFT) {
+                return Some(WorkspaceAction::CheckCurrentDocument);
+            }
+            return self
+                .action_candidate_available
+                .then_some(WorkspaceAction::RunCurrentDocument);
+        }
+        // Non-Script views retain their own F5 key handling.
+        (modifiers.is_empty()
+            && sources
+                .selected()
+                .is_ok_and(|source| source.language_id() == "scope-script"))
+        .then_some(WorkspaceAction::RunScript)
+    }
     /// Adds a contextual shortcut to the normal downstream command route.
     pub fn register_downstream_action(&mut self, action: DownstreamAction) -> Result<(), String> {
         let token = |s: &str| {
@@ -113,7 +153,9 @@ impl WorkspaceTui {
             .filter(|(_, i)| i.pane.has_dirty_draft())
             .map(|(id, i)| {
                 let sources = i.pane.dirty_draft_sources();
-                if sources.is_empty() {
+                if i.pane.has_dirty_app_draft() {
+                    format!("pane {id}: unpublished App document draft; F1 Edit document to publish or cancel")
+                } else if sources.is_empty() {
                     format!("pane {id}: draft source metadata unavailable")
                 } else {
                     format!(
@@ -131,6 +173,11 @@ impl WorkspaceTui {
     }
 
     fn run_disabled(&self, sources: &ScratchBuffers, supported: bool) -> Option<String> {
+        if self.app_editor {
+            return Some(
+                "App editor: use F1 Evaluate; Script execution targets a separate scratch".into(),
+            );
+        }
         if !supported {
             return Some("host has not opted into pure direct Script execution".into());
         }
@@ -164,12 +211,80 @@ impl WorkspaceTui {
                 disabled_reason,
             })
         };
+        for (action, id, label, shortcut) in [
+            (
+                WorkspaceAction::RunCurrentDocument,
+                "document.run-current",
+                "Run",
+                Some("F5"),
+            ),
+            (
+                WorkspaceAction::CheckCurrentDocument,
+                "document.check-current",
+                "Check",
+                Some("Alt-Enter / Shift-F5"),
+            ),
+        ] {
+            if action == WorkspaceAction::RunCurrentDocument
+                && (!self.app_editor || !self.action_candidate_available)
+            {
+                continue;
+            }
+            add(
+                action,
+                id.into(),
+                label.into(),
+                shortcut,
+                (!self.app_editor
+                    || !self
+                        .focused
+                        .as_ref()
+                        .and_then(|id| self.instances.get(id))
+                        .is_some_and(|instance| instance.editable))
+                .then(|| "open and focus an App document editor; no scratch fallback".into()),
+            );
+        }
         add(
             WorkspaceAction::RunScript,
             "script.run".into(),
             "Run selected Script".into(),
-            Some("F5"),
+            None,
             self.run_disabled(sources, direct_script_supported),
+        );
+        add(
+            WorkspaceAction::InspectDocument,
+            "document.evaluate".into(),
+            "Inspect".into(),
+            None,
+            self.draft_blocker(),
+        );
+        add(
+            WorkspaceAction::CheckDocumentDiagnostics,
+            "document.diagnostics".into(),
+            "Check document diagnostics".into(),
+            None,
+            self.draft_blocker(),
+        );
+        add(
+            WorkspaceAction::OpenAppDocument,
+            "document.open-app".into(),
+            "Open".into(),
+            None,
+            self.draft_blocker(),
+        );
+        add(
+            WorkspaceAction::FocusAppDocument,
+            "document.edit-app".into(),
+            "Edit document".into(),
+            None,
+            None,
+        );
+        add(
+            WorkspaceAction::SaveAppDocument,
+            "document.save-app".into(),
+            "Save".into(),
+            None,
+            self.draft_blocker(),
         );
         add(
             WorkspaceAction::NewScript,
@@ -181,7 +296,7 @@ impl WorkspaceTui {
         for (id, label, command) in [
             (
                 "document.open",
-                "Open File — enter workspace-relative path",
+                "Open scratch file — enter workspace-relative path",
                 ":scope open ",
             ),
             (
@@ -419,6 +534,13 @@ impl WorkspaceTui {
                 }
             }
         }
+        add(
+            WorkspaceAction::MoreActions,
+            "workspace.more-actions".into(),
+            "More actions".into(),
+            None,
+            None,
+        );
         items
     }
 
@@ -430,16 +552,79 @@ impl WorkspaceTui {
         sources: &mut ScratchBuffers,
         mut host: Option<&mut dyn ReadOnlyCommand>,
     ) -> Result<(), String> {
+        self.refresh_action_context(app);
         let supported = host.as_ref().is_some_and(|h| h.supports_direct_script());
         let info = self
             .actions(sources, supported)
             .into_iter()
             .find(|i| i.action == action)
-            .ok_or("action is not available in this workspace")?;
+            .ok_or_else(|| {
+                if action == WorkspaceAction::RunCurrentDocument && self.app_editor {
+                    "Run requires exactly one eligible zero-argument, read-only document CandidateEvaluation operation; use Inspect to choose explicitly"
+                } else {
+                    "action is not available in this workspace"
+                }
+            })?;
         if let Some(reason) = info.disabled_reason {
             return Err(reason);
         }
+        if self.open_app_prompt {
+            self.open_app_prompt = false;
+            self.command_line = None;
+        }
         match action {
+            WorkspaceAction::MoreActions => {
+                self.picker = Some(Picker {
+                    advanced: true,
+                    ..Picker::default()
+                });
+            }
+            WorkspaceAction::RunCurrentDocument | WorkspaceAction::CheckCurrentDocument => {
+                let document = app.open_document().ok_or("no App document is open")?;
+                let identity = document.id();
+                let focused = self
+                    .focused
+                    .as_ref()
+                    .ok_or("focus the App document editor first")?;
+                let instance = self
+                    .instances
+                    .get_mut(focused)
+                    .ok_or("focused editor is unavailable")?;
+                if !self.app_editor || !instance.editable {
+                    return Err("focus the App document editor first; no scratch fallback".into());
+                }
+                // Reuse the editor's exact-baseline publication path, not a text copy.
+                let handled = instance.pane.handle_source_event(
+                    Event::Key(KeyEvent::new(
+                        KeyCode::Char('s'),
+                        event::KeyModifiers::CONTROL,
+                    )),
+                    &mut super::super::ScratchEditAccess::app(app.open_document_mut().unwrap()),
+                );
+                if !handled {
+                    return Err("editor did not handle draft publication".into());
+                }
+                if app
+                    .open_document()
+                    .is_none_or(|document| document.id() != identity)
+                {
+                    return Err("App document changed during publication".into());
+                }
+                if let Some(reason) = self.draft_blocker() {
+                    return Err(reason);
+                }
+                if action == WorkspaceAction::RunCurrentDocument {
+                    self.semantic_inspection =
+                        Some(super::super::semantic::SemanticInspection::candidate(app)?);
+                } else {
+                    self.invoke_action(
+                        WorkspaceAction::CheckDocumentDiagnostics,
+                        app,
+                        sources,
+                        host,
+                    )?;
+                }
+            }
             WorkspaceAction::CommandPrompt(command) => {
                 if command.is_empty() {
                     self.focus_named("output")?;
@@ -447,7 +632,54 @@ impl WorkspaceTui {
                     self.command_line = Some(command);
                 }
             }
+            WorkspaceAction::CheckDocumentDiagnostics => {
+                let document = app.open_document().ok_or("no App document is open")?;
+                let mut diagnostics = Vec::new();
+                crate::cli::print_diagnostics(app, &mut diagnostics).map_err(|e| e.to_string())?;
+                self.show_result = false;
+                self.output_scroll = 0;
+                self.output_errors.push_str(&format!(
+                    "Check document diagnostics — App {} — revision {}\n{}",
+                    document.path().display(),
+                    document.version(),
+                    String::from_utf8_lossy(&diagnostics),
+                ));
+            }
+            WorkspaceAction::OpenAppDocument => {
+                self.command_line = Some(String::new());
+                self.open_app_prompt = true;
+            }
+            WorkspaceAction::FocusAppDocument => {
+                if app.open_document().is_none() {
+                    return Err("no App document is open".into());
+                }
+                let editor = self
+                    .visible_focus_ids()
+                    .into_iter()
+                    .find(|id| {
+                        self.instances
+                            .get(id)
+                            .is_some_and(|instance| instance.editable)
+                    })
+                    .ok_or("no visible editable pane")?;
+                self.focus_named(&editor)?;
+                self.app_editor = true;
+            }
+            WorkspaceAction::SaveAppDocument => {
+                app.save_open_document()
+                    .map_err(|error| error.to_string())?;
+            }
+            WorkspaceAction::InspectDocument => {
+                crate::semantic_inspection::discover_app(app).map_err(|e| e.to_string())?;
+                self.semantic_inspection = Some(
+                    self.retained_inspection
+                        .take()
+                        .unwrap_or_default()
+                        .unrestricted(),
+                );
+            }
             WorkspaceAction::SelectDocument(id) => {
+                self.app_editor = false;
                 sources.select(id).map_err(|e| e.to_string())?;
                 if let Some(editor) = self
                     .visible_focus_ids()
@@ -526,6 +758,7 @@ impl WorkspaceTui {
                 self.output_scroll = 0;
             }
             WorkspaceAction::NewScript => {
+                self.app_editor = false;
                 sources.create("scope-script", "");
                 if let Some(editor) = self.visible_focus_ids().into_iter().find(|id| {
                     self.instances
@@ -549,6 +782,7 @@ impl WorkspaceTui {
             }
             WorkspaceAction::FocusDraft { pane, scratch } => {
                 self.focus_named(&pane)?;
+                self.app_editor = false;
                 sources.select(scratch).map_err(|e| e.to_string())?;
             }
             WorkspaceAction::PreviousResult => {
@@ -567,7 +801,7 @@ impl WorkspaceTui {
             }
             WorkspaceAction::Help => {
                 self.show_result = false;
-                self.output_errors.push_str("Actions: F1 search, Up/Down select, Enter invoke, Esc cancel.\nNew Script scratch explicitly changes selection. Ctrl-S commits in memory; F5 runs committed selected scope-script, never semantic target.\nOutput: F6 focus, Up/Down or PageUp/PageDown scroll, Alt-Left/Right history; F3 returns to previous pane.\nF4 commands and F2 shell remain available. Results indicate interpreter completion only, not semantic approval.\nDirty drafts (including parked/unrelated drafts) conservatively block runs. F1 lists blockers. No implicit commit, save, or native authority.\n");
+                self.output_errors.push_str("Actions: F1 search, Up/Down select, Enter invoke, Esc cancel.\nNew Script scratch explicitly changes selection. Ctrl-S publishes in memory only; use the explicit Save action to write to disk. Ctrl-R/F5 publishes the current App editor draft and opens candidate evaluation review. Alt-Enter (Shift-F5 alias) publishes and checks diagnostics. Neither Run nor Check saves to disk or falls back to scratch. Run selected Script remains an explicit separate action.\nOutput: F6 focus, Up/Down or PageUp/PageDown scroll, Alt-Left/Right history; F3 returns to previous pane.\nF4 commands and F2 shell remain available. Results indicate interpreter completion only, not semantic approval.\nDirty drafts (including parked/unrelated drafts) conservatively block runs. F1 lists blockers. Run/Check explicitly publish the focused App draft; unrelated drafts still block. No implicit save or native authority.\n");
             }
         }
         Ok(())
@@ -717,14 +951,57 @@ impl WorkspaceTui {
             .as_ref()
             .map(|p| p.query.to_lowercase())
             .unwrap_or_default();
-        self.actions(sources, supported)
+        let advanced = self.picker.as_ref().is_some_and(|picker| picker.advanced);
+        let mut items: Vec<_> = self
+            .actions(sources, supported)
             .into_iter()
-            .filter(|i| {
-                format!("{} {}", i.id, i.label)
-                    .to_lowercase()
-                    .contains(&query)
+            .filter(|item| {
+                if !query.is_empty() {
+                    return format!("{} {}", item.id, item.label)
+                        .to_lowercase()
+                        .contains(&query);
+                }
+                if advanced {
+                    return item.action != WorkspaceAction::MoreActions;
+                }
+                match item.action {
+                    WorkspaceAction::RunCurrentDocument => {
+                        self.app_editor && self.action_candidate_available
+                    }
+                    WorkspaceAction::RunScript => {
+                        !self.app_editor
+                            && supported
+                            && sources
+                                .selected()
+                                .is_ok_and(|source| source.language_id() == "scope-script")
+                    }
+                    WorkspaceAction::CheckCurrentDocument
+                    | WorkspaceAction::SaveAppDocument
+                    | WorkspaceAction::InspectDocument => {
+                        self.app_editor && self.action_document_present
+                    }
+                    WorkspaceAction::OpenAppDocument | WorkspaceAction::MoreActions => true,
+                    _ => false,
+                }
             })
-            .collect()
+            .collect();
+        if query.is_empty() && !advanced {
+            for item in &mut items {
+                if item.action == WorkspaceAction::RunScript {
+                    item.label = "Run".into();
+                    item.shortcut = Some("F5");
+                }
+            }
+            items.sort_by_key(|item| match item.action {
+                WorkspaceAction::RunCurrentDocument | WorkspaceAction::RunScript => 0,
+                WorkspaceAction::CheckCurrentDocument => 1,
+                WorkspaceAction::OpenAppDocument => 2,
+                WorkspaceAction::SaveAppDocument => 3,
+                WorkspaceAction::InspectDocument => 4,
+                _ => 5,
+            });
+        }
+        items
     }
 
     pub(super) fn picker_event(
@@ -804,11 +1081,15 @@ impl WorkspaceTui {
             .collect::<Vec<_>>()
             .join("\n");
         frame.render_widget(
-            Paragraph::new(text).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(format!("Actions: {} • Esc cancel", picker.query)),
-            ),
+            Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(format!(
+                "{}: {} • type to search all • Esc cancel",
+                if picker.advanced {
+                    "More actions"
+                } else {
+                    "Actions"
+                },
+                picker.query
+            ))),
             area,
         );
     }

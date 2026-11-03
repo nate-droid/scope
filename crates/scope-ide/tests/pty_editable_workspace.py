@@ -248,6 +248,7 @@ class EditableWorkspaceTests(unittest.TestCase):
         show(text, 4)  # cancellation permits a fresh baseline and commit
         workspace.expect('Scratcheditor', workspace.send(b':scope quit\r'))
 
+        workspace.expect('Unsaved', workspace.send(b'\x11'))
         final = workspace.send(b'\x11')
         final += workspace.read()
         self.assertEqual(workspace.wait_exit(), 0)

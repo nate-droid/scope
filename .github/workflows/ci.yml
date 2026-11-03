@@ -53,6 +53,10 @@ jobs:
         run: rustup show active-toolchain
       - name: Check formatting
         run: cargo fmt --all -- --check
+      - name: Test managed transfer contract
+        run: |
+          cargo fmt --manifest-path examples/managed-transfer/Cargo.toml -- --check
+          cargo test --locked --manifest-path examples/managed-transfer/Cargo.toml
       - name: Test feature configurations
         run: |
           cargo test --workspace --locked

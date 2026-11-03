@@ -237,6 +237,12 @@ fn modal_authorizes_unsaved_snapshots_renders_structured_results_and_reinvokes_w
 
     let before = app.open_document().unwrap().clone();
     press(&mut tui, &mut app, KeyCode::Enter);
+    let preview = screen(&mut tui, &app, &mut terminal);
+    assert!(
+        preview.contains("d toggles Details (full retained evidence)"),
+        "{preview}"
+    );
+    press(&mut tui, &mut app, KeyCode::Char('e'));
     let result = screen(&mut tui, &app, &mut terminal);
     assert!(result.contains("CURRENT"), "{result}");
     assert!(result.contains("\"validation\": false"), "{result}");
@@ -323,7 +329,10 @@ fn editing_after_confirmation_rejects_execution_without_invoking_the_service() {
     open_inspection(&mut tui, &mut app);
     press(&mut tui, &mut app, KeyCode::Enter);
     let confirmation = screen(&mut tui, &app, &mut terminal);
-    assert!(confirmation.contains("Confirm read:"), "{confirmation}");
+    assert!(
+        confirmation.contains("Inspect current document?"),
+        "{confirmation}"
+    );
     assert_eq!(service.count(), 0);
 
     replace(&mut app, "changed after confirmation");
@@ -440,4 +449,242 @@ fn reopening_after_document_language_switch_discovers_and_invokes_the_new_servic
         }]
     );
     press(&mut tui, &mut app, KeyCode::Esc);
+}
+
+fn workspace_screen(ui: &mut scope_ide::tui::WorkspaceTui, app: &App) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(150, 60)).unwrap();
+    terminal
+        .draw(|frame| ui.render(frame, frame.area(), app))
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn app_workspace(app: &App) -> scope_ide::tui::WorkspaceTui {
+    use scope_ide::tui::{EditableScratchPane, View, WorkspaceTui};
+    let mut ui = WorkspaceTui::new();
+    ui.register_editable("editor", EditableScratchPane::new())
+        .unwrap();
+    ui.layout("main", View::leaf("editor")).unwrap();
+    workspace_screen(&mut ui, app);
+    ui
+}
+
+#[test]
+fn workspace_app_editor_publishes_and_evaluates_same_unsaved_document_without_scratch_copy() {
+    use crossterm::event::Event;
+    use scope_ide::{scratch::ScratchBuffers, tui::WorkspaceAction};
+    let fixture = Fixture::new();
+    let service = Inspector::new("fixture.one", "inspectone");
+    let mut app = fixture.app(&[service]);
+    let mut ui = app_workspace(&app);
+    let mut sources = ScratchBuffers::default();
+    ui.open_app_document(&mut app, "first.inspectone").unwrap();
+    let identity = app.open_document().unwrap().evaluation_source_id().clone();
+    let key = |code, modifiers| Event::Key(KeyEvent::new(code, modifiers));
+    ui.handle_event_with_sources(
+        key(KeyCode::End, KeyModifiers::SHIFT),
+        &mut app,
+        &mut sources,
+    );
+    ui.handle_event_with_sources(Event::Paste("unsaved λ".into()), &mut app, &mut sources);
+    assert_eq!(app.open_document().unwrap().text(), "saved first");
+    assert!(
+        ui.invoke_action(
+            WorkspaceAction::InspectDocument,
+            &mut app,
+            &mut sources,
+            None
+        )
+        .is_err()
+    );
+    ui.handle_event_with_sources(
+        key(KeyCode::Char('s'), KeyModifiers::CONTROL),
+        &mut app,
+        &mut sources,
+    );
+    let document = app.open_document().unwrap();
+    assert_eq!(document.evaluation_source_id(), &identity);
+    assert_eq!(document.text(), "unsaved λ");
+    assert_eq!(document.version(), 1);
+    assert!(document.is_dirty());
+    assert!(
+        ui.invoke_action(
+            WorkspaceAction::SaveAppDocument,
+            &mut app,
+            &mut sources,
+            None
+        )
+        .is_err(),
+        "read-only App authority must not be upgraded by the editor"
+    );
+    assert!(app.open_document().unwrap().is_dirty());
+    assert!(
+        sources.selected().is_err(),
+        "App editing must not create a scratch copy"
+    );
+    let rendered = workspace_screen(&mut ui, &app);
+    assert!(rendered.contains("App first.inspectone"), "{rendered}");
+    ui.invoke_action(
+        WorkspaceAction::InspectDocument,
+        &mut app,
+        &mut sources,
+        None,
+    )
+    .unwrap();
+    ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &mut app);
+    assert_eq!(service.count(), 0);
+    let confirm = workspace_screen(&mut ui, &app);
+    assert!(confirm.contains("unsaved λ"), "{confirm}");
+    ui.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &mut app);
+    assert_eq!(
+        service.calls.lock().unwrap().as_slice(),
+        &[Invocation {
+            operation: "fixture.one.alpha".into(),
+            text: "unsaved λ".into(),
+            version: 1,
+        }]
+    );
+    assert!(ui.inspection_result().unwrap().is_fresh_app(&app));
+    assert_eq!(
+        std::fs::read_to_string(fixture.0.join("first.inspectone")).unwrap(),
+        "saved first"
+    );
+}
+
+#[test]
+fn workspace_app_editor_stale_publish_is_rejected_and_draft_survives() {
+    use crossterm::event::Event;
+    use scope_ide::{scratch::ScratchBuffers, tui::WorkspaceAction};
+    let fixture = Fixture::new();
+    let service = Inspector::new("fixture.one", "inspectone");
+    let mut app = fixture.app(&[service]);
+    let mut ui = app_workspace(&app);
+    let mut sources = ScratchBuffers::default();
+    ui.open_app_document(&mut app, "first.inspectone").unwrap();
+    ui.handle_event_with_sources(Event::Paste("local draft ".into()), &mut app, &mut sources);
+    replace(&mut app, "external revision");
+    ui.handle_event_with_sources(
+        Event::Key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)),
+        &mut app,
+        &mut sources,
+    );
+    assert_eq!(app.open_document().unwrap().text(), "external revision");
+    let screen = workspace_screen(&mut ui, &app);
+    assert!(screen.contains("local draft"), "{screen}");
+    assert!(screen.contains("CONFLICT"), "{screen}");
+    assert!(ui.open_app_document(&mut app, "second.inspecttwo").is_err());
+    assert!(
+        ui.invoke_action(
+            WorkspaceAction::InspectDocument,
+            &mut app,
+            &mut sources,
+            None
+        )
+        .is_err()
+    );
+    assert_eq!(service.count(), 0);
+    ui.handle_event_with_sources(
+        Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        &mut app,
+        &mut sources,
+    );
+    assert!(!workspace_screen(&mut ui, &app).contains("local draft"));
+    assert!(
+        ui.open_app_document(&mut app, "second.inspecttwo").is_err(),
+        "unsaved App revision must not be discarded"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "PTY child; invoked by app_document_editor_through_real_launcher"]
+fn app_document_launcher_child() {
+    assert_eq!(
+        std::env::var("SCOPE_APP_EDITOR_PTY_CHILD").as_deref(),
+        Ok("1")
+    );
+    let service = Inspector::new("fixture.one", "inspectone");
+    scope_ide::cli::run_with_registry(
+        ["workspace", "."].map(str::to_owned),
+        scope_ide::language::LanguageRegistry::builtins().with_language(service),
+    )
+    .unwrap();
+    assert_eq!(
+        service.calls.lock().unwrap().as_slice(),
+        &[Invocation {
+            operation: "fixture.one.alpha".into(),
+            text: "unsaved λ".into(),
+            version: 1,
+        }]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn app_document_editor_through_real_launcher() {
+    let result = std::process::Command::new("python3")
+        .arg("-B")
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/pty_app_document_editor.py"
+        ))
+        .arg(std::env::current_exe().unwrap())
+        .output()
+        .expect("Python 3 and Unix PTYs are required");
+    assert!(
+        result.status.success(),
+        "App editor PTY failed:\n{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[test]
+fn missing_app_editor_target_never_falls_back_to_selected_scratch() {
+    use crossterm::event::Event;
+    use scope_ide::{scratch::ScratchBuffers, tui::WorkspaceAction};
+    let fixture = Fixture::new();
+    let service = Inspector::new("fixture.one", "inspectone");
+    let mut app = fixture.app(&[service]);
+    let mut ui = app_workspace(&app);
+    let mut sources = ScratchBuffers::default();
+    sources.create("scope-script", "unrelated scratch");
+    ui.open_app_document(&mut app, "first.inspectone").unwrap();
+    let run = ui
+        .actions(&sources, true)
+        .into_iter()
+        .find(|a| a.action == WorkspaceAction::RunScript)
+        .unwrap();
+    assert!(run.disabled_reason.unwrap().contains("App editor"));
+    app = fixture.app(&[service]);
+    ui.handle_event_with_sources(
+        Event::Paste("must not reach scratch".into()),
+        &mut app,
+        &mut sources,
+    );
+    ui.handle_event_with_sources(
+        Event::Key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)),
+        &mut app,
+        &mut sources,
+    );
+    assert_eq!(sources.selected().unwrap().text(), "unrelated scratch");
+    assert!(app.open_document().is_none());
+    assert!(
+        ui.invoke_action(
+            WorkspaceAction::InspectDocument,
+            &mut app,
+            &mut sources,
+            None
+        )
+        .is_err()
+    );
+    assert_eq!(service.count(), 0);
 }

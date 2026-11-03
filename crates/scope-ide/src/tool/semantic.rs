@@ -65,6 +65,9 @@ pub struct SemanticAuthorization<'a> {
 
 /// Bound to one previously resolved, host-owned target. No mutable source or App
 /// is supplied to the language. Dropping the session releases the review controller.
+/// Freshness is checked after authorization and execution, not atomically with
+/// dispatch. Unlike an exclusively borrowed DocumentSource, a generic SourceTarget
+/// may change through interior mutability, including between these observations.
 pub struct SemanticToolProvider<'a, T: SourceTarget, P> {
     service: &'a dyn LanguageService,
     target: &'a T,
@@ -494,6 +497,17 @@ impl<T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool>
             arguments: &arguments,
         }) {
             return Ok(outcome("unauthorized", "host policy denied operation"));
+        }
+        let live = self.target.snapshot();
+        if live.id != source.id
+            || live.version != source.version
+            || live.text != source.text
+            || live.language != source.language
+        {
+            return Ok(outcome(
+                "revision_conflict",
+                "target changed during authorization",
+            ));
         }
         if let Some(selection) = self.selection
             && let Err(error) = crate::text::TextBuffer::new(source.text).span_for_range(selection)
@@ -2031,54 +2045,171 @@ mod tests {
     }
 
     #[test]
-    fn native_observation_requires_post_execution_freshness() {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        struct ChangingTarget(AtomicU64);
+    fn native_observation_requires_authorization_and_post_execution_freshness() {
+        use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+        struct ChangingTarget {
+            revision: AtomicU64,
+            state: AtomicUsize,
+        }
         impl SourceTarget for ChangingTarget {
             fn source_id(&self) -> SourceId {
-                Target.source_id()
+                if self.state.load(Ordering::SeqCst) == 2 {
+                    SourceId::Scratch(43)
+                } else {
+                    Target.source_id()
+                }
             }
             fn text(&self) -> &str {
-                ORIGINAL
+                if self.state.load(Ordering::SeqCst) == 1 {
+                    CANDIDATE
+                } else {
+                    ORIGINAL
+                }
             }
             fn version(&self) -> u64 {
-                self.0.load(Ordering::SeqCst)
+                self.revision.load(Ordering::SeqCst)
             }
             fn language_id(&self) -> &str {
-                "fixture"
+                if self.state.load(Ordering::SeqCst) == 3 {
+                    "other"
+                } else {
+                    "fixture"
+                }
             }
             fn apply_source_edit(&mut self, _: TextEdit) -> Result<(), ProposalError> {
                 panic!("no mutation")
             }
         }
-        let service = LegacyService(SemanticOperationResult::ReadOnly {
-            value: json!({"float": 1.25}),
-            rationale: "stale".into(),
-        });
-        let target = ChangingTarget(AtomicU64::new(7));
-        let mut controller = SourceEditController::default();
-        let mut provider = SemanticToolProvider::new(
-            &service,
-            &target,
-            &mut controller,
-            PermittedEditScope::Document(target.source_id()),
-            None,
-            |_| {
-                target.0.store(8, Ordering::SeqCst);
-                true
-            },
-        )
-        .unwrap();
-        let result = provider
-            .invoke(
-                ToolCall::new("language.fixture.rename")
-                    .with_argument("expected_version", "7".into())
-                    .with_argument("expected_source", ORIGINAL.into())
-                    .with_argument("arguments", ToolValue::Object(Default::default())),
+        struct CountingService<'a> {
+            legacy: LegacyService,
+            calls: AtomicUsize,
+            change_during_execution: bool,
+            target: &'a ChangingTarget,
+        }
+        impl LanguageService for CountingService<'_> {
+            fn language_id(&self) -> &'static str {
+                "fixture"
+            }
+            fn language_name(&self) -> &'static str {
+                "Fixture"
+            }
+            fn matches_path(&self, _: &LanguagePath<'_>) -> bool {
+                false
+            }
+            fn analyze(&self, _: LanguageDocument<'_>) -> LanguageAnalysis {
+                panic!("no analysis")
+            }
+            fn semantic_operations(&self) -> Vec<SemanticOperationDescription> {
+                self.legacy.semantic_operations()
+            }
+            fn perform_semantic_operation(
+                &self,
+                request: SemanticOperationRequest<'_>,
+            ) -> Result<SemanticOperationResult, SemanticOperationError> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                if self.change_during_execution {
+                    self.target.revision.store(8, Ordering::SeqCst);
+                }
+                self.legacy.perform_semantic_operation(request)
+            }
+        }
+        for case in [
+            "unchanged",
+            "denied",
+            "revision",
+            "restored",
+            "text",
+            "identity",
+            "language",
+            "execution",
+        ] {
+            let target = ChangingTarget {
+                revision: AtomicU64::new(7),
+                state: AtomicUsize::new(0),
+            };
+            let service = CountingService {
+                legacy: LegacyService(SemanticOperationResult::ReadOnly {
+                    value: json!({"count": 1}),
+                    rationale: "native".into(),
+                }),
+                calls: AtomicUsize::new(0),
+                change_during_execution: case == "execution",
+                target: &target,
+            };
+            let mut controller = SourceEditController::default();
+            let mut authorizations = 0;
+            let mut provider = SemanticToolProvider::new(
+                &service,
+                &target,
+                &mut controller,
+                PermittedEditScope::Document(target.source_id()),
+                None,
+                |authorization| {
+                    authorizations += 1;
+                    assert_eq!(authorization.source.version, 7);
+                    assert_eq!(authorization.source.text, ORIGINAL);
+                    match case {
+                        "revision" => target.revision.store(8, Ordering::SeqCst),
+                        "restored" => {
+                            target.state.store(1, Ordering::SeqCst);
+                            target.revision.store(8, Ordering::SeqCst);
+                            target.state.store(0, Ordering::SeqCst);
+                        }
+                        "text" => target.state.store(1, Ordering::SeqCst),
+                        "identity" => target.state.store(2, Ordering::SeqCst),
+                        "language" => target.state.store(3, Ordering::SeqCst),
+                        _ => {}
+                    }
+                    case != "denied"
+                },
             )
             .unwrap();
-        assert_eq!(to_json(result.value)["status"], "revision_conflict");
-        assert!(provider.native_result().is_none());
+            let result = provider
+                .invoke(
+                    ToolCall::new("language.fixture.rename")
+                        .with_argument("expected_version", "7".into())
+                        .with_argument("expected_source", ORIGINAL.into())
+                        .with_argument("arguments", ToolValue::Object(Default::default())),
+                )
+                .unwrap();
+            let expected = match case {
+                "unchanged" => "read_only",
+                "denied" => "unauthorized",
+                _ => "revision_conflict",
+            };
+            assert_eq!(to_json(result.value)["status"], expected, "{case}");
+            assert_eq!(
+                service.calls.load(Ordering::SeqCst),
+                usize::from(matches!(case, "unchanged" | "execution")),
+                "{case}"
+            );
+            assert_eq!(
+                provider.native_result().is_some(),
+                case == "unchanged",
+                "{case}"
+            );
+            drop(provider);
+            assert_eq!(authorizations, 1, "{case}");
+            assert_eq!(
+                target.version(),
+                if matches!(case, "revision" | "restored" | "execution") {
+                    8
+                } else {
+                    7
+                },
+                "{case}"
+            );
+            assert_eq!(
+                target.state.load(Ordering::SeqCst),
+                match case {
+                    "text" => 1,
+                    "identity" => 2,
+                    "language" => 3,
+                    _ => 0,
+                },
+                "{case}"
+            );
+        }
     }
 
     #[test]

@@ -151,7 +151,7 @@ dependencies = [
 [[package]]
 name = "cell"
 version = "0.1.0"
-source = "git+https://github.com/nate-droid/cell?tag=v0.0.3#268b2ac53e25f60806063e732888d9f660c0767e"
+source = "git+https://github.com/nate-droid/cell?tag=v0.0.4#8ece6bf88497b402a6a417c95adf9bf1a6bd6aae"
 dependencies = [
  "anyhow",
  "sha2",
@@ -161,7 +161,7 @@ dependencies = [
 [[package]]
 name = "cell-capability-fs"
 version = "0.1.0"
-source = "git+https://github.com/nate-droid/cell?tag=v0.0.3#268b2ac53e25f60806063e732888d9f660c0767e"
+source = "git+https://github.com/nate-droid/cell?tag=v0.0.4#8ece6bf88497b402a6a417c95adf9bf1a6bd6aae"
 dependencies = [
  "anyhow",
  "cap-fs-ext",
@@ -175,7 +175,7 @@ dependencies = [
 [[package]]
 name = "cell-capability-openai"
 version = "0.1.0"
-source = "git+https://github.com/nate-droid/cell?tag=v0.0.3#268b2ac53e25f60806063e732888d9f660c0767e"
+source = "git+https://github.com/nate-droid/cell?tag=v0.0.4#8ece6bf88497b402a6a417c95adf9bf1a6bd6aae"
 dependencies = [
  "anyhow",
  "cell",
@@ -187,7 +187,7 @@ dependencies = [
 [[package]]
 name = "cell-guest"
 version = "0.1.0"
-source = "git+https://github.com/nate-droid/cell?tag=v0.0.3#268b2ac53e25f60806063e732888d9f660c0767e"
+source = "git+https://github.com/nate-droid/cell?tag=v0.0.4#8ece6bf88497b402a6a417c95adf9bf1a6bd6aae"
 dependencies = [
  "wit-bindgen",
 ]
