@@ -631,6 +631,11 @@ impl Pane for EditableScratchPane {
                     "ready"
                 })
         );
+        let title = if ctx.is_app_editor() {
+            conflict.map(str::to_owned).unwrap_or_default()
+        } else {
+            title
+        };
         let block = Block::default().borders(Borders::ALL).title(title);
         let inner = block.inner(area);
         frame.render_widget(block, area);

@@ -2860,9 +2860,9 @@ fn portable_check_shortcut_and_publication_help_are_explicit() {
         .iter()
         .map(|cell| cell.symbol())
         .collect();
-    assert!(screen.contains("Alt-Enter check"));
-    assert!(screen.contains("Ctrl-S publish (memory)"));
-    assert!(screen.contains("actions/Save"));
+    assert!(screen.contains("Ctrl-O Open · Ctrl-R Run · Ctrl-Q Quit · Ctrl-G More"));
+    assert!(!screen.contains("Alt-Enter check"));
+    assert!(!screen.contains("Ctrl-S publish (memory)"));
 }
 
 #[test]
@@ -3094,4 +3094,237 @@ fn f1_app_open_prompt_uses_literal_authorized_path_and_cancel_is_inert() {
     assert_eq!(root.read_file("file with spaces.txt"), "edit App file");
     assert!(!app.open_document().unwrap().is_dirty());
     assert!(sources.selected().is_err());
+}
+
+fn minimal_screen(h: &mut EditableWorkspace) -> String {
+    h.terminal
+        .draw(|frame| {
+            h.ui.render_run_frame(frame, &h.app, Some(&h.sources), false);
+        })
+        .unwrap();
+    h.terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect()
+}
+
+#[test]
+fn minimal_app_composition_hides_default_inspector_but_preserves_layout_access() {
+    let root = TempWorkspace::new("minimal-app-layout");
+    root.write_file("document.txt", "App content");
+    let mut h = EditableWorkspace::new(&root, true);
+    h.ui.register("inspector", Counter(Rc::default())).unwrap();
+    h.ui.layout(
+        "workspace",
+        View::horizontal([View::leaf("editor"), View::leaf("inspector")]),
+    )
+    .unwrap();
+    h.ui.layout("editor", View::leaf("editor")).unwrap();
+    h.ui.select_layout("workspace").unwrap();
+    h.render();
+    h.ui.open_app_document(&mut h.app, "document.txt").unwrap();
+    let screen = minimal_screen(&mut h);
+    assert_eq!(h.ui.layouts[h.ui.active].0, "editor");
+    assert_eq!(h.ui.visible.len(), 1);
+    assert!(h.ui.visible[0].1.height > h.ui.output_area.unwrap().height);
+    assert!(screen.contains("App content"));
+    assert!(!screen.contains("inspector"));
+    assert!(screen.contains("Ctrl-O Open · Ctrl-R Run · Ctrl-Q Quit · Ctrl-G More"));
+    assert_eq!(h.ui.rendered_output(&h.app, Some(&h.sources)), "");
+    h.control('g');
+    assert!(h.ui.picker.is_some());
+    assert!(
+        h.ui.actions(&h.sources, false)
+            .iter()
+            .any(|item| item.action == WorkspaceAction::InspectDocument)
+    );
+    h.ui.picker = None;
+    h.ui.select_layout("workspace").unwrap();
+    assert!(minimal_screen(&mut h).contains("inspector"));
+    h.ui.focus_named("inspector").unwrap();
+    h.key(KeyCode::Char('x'), event::KeyModifiers::NONE);
+    h.ui.select_layout("editor").unwrap();
+    minimal_screen(&mut h);
+    h.ui.select_layout("workspace").unwrap();
+    minimal_screen(&mut h);
+    assert!(h.pane_text("inspector").contains('1'));
+}
+
+#[test]
+fn minimal_app_composition_preserves_custom_layout_and_non_app_footer() {
+    let root = TempWorkspace::new("minimal-custom-layout");
+    root.write_file("document.txt", "App content");
+    let mut h = EditableWorkspace::new(&root, true);
+    assert!(minimal_screen(&mut h).contains("Ctrl-S publish (memory)"));
+    h.ui.open_app_document(&mut h.app, "document.txt").unwrap();
+    minimal_screen(&mut h);
+    assert_eq!(h.ui.layouts[h.ui.active].0, "both");
+    assert_eq!(h.ui.visible.len(), 2);
+}
+
+struct MinimalRunLanguage;
+impl scope_language::LanguageService for MinimalRunLanguage {
+    fn language_id(&self) -> &'static str {
+        "minimal-run"
+    }
+    fn language_name(&self) -> &'static str {
+        "Minimal Run"
+    }
+    fn matches_path(&self, _: &scope_language::LanguagePath<'_>) -> bool {
+        true
+    }
+    fn analyze(&self, _: scope_language::LanguageDocument<'_>) -> scope_language::LanguageAnalysis {
+        Default::default()
+    }
+    fn semantic_operations(&self) -> Vec<scope_language::SemanticOperationDescription> {
+        use scope_language::*;
+        vec![
+            SemanticOperationDescription {
+                id: "evaluate".into(),
+                description: "Evaluate".into(),
+                arguments: vec![],
+                effect: SemanticOperationEffect::Read,
+                target: SemanticTargetRequirement::Document,
+                constraints: None,
+            }
+            .with_purpose(SemanticOperationPurpose::CandidateEvaluation)
+            .unwrap(),
+        ]
+    }
+    fn perform_semantic_operation(
+        &self,
+        _: scope_language::SemanticOperationRequest<'_>,
+    ) -> Result<scope_language::SemanticOperationResult, scope_language::SemanticOperationError>
+    {
+        Ok(scope_language::SemanticOperationResult::ReadOnly {
+            value: serde_json::json!({"secret_evidence": "not ordinary output"}),
+            rationale: "fixture".into(),
+        })
+    }
+}
+
+#[test]
+fn minimal_app_run_renders_retained_summary_and_unpublished_draft_staleness() {
+    let root = TempWorkspace::new("minimal-run-output");
+    root.write_file("document.txt", "baseline");
+    let mut h = EditableWorkspace::new(&root, true);
+    h.app = App::builder(root.workspace())
+        .language(&MinimalRunLanguage)
+        .build()
+        .unwrap();
+    h.ui.open_app_document(&mut h.app, "document.txt").unwrap();
+    minimal_screen(&mut h);
+    h.ui.invoke_action(
+        WorkspaceAction::RunCurrentDocument,
+        &mut h.app,
+        &mut h.sources,
+        None,
+    )
+    .unwrap();
+    assert!(h.ui.semantic_inspection.is_none());
+    assert!(h.ui.inspection_result().is_some());
+    let screen = minimal_screen(&mut h);
+    assert!(screen.contains("Run completed; inspect for results and diagnostics."));
+    assert!(!screen.contains("secret_evidence"));
+    assert!(!screen.contains("STALE"));
+    h.event(Event::Paste("draft ".into()));
+    assert_eq!(h.app.open_document().unwrap().text(), "baseline");
+    assert!(minimal_screen(&mut h).contains("STALE (unpublished editor draft)"));
+    h.control('s');
+    assert!(minimal_screen(&mut h).contains("STALE (source changed or no longer open)"));
+    h.ui.invoke_action(
+        WorkspaceAction::InspectDocument,
+        &mut h.app,
+        &mut h.sources,
+        None,
+    )
+    .unwrap();
+    assert!(h.ui.semantic_inspection.is_some());
+}
+
+#[test]
+fn minimal_app_run_resets_old_scroll_errors_and_history_presentation() {
+    let root = TempWorkspace::new("minimal-run-reset");
+    root.write_file("document.txt", "baseline");
+    let mut h = EditableWorkspace::new(&root, true);
+    h.app = App::builder(root.workspace())
+        .language(&MinimalRunLanguage)
+        .build()
+        .unwrap();
+    h.ui.open_app_document(&mut h.app, "document.txt").unwrap();
+    minimal_screen(&mut h);
+    h.ui.output_scroll = 100;
+    h.ui.output_errors = "old failure\n".into();
+    h.ui.show_result = true;
+    h.ui.invoke_action(
+        WorkspaceAction::RunCurrentDocument,
+        &mut h.app,
+        &mut h.sources,
+        None,
+    )
+    .unwrap();
+    assert_eq!(h.ui.output_scroll, 0);
+    assert!(h.ui.output_errors.is_empty());
+    assert!(!h.ui.show_result);
+    let screen = minimal_screen(&mut h);
+    assert!(screen.contains("Run completed; inspect for results and diagnostics."));
+    assert!(!screen.contains("old failure"));
+}
+
+#[test]
+fn minimal_app_rejected_run_prioritizes_failure_and_retains_inspection_evidence() {
+    let root = TempWorkspace::new("minimal-run-rejection");
+    root.write_file("document.txt", "baseline");
+    let mut h = EditableWorkspace::new(&root, true);
+    h.app = App::builder(root.workspace())
+        .language(&MinimalRunLanguage)
+        .build()
+        .unwrap();
+    h.ui.open_app_document(&mut h.app, "document.txt").unwrap();
+    minimal_screen(&mut h);
+    h.ui.invoke_action(
+        WorkspaceAction::RunCurrentDocument,
+        &mut h.app,
+        &mut h.sources,
+        None,
+    )
+    .unwrap();
+    assert!(minimal_screen(&mut h).contains("Run completed"));
+    let evidence = format!("{:?}", h.ui.inspection_result().unwrap());
+    h.ui.focus_named("output").unwrap();
+    h.ui.output_scroll = 100;
+    h.ui.output_errors = "old failure\n".into();
+    let error =
+        h.ui.invoke_action(
+            WorkspaceAction::RunCurrentDocument,
+            &mut h.app,
+            &mut h.sources,
+            None,
+        )
+        .unwrap_err();
+    assert_eq!(h.ui.output_scroll, 0);
+    assert!(h.ui.output_errors.is_empty());
+    // Match the terminal loop's rejected-action reporting path.
+    h.ui.output_errors.push_str(&format!("{error}\n"));
+    let screen = minimal_screen(&mut h);
+    assert!(screen.contains(&error));
+    assert!(!screen.contains("Run completed"));
+    assert!(!screen.contains("old failure"));
+    assert_eq!(
+        h.ui.rendered_output(&h.app, Some(&h.sources)),
+        format!("{error}\n")
+    );
+    assert_eq!(format!("{:?}", h.ui.inspection_result().unwrap()), evidence);
+    h.ui.invoke_action(
+        WorkspaceAction::InspectDocument,
+        &mut h.app,
+        &mut h.sources,
+        None,
+    )
+    .unwrap();
+    assert!(h.ui.semantic_inspection.is_some());
+    assert_eq!(format!("{:?}", h.ui.inspection_result().unwrap()), evidence);
 }

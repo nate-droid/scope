@@ -552,6 +552,13 @@ impl WorkspaceTui {
         sources: &mut ScratchBuffers,
         mut host: Option<&mut dyn ReadOnlyCommand>,
     ) -> Result<(), String> {
+        // Reset presentation before eligibility/publication can reject this attempt.
+        // Retained inspection evidence remains available through Inspect.
+        if action == WorkspaceAction::RunCurrentDocument {
+            self.output_scroll = 0;
+            self.output_errors.clear();
+            self.show_result = false;
+        }
         self.refresh_action_context(app);
         let supported = host.as_ref().is_some_and(|h| h.supports_direct_script());
         let info = self
@@ -614,8 +621,10 @@ impl WorkspaceTui {
                     return Err(reason);
                 }
                 if action == WorkspaceAction::RunCurrentDocument {
-                    self.semantic_inspection =
-                        Some(super::super::semantic::SemanticInspection::candidate(app)?);
+                    let mut inspection =
+                        super::super::semantic::SemanticInspection::candidate(app)?;
+                    inspection.run(app);
+                    self.retained_inspection = Some(inspection);
                 } else {
                     self.invoke_action(
                         WorkspaceAction::CheckDocumentDiagnostics,
@@ -801,7 +810,7 @@ impl WorkspaceTui {
             }
             WorkspaceAction::Help => {
                 self.show_result = false;
-                self.output_errors.push_str("Actions: F1 search, Up/Down select, Enter invoke, Esc cancel.\nNew Script scratch explicitly changes selection. Ctrl-S publishes in memory only; use the explicit Save action to write to disk. Ctrl-R/F5 publishes the current App editor draft and opens candidate evaluation review. Alt-Enter (Shift-F5 alias) publishes and checks diagnostics. Neither Run nor Check saves to disk or falls back to scratch. Run selected Script remains an explicit separate action.\nOutput: F6 focus, Up/Down or PageUp/PageDown scroll, Alt-Left/Right history; F3 returns to previous pane.\nF4 commands and F2 shell remain available. Results indicate interpreter completion only, not semantic approval.\nDirty drafts (including parked/unrelated drafts) conservatively block runs. F1 lists blockers. Run/Check explicitly publish the focused App draft; unrelated drafts still block. No implicit save or native authority.\n");
+                self.output_errors.push_str("Actions: F1 search, Up/Down select, Enter invoke, Esc cancel.\nNew Script scratch explicitly changes selection. Ctrl-S publishes in memory only; use the explicit Save action to write to disk. Ctrl-R/F5 publishes the current App editor draft and authorizes one exact candidate evaluation into output. Evaluate / inspect retains explicit review and confirmation. Alt-Enter (Shift-F5 alias) publishes and checks diagnostics. Neither Run nor Check saves to disk or falls back to scratch. Run selected Script remains an explicit separate action.\nOutput: F6 focus, Up/Down or PageUp/PageDown scroll, Alt-Left/Right history; F3 returns to previous pane.\nF4 commands and F2 shell remain available. Results indicate interpreter completion only, not semantic approval.\nDirty drafts (including parked/unrelated drafts) conservatively block runs. F1 lists blockers. Run/Check explicitly publish the focused App draft; unrelated drafts still block. No implicit save or native authority.\n");
             }
         }
         Ok(())

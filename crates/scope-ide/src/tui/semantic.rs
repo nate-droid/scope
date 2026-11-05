@@ -83,6 +83,96 @@ impl SemanticInspection {
         self.result.as_ref()
     }
 
+    /// Consume only the captured request; repeated calls never capture or execute again.
+    pub(super) fn run(&mut self, app: &mut App) {
+        let Some(binding) = self.pending.take() else {
+            return;
+        };
+        self.error = None;
+        self.scroll = 0;
+        // Direct Run and confirmed inspection grant exactly the same request.
+        match binding.invoke_app(app, |request| {
+            request.operation == binding.operation()
+                && request.source.id == binding.source_id()
+                && request.source.version == binding.version()
+                && request.source.text == binding.text()
+                && request.source.language == binding.language()
+                && request.arguments == &json!({})
+        }) {
+            Ok(result) => self.result = Some(result),
+            Err(error) => {
+                self.result = None;
+                self.error = Some(error.to_string());
+            }
+        }
+    }
+
+    pub(super) fn is_stale(&self, app: &App) -> bool {
+        self.result
+            .as_ref()
+            .is_some_and(|result| !result.is_fresh_app(app))
+    }
+
+    /// Ordinary output never interprets opaque provider JSON; Details retains it.
+    pub(super) fn concise_output(&self, app: &App) -> Option<String> {
+        if let Some(error) = &self.error {
+            let short: String = error
+                .lines()
+                .next()
+                .unwrap_or("Run failed")
+                .chars()
+                .take(240)
+                .collect();
+            return Some(format!("Run failed: {short}"));
+        }
+        let result = self.result.as_ref()?;
+        let summary = match &result.native_result {
+            Some(SemanticOperationResult::Evaluated { evaluation, .. }) => {
+                evaluation.summary.clone()
+            }
+            Some(SemanticOperationResult::ReadOnlyEvaluation { .. }) => {
+                "Run completed with check results; inspect for details.".into()
+            }
+            Some(SemanticOperationResult::Blocked { blocker }) => {
+                let mut lines = vec![format!("Run blocked: {}", blocker.explanation)];
+                lines.extend(blocker.diagnostics.iter().map(|diagnostic| {
+                    format!("{:?}: {}", diagnostic.severity, diagnostic.message)
+                }));
+                lines.join("\n")
+            }
+            Some(_) => "Run completed; inspect for results and diagnostics.".into(),
+            None => {
+                // Only the bridge envelope is protocol, never the provider's opaque value.
+                let envelope = tool_json(&result.result.value);
+                let status = envelope
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                let mut lines = vec![format!("Run: {status}")];
+                if let Some(message) = envelope.get("message").and_then(Value::as_str) {
+                    lines.push(message.into());
+                }
+                if let Some(diagnostics) = envelope.get("diagnostics").and_then(Value::as_array) {
+                    for diagnostic in diagnostics {
+                        if let Some(message) = diagnostic.get("message").and_then(Value::as_str) {
+                            let severity = diagnostic
+                                .get("severity")
+                                .and_then(Value::as_str)
+                                .unwrap_or("Diagnostic");
+                            lines.push(format!("{severity}: {message}"));
+                        }
+                    }
+                }
+                lines.join("\n")
+            }
+        };
+        Some(if self.is_stale(app) {
+            format!("STALE (source changed or no longer open)\n{summary}")
+        } else {
+            summary
+        })
+    }
+
     /// Returns true when the modal should close.
     pub fn handle_key(&mut self, key: KeyEvent, app: &mut App) -> bool {
         match key.code {
@@ -111,23 +201,8 @@ impl SemanticInspection {
             KeyCode::Enter => {
                 self.error = None;
                 self.scroll = 0;
-                if let Some(binding) = self.pending.take() {
-                    // The second Enter grants only this captured request. The bridge
-                    // independently checks every field before consulting this policy.
-                    match binding.invoke_app(app, |request| {
-                        request.operation == binding.operation()
-                            && request.source.id == binding.source_id()
-                            && request.source.version == binding.version()
-                            && request.source.text == binding.text()
-                            && request.source.language == binding.language()
-                            && request.arguments == &json!({})
-                    }) {
-                        Ok(result) => self.result = Some(result),
-                        Err(error) => {
-                            self.result = None;
-                            self.error = Some(error.to_string());
-                        }
-                    }
+                if self.pending.is_some() {
+                    self.run(app);
                 } else {
                     match self.operations(app).and_then(|ops| {
                         if self.candidate_only && ops.len() != 1 {
@@ -375,6 +450,107 @@ mod tests {
             })
         }
     }
+    struct FailureService(&'static str);
+    impl LanguageService for FailureService {
+        fn language_id(&self) -> &'static str {
+            "failure-fixture"
+        }
+        fn language_name(&self) -> &'static str {
+            "Failure fixture"
+        }
+        fn matches_path(&self, _: &LanguagePath<'_>) -> bool {
+            true
+        }
+        fn analyze(&self, _: LanguageDocument<'_>) -> LanguageAnalysis {
+            LanguageAnalysis::default()
+        }
+        fn semantic_operations(&self) -> Vec<SemanticOperationDescription> {
+            Service(AtomicUsize::new(0)).semantic_operations()
+        }
+        fn perform_semantic_operation(
+            &self,
+            _: SemanticOperationRequest<'_>,
+        ) -> Result<SemanticOperationResult, SemanticOperationError> {
+            let diagnostic = Diagnostic::error(
+                TextRange {
+                    start: Position { line: 0, column: 0 },
+                    end: Position { line: 0, column: 1 },
+                },
+                "static type mismatch",
+            );
+            match self.0 {
+                "static" => Err(SemanticOperationError::InvalidSource(vec![diagnostic])),
+                "runtime" => Err(SemanticOperationError::InternalFailure(
+                    "runtime division by zero".into(),
+                )),
+                "blocked" => Ok(SemanticOperationResult::Blocked {
+                    blocker: SemanticBlocker {
+                        operation_id: "evaluate".into(),
+                        category: BlockerCategory::UnsatisfiedPrecondition,
+                        explanation: "execution unavailable".into(),
+                        recoverable: false,
+                        missing_dependencies: vec![],
+                        diagnostics: vec![diagnostic],
+                        suggested_next_action: None,
+                    },
+                }),
+                _ => panic!("cancelled inspection must not invoke provider"),
+            }
+        }
+    }
+
+    #[test]
+    fn concise_output_reports_real_bridge_failures_and_typed_blockers() {
+        for (mode, expected) in [
+            ("static", "Error: static type mismatch"),
+            ("runtime", "runtime division by zero"),
+            ("blocked", "Run blocked: execution unavailable"),
+        ] {
+            let root = crate::test_support::TempWorkspace::new("run-failure-output");
+            root.write_file("sample.fixture", "source");
+            let service = Box::leak(Box::new(FailureService(mode)));
+            let mut app = App::builder(root.workspace())
+                .language(service)
+                .build()
+                .unwrap();
+            app.open_path("sample.fixture").unwrap();
+            let mut inspection = SemanticInspection::candidate(&app).unwrap();
+            inspection.run(&mut app);
+            let output = inspection.concise_output(&app).unwrap();
+            assert!(output.contains(expected), "{output}");
+            assert!(!output.contains("completed"), "{output}");
+            if mode != "blocked" {
+                assert!(inspection.result().unwrap().native_result.is_none());
+                assert!(output.contains(if mode == "static" {
+                    "invalid_source"
+                } else {
+                    "internal_failure"
+                }));
+            }
+            assert!(!inspection.is_stale(&app));
+        }
+    }
+
+    #[test]
+    fn cancelled_run_has_no_invented_output_or_result() {
+        let root = crate::test_support::TempWorkspace::new("run-cancelled-output");
+        root.write_file("sample.fixture", "source");
+        let service = Box::leak(Box::new(FailureService("cancelled")));
+        let mut app = App::builder(root.workspace())
+            .language(service)
+            .build()
+            .unwrap();
+        app.open_path("sample.fixture").unwrap();
+        let mut inspection = SemanticInspection::candidate(&app).unwrap();
+        inspection.handle_key(
+            KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE),
+            &mut app,
+        );
+        inspection.run(&mut app);
+        assert!(inspection.result().is_none());
+        assert!(inspection.concise_output(&app).is_none());
+    }
+
     struct Catalog(Vec<SemanticOperationDescription>);
     impl LanguageService for Catalog {
         fn language_id(&self) -> &'static str {
@@ -428,6 +604,62 @@ mod tests {
             assert!(SemanticInspection::candidate(&app).is_err());
             assert_eq!(app.open_document().unwrap().text(), "source");
         }
+    }
+
+    #[test]
+    fn direct_run_consumes_exact_snapshot_once_and_reports_staleness() {
+        let root = crate::test_support::TempWorkspace::new("direct-run");
+        root.write_file("sample.fixture", "saved");
+        let service = Box::leak(Box::new(Service(AtomicUsize::new(0))));
+        let mut app = App::builder(root.workspace())
+            .language(service)
+            .build()
+            .unwrap();
+        app.open_path("sample.fixture").unwrap();
+        let replace = |app: &mut App, text: &str| {
+            let doc = app.open_document_mut().unwrap();
+            let range = doc
+                .buffer()
+                .range_for_span(crate::text::Span::new(0, doc.text().len()))
+                .unwrap();
+            doc.apply_edit(crate::text::TextEdit::replace(range, text))
+                .unwrap();
+        };
+        replace(&mut app, "unsaved λ");
+        let mut inspection = SemanticInspection::candidate(&app).unwrap();
+        assert!(inspection.concise_output(&app).is_none());
+        assert_eq!(service.0.load(Ordering::SeqCst), 0);
+        inspection.run(&mut app);
+        assert!(inspection.pending.is_none());
+        assert!(inspection.result().unwrap().is_fresh_app(&app));
+        assert!(!inspection.is_stale(&app));
+        assert_eq!(
+            inspection.concise_output(&app).unwrap(),
+            "Run completed; inspect for results and diagnostics."
+        );
+        inspection.run(&mut app);
+        assert_eq!(service.0.load(Ordering::SeqCst), 1);
+        assert_eq!(root.read_file("sample.fixture"), "saved");
+        let mut stale = SemanticInspection::candidate(&app).unwrap();
+        replace(&mut app, "changed");
+        assert!(inspection.is_stale(&app));
+        assert!(
+            inspection
+                .concise_output(&app)
+                .unwrap()
+                .starts_with("STALE")
+        );
+        stale.run(&mut app);
+        assert!(stale.pending.is_none());
+        assert!(stale.result().is_none());
+        assert!(
+            stale
+                .concise_output(&app)
+                .unwrap()
+                .starts_with("Run failed:")
+        );
+        stale.run(&mut app);
+        assert_eq!(service.0.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -550,6 +782,14 @@ mod tests {
                 contract_id: None,
             },
         });
+        assert_eq!(
+            modal.concise_output(&app).unwrap(),
+            format!(
+                "Evaluation complete\nmain() = 16\n{}summary_tail",
+                "λ".repeat(250)
+            )
+        );
+        assert!(!modal.is_stale(&app));
         let normal = screen(&modal, &app);
         assert!(normal.contains("Evaluation complete"));
         assert!(normal.contains("main() = 16"));

@@ -252,6 +252,28 @@ impl WorkspaceTui {
             })
             .ok_or("no visible editable pane")?;
         app.open_path(path).map_err(|error| error.to_string())?;
+        // Only the launcher's conventional default split opts into App's minimal view.
+        // Keep custom layouts and the workspace layout itself available unchanged.
+        if self.layouts.get(self.active).is_some_and(|(name, view)| {
+            name == "workspace"
+                && matches!(view, View::Split { direction: Direction::Horizontal, children }
+                    if children.len() == 2 && children.iter().zip(["editor", "inspector"]).all(
+                        |((constraint, view), id)| *constraint == Constraint::Fill(1)
+                            && matches!(view, View::Leaf(leaf) if leaf == id)))
+        }) && self
+            .layouts
+            .iter()
+            .any(|(name, view)| name == "editor" && matches!(view, View::Leaf(id) if id == &editor))
+        {
+            let area = self
+                .visible
+                .iter()
+                .find(|(id, _)| id == &editor)
+                .map(|(_, area)| *area)
+                .unwrap_or_default();
+            self.select_layout("editor")?;
+            self.geometry(area);
+        }
         self.focus_named(&editor)?;
         self.app_editor = true;
         self.refresh_action_context(app);
@@ -536,8 +558,7 @@ impl WorkspaceTui {
                 KeyCode::Up => self.output_scroll = self.output_scroll.saturating_sub(1),
                 KeyCode::Down => {
                     self.output_scroll = self.output_scroll.saturating_add(1).min(
-                        self.result_text(None)
-                            .unwrap_or_else(|| self.output_text())
+                        self.rendered_output(app, sources.as_deref())
                             .lines()
                             .count()
                             .saturating_sub(1)
@@ -547,8 +568,7 @@ impl WorkspaceTui {
                 KeyCode::PageUp => self.output_scroll = self.output_scroll.saturating_sub(page),
                 KeyCode::PageDown => {
                     self.output_scroll = self.output_scroll.saturating_add(page).min(
-                        self.result_text(None)
-                            .unwrap_or_else(|| self.output_text())
+                        self.rendered_output(app, sources.as_deref())
                             .lines()
                             .count()
                             .saturating_sub(1)
@@ -921,7 +941,98 @@ impl WorkspaceTui {
         } else {
             frame.render_widget(Paragraph::new(self.command_line.as_ref()
                 .map(|s| format!("{}> {s}", if self.open_app_prompt { "Open document: " } else { "" }))
-                .unwrap_or_else(|| "Ctrl-O open • Ctrl-R run • Alt-Enter check • Ctrl-S publish (memory) • Ctrl-G actions/Save • Ctrl-Q quit".into())), area);
+                .unwrap_or_else(|| if self.app_editor {
+                    "Ctrl-O Open · Ctrl-R Run · Ctrl-Q Quit · Ctrl-G More".into()
+                } else {
+                    "Ctrl-O open • Ctrl-R run • Alt-Enter check • Ctrl-S publish (memory) • Ctrl-G actions/Save • Ctrl-Q quit".into()
+                })), area);
+        }
+    }
+
+    fn rendered_output(
+        &self,
+        app: &App,
+        sources: Option<&crate::scratch::ScratchBuffers>,
+    ) -> String {
+        // A rejected latest action must not present an older Run as its outcome.
+        if self.app_editor && !self.output_errors.is_empty() {
+            return self.output_errors.clone();
+        }
+        if self.app_editor
+            && let Some(inspection) = &self.retained_inspection
+            && let Some(summary) = inspection.concise_output(app)
+        {
+            let draft_stale = self
+                .instances
+                .values()
+                .any(|instance| instance.pane.has_dirty_draft())
+                && !inspection.is_stale(app);
+            return format!(
+                "{}{}",
+                if draft_stale {
+                    "STALE (unpublished editor draft)\n"
+                } else {
+                    ""
+                },
+                summary,
+            );
+        }
+        self.result_text(sources)
+            .unwrap_or_else(|| self.output_text())
+    }
+
+    // Shared by the terminal loop and rendered composition regression tests.
+    fn render_run_frame(
+        &mut self,
+        frame: &mut ratatui::Frame<'_>,
+        app: &App,
+        sources: Option<&crate::scratch::ScratchBuffers>,
+        quit_pending: bool,
+    ) {
+        let output_height = if self.app_editor {
+            5.min(frame.area().height / 3).max(1)
+        } else {
+            (frame.area().height / 3).clamp(1, 8)
+        };
+        let areas = Layout::vertical([
+            Constraint::Min(0),
+            Constraint::Length(output_height),
+            Constraint::Length(self.footer_height()),
+        ])
+        .split(frame.area());
+        self.output_area = (areas[1].width > 0 && areas[1].height > 0).then_some(areas[1]);
+        self.render_optional_sources(frame, areas[0], app, sources);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title("output")
+            .border_style(if self.focused.as_deref() == Some("output") {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default()
+            });
+        frame.render_widget(
+            Paragraph::new(self.rendered_output(app, sources))
+                .block(block)
+                .scroll((self.output_scroll, 0)),
+            areas[1],
+        );
+        if quit_pending {
+            frame.render_widget(
+                Paragraph::new(
+                    "Unsaved work: Ctrl-Q again to discard and quit • Esc/Ctrl-C cancel",
+                ),
+                areas[2],
+            );
+        } else {
+            self.render_footer(frame, areas[2]);
+        }
+        if self.open_app_prompt {
+            self.open_suggestions.render_titled(
+                frame,
+                areas[1],
+                app,
+                "Open document — ↑/↓ select · Tab complete · Enter open · Esc cancel",
+            );
         }
     }
 
@@ -961,50 +1072,7 @@ impl WorkspaceTui {
         let mut quit_pending = false;
         loop {
             terminal.as_mut().unwrap().draw(|frame| {
-                let output_height = (frame.area().height / 3).clamp(1, 8);
-                let areas = Layout::vertical([
-                    Constraint::Min(0),
-                    Constraint::Length(output_height),
-                    Constraint::Length(self.footer_height()),
-                ])
-                .split(frame.area());
-                self.output_area = (areas[1].width > 0 && areas[1].height > 0).then_some(areas[1]);
-                self.render_optional_sources(frame, areas[0], app, sources.as_deref());
-                let block = Block::default()
-                    .borders(Borders::ALL)
-                    .title("output")
-                    .border_style(if self.focused.as_deref() == Some("output") {
-                        Style::default().fg(Color::Cyan)
-                    } else {
-                        Style::default()
-                    });
-                frame.render_widget(
-                    Paragraph::new(
-                        self.result_text(sources.as_deref())
-                            .unwrap_or_else(|| self.output_text()),
-                    )
-                    .block(block)
-                    .scroll((self.output_scroll, 0)),
-                    areas[1],
-                );
-                if quit_pending {
-                    frame.render_widget(
-                        Paragraph::new(
-                            "Unsaved work: Ctrl-Q again to discard and quit • Esc/Ctrl-C cancel",
-                        ),
-                        areas[2],
-                    );
-                } else {
-                    self.render_footer(frame, areas[2]);
-                }
-                if self.open_app_prompt {
-                    self.open_suggestions.render_titled(
-                        frame,
-                        areas[1],
-                        app,
-                        "Open document — ↑/↓ select · Tab complete · Enter open · Esc cancel",
-                    );
-                }
+                self.render_run_frame(frame, app, sources.as_deref(), quit_pending);
                 self.render_picker(
                     frame,
                     sources.as_deref().unwrap_or(&fallback_sources),

@@ -1,5 +1,5 @@
 [profile.dev]
-debug = "line-tables-only"
+debug = false
 incremental = true
 
 # Keep line tables for Scope code, but omit dependency debug information.

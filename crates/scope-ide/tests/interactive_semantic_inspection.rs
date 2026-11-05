@@ -531,7 +531,9 @@ fn workspace_app_editor_publishes_and_evaluates_same_unsaved_document_without_sc
         "App editing must not create a scratch copy"
     );
     let rendered = workspace_screen(&mut ui, &app);
-    assert!(rendered.contains("App first.inspectone"), "{rendered}");
+    assert!(rendered.contains("unsaved λ"), "{rendered}");
+    assert!(!rendered.contains("revision"), "{rendered}");
+    assert!(!rendered.contains("Ctrl-S publish"), "{rendered}");
     ui.invoke_action(
         WorkspaceAction::InspectDocument,
         &mut app,

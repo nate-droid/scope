@@ -150,9 +150,16 @@ impl LanguageService for H4Language {
         assert!(request.selection.is_none());
         assert_eq!(request.arguments, serde_json::json!({}));
         self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(scope_language::SemanticOperationResult::ReadOnly {
-            value: serde_json::json!({"evidence": "H4_EXACT_SOURCE_OK"}),
+        Ok(scope_language::SemanticOperationResult::Evaluated {
+            value: serde_json::json!({"value": 16, "evidence": "H4_EXACT_SOURCE_OK"}),
             rationale: "Captured source only; no disk write".into(),
+            evaluation: scope_language::SemanticEvaluation {
+                outcome: scope_language::SemanticOutcome::Satisfied,
+                summary: "16".into(),
+                diagnostics: None,
+                failed_criteria: vec![],
+                contract_id: None,
+            },
         })
     }
 }

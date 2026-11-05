@@ -274,25 +274,38 @@ the editor, and leaves the semantic target unbound. Nothing runs or saves.
 **Ctrl-O** opens an App document by path. Edit it, then press **Ctrl-R** to
 publish the exact focused draft in memory using its checked baseline. Run selects
 exactly one eligible zero-argument, read-only document `CandidateEvaluation`
-operation and opens source review. **Enter** explicitly authorizes one invocation;
-opening review does not run it. Missing or ambiguous eligible operations require
-explicit inspection instead. There is no fallback to the selected scratch.
+operation and directly invokes it: the trusted native-host Run gesture authorizes
+the exact captured operation, source identity, version, text, language and empty
+arguments once. No extra Enter is required. Missing or ambiguous eligible
+operations are not auto-selected; capability-requiring operations are not a
+fallback. There is no fallback to the selected scratch.
+
+`Read` is a declared effect, **not a sandbox**: native language providers remain
+trusted host code. This gesture grants no ambient session or agent authority;
+agents retain their separate allowlist. Advanced **Evaluate / inspect** still
+requires explicit capture/review and confirmation before invocation.
 
 **Shift-F5** publishes and checks diagnostics, leaving editor focus in place.
 Neither Run nor Check saves to disk. **Ctrl-S remains Publish**, not disk Save;
 use **Ctrl-G** → **Save** for explicit persistence. Ctrl-G opens actions/help;
 **F1** remains an alias. The primary catalog still exposes advanced actions.
 
-Semantic feedback shows the provider's summary (at most 240 characters), outcome,
-and current/stale source status. Press **d** for **Details**, including full retained
-evidence. Scope does not parse provider prose to infer success or certification.
+Opening an App document from the launcher's conventional default split selects
+the editor-only layout, with a small output strip and a short Open / Run / Quit /
+More footer. Custom layouts are preserved; **F7** still cycles layouts. Direct Run
+leaves editing in place and shows the provider's evaluation summary, or a generic
+completion message for other result types. Source changes and unpublished drafts
+mark retained output stale. Summaries are not truncated, so a verbose provider can
+still fill the strip; focus output to scroll. Use **Ctrl-G** → **Evaluate / inspect**
+for retained evidence and **d** for Details in the modal. Scope does not parse
+provider prose or opaque JSON to infer success or certification.
 Esc cancels pending modal confirmation first, then closes the modal on a subsequent
 Esc. Outside a modal, Esc stays in the App editor workspace; **F2** opens the
 advanced shell. Scratch/legacy Esc still hands off to the shell.
 
 **Ctrl-Q** warns if editor drafts, the App document or the selected scratch are
 dirty. A second Ctrl-Q discards and exits; **Esc** cancels quitting. This is not an
-automatic save. See the [experience status and evidence limits](docs/ux/minimal-programming-experience.md)
+automatic save. See the [UX5 quiet workspace status and evidence limits](docs/ux/quiet-workspace.md)
 for what has and has not been verified.
 
 ### Edit, run, inspect, correct (Script scratch)
@@ -404,9 +417,9 @@ Script runner has no downstream authority, even with a target bound.
 | --- | --- |
 | Ctrl-G / F1 | Search workspace actions/help; Escape cancels; disabled actions explain why. |
 | Ctrl-O | Open an App document by path. |
-| Ctrl-R | Publish focused App draft, then review unique eligible candidate evaluation; Enter confirms one invocation. |
+| Ctrl-R | Publish focused App draft and directly invoke the unique eligible candidate evaluation once. |
 | Shift-F5 | Publish focused App draft and check diagnostics; retain editor focus. |
-| F5 | App editor: publish and open candidate evaluation review; Script scratch: run selected committed Script. |
+| F5 | App editor: same direct Run as Ctrl-R; Script scratch: run selected committed Script. |
 | F3 | Focus previous visible pane. |
 | Alt-Left / Alt-Right | Previous / next retained direct Script result. |
 | F4 | Open command input; Enter submits; Escape or F4 cancels without dispatch. |

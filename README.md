@@ -42,9 +42,10 @@ pinned revision and remote dependency workflow.
 5. Press **F3** to return to editing the same source. **Ctrl-Q** exits Scope.
 
 For an App document, **Ctrl-O** opens a path and **Ctrl-R** publishes the exact
-editor draft in memory, then opens source review for the unique eligible candidate
-evaluation. **Enter** explicitly confirms one invocation; Run is unavailable when
-there is no unique eligible operation. **Shift-F5** publishes and checks diagnostics
+editor draft in memory, then directly invokes the unique eligible candidate
+evaluation. This trusted native-host Run gesture authorizes that exact request
+once; no extra Enter is required. Run is unavailable when there is no unique
+eligible operation. **Shift-F5** publishes and checks diagnostics
 without moving editor focus. These require the corresponding language services;
 they do not turn the pure Script runner into a downstream runtime. Use **Ctrl-G**
 for actions/help (**F1** is an alias), including explicit **Save** to disk.
@@ -59,8 +60,14 @@ Ctrl-S is **not a disk save**; it still publishes in memory. Startup filesystem
 access is read-only; pure Script runs with no host providers or native authority.
 Agent compilation, discovery, and proposal acceptance do not grant authorization.
 
-The [minimal programming experience status](docs/ux/minimal-programming-experience.md)
-records the App controls, safety boundaries and remaining verification/usability gaps.
+Opening an App document in the conventional default layout selects the quiet
+editor-only view with a small output strip. **Ctrl-G** exposes advanced actions;
+**F7** still cycles layouts. Advanced **Evaluate / inspect** retains confirmation.
+`Read` describes an operation's declared effect, not a sandbox; native providers
+are trusted host code. Agent invocation still requires its separate allowlist.
+
+The [UX5 quiet workspace status](docs/ux/quiet-workspace.md) records current
+controls, authorization boundaries and incomplete verification/usability evidence.
 The [canonical quickstart](docs/quickstart.md) explains the contexts, draft/run
 boundaries, shell transitions, and saved-file execution. `cargo run -- --help`
 shows the supported CLI; `cargo run -- --version` reports the binary version.
