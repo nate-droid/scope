@@ -4,8 +4,9 @@ Local observations on 2026-11-01, macOS arm64, Rust/Cargo 1.97.1. These are
 bounded development-loop measurements, not release benchmarks. Follow the
 [verification contract](verification.md); this audit does not replace Full.
 
-For the current workflow, consolidated historical measurements and a refreshed
-artifact-presence inventory, see the [DX3 development-loop audit](development-loop.md).
+For the current workflow, follow the [verification policy](verification.md).
+For consolidated historical measurements and a dated artifact-presence inventory,
+see the [DX3 development-loop audit](development-loop.md).
 The sizes and raw-output locations below are historical snapshots, not a claim
 that those files still exist or that those bytes are reclaimable today.
 

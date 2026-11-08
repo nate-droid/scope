@@ -38,10 +38,10 @@ impl AgentTurnStore {
         let value = serde_json::to_value(turn)
             .map_err(|error| PublishError::Serialization(error.to_string()))?;
         let mut turns = self.0.write().map_err(|_| PublishError::Poisoned)?;
-        if let Some(previous) = turns.get(&turn.id()) {
-            if !extends(previous, &value) {
-                return Err(PublishError::ContradictorySnapshot { id: turn.id() });
-            }
+        if let Some(previous) = turns.get(&turn.id())
+            && !extends(previous, &value)
+        {
+            return Err(PublishError::ContradictorySnapshot { id: turn.id() });
         }
         turns.insert(
             turn.id(),

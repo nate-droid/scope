@@ -1,8 +1,8 @@
 # Minimal programming experience: implementation and evidence
 
-> H4 historical report below. See the [H4a follow-up](h4a-follow-up.md) for
-> current controls, regression diagnosis, final focused evidence and remaining
-> Full verification gaps.
+> Historical H4 report below; its review-before-Run controls are not current.
+> See [Quiet workspace](quiet-workspace.md) for current controls, authorization
+> boundaries, verification evidence and remaining gaps.
 
 ## Scope and baseline
 

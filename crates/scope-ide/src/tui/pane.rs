@@ -3,6 +3,66 @@ use ratatui::layout::Rect;
 
 use crate::app::App;
 
+/// Immutable editor evidence, not a committed source or execution capability.
+/// Equality includes an edit identity: even undoing to identical text invalidates old evidence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EditorDraftSnapshot {
+    pub baseline: super::ScratchEditSnapshot,
+    pub text: String,
+    pub edit_identity: u64,
+    pub editor: String,
+    pub editor_generation: u64,
+    pub selection_identity: u64,
+    pub source_selection_identity: u64,
+    pub owner_binding_generation: u64,
+}
+
+/// Resolution never substitutes another editor for a retained invalid selection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EditorDraftOutcome {
+    Available(EditorDraftSnapshot),
+    NoMatchingEditor,
+    Ambiguous,
+    Conflict,
+}
+
+/// Host freshness, independent of the downstream mathematical result.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CheckCurrentness {
+    Current,
+    Historical,
+    NoEvidence,
+    ValidationUnavailable,
+}
+
+/// A host-produced presentation-time validation, not a reusable authorization.
+/// Only Scope can populate this view. Retain feedback with the invocation token
+/// obtained in `AnalysisContext::invocation_id`, never with draft text alone.
+#[derive(Clone, Debug)]
+pub struct CheckPresentation {
+    pub(super) invocation: Option<crate::analysis::CheckInvocationId>,
+    pub(super) status: CheckCurrentness,
+}
+
+impl CheckPresentation {
+    /// Status of this exact feedback invocation. Superseded feedback is historical.
+    pub fn for_invocation(
+        &self,
+        invocation: &crate::analysis::CheckInvocationId,
+    ) -> CheckCurrentness {
+        if self.invocation.as_ref() == Some(invocation) {
+            self.status
+        } else {
+            CheckCurrentness::Historical
+        }
+    }
+
+    /// Status of the host's latest evidence (not of arbitrary pane feedback).
+    pub fn status(&self) -> CheckCurrentness {
+        self.status
+    }
+}
+
 /// Read-only context exposed to TUI panes while rendering.
 pub struct TuiContext<'a> {
     app: &'a App,
@@ -11,17 +71,24 @@ pub struct TuiContext<'a> {
     scroll: u16,
     editor_drafts: bool,
     app_editor: bool,
+    current_draft: EditorDraftOutcome,
+    check: CheckPresentation,
 }
 
 impl<'a> TuiContext<'a> {
     pub fn new(app: &'a App) -> Self {
         Self {
             app,
+            check: CheckPresentation {
+                invocation: None,
+                status: CheckCurrentness::ValidationUnavailable,
+            },
             sources: None,
             focused: false,
             scroll: 0,
             editor_drafts: false,
             app_editor: false,
+            current_draft: EditorDraftOutcome::NoMatchingEditor,
         }
     }
 
@@ -37,12 +104,53 @@ impl<'a> TuiContext<'a> {
     ) -> Self {
         Self {
             app,
+            check: CheckPresentation {
+                invocation: None,
+                status: CheckCurrentness::ValidationUnavailable,
+            },
             sources,
             focused,
             scroll,
             editor_drafts: false,
             app_editor: false,
+            current_draft: EditorDraftOutcome::NoMatchingEditor,
         }
+    }
+
+    /// Host validation for this presentation only; do not cache a Current status.
+    pub fn check_presentation(&self) -> &CheckPresentation {
+        &self.check
+    }
+
+    pub(super) fn with_check_presentation(mut self, check: CheckPresentation) -> Self {
+        self.check = check;
+        self
+    }
+
+    /// Available selected editor evidence. Compare the entire value before reusing results.
+    /// Use `current_draft_outcome` to distinguish missing, ambiguous and conflicting editors.
+    pub fn current_draft(&self) -> Option<&EditorDraftSnapshot> {
+        match &self.current_draft {
+            EditorDraftOutcome::Available(draft) => Some(draft),
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_current_draft(self, draft: Option<EditorDraftSnapshot>) -> Self {
+        self.with_draft_outcome(draft.map_or(
+            EditorDraftOutcome::NoMatchingEditor,
+            EditorDraftOutcome::Available,
+        ))
+    }
+
+    pub fn current_draft_outcome(&self) -> &EditorDraftOutcome {
+        &self.current_draft
+    }
+
+    pub(super) fn with_draft_outcome(mut self, outcome: EditorDraftOutcome) -> Self {
+        self.current_draft = outcome;
+        self
     }
 
     /// Resolves the supplied owner's binding to a read-only source snapshot.
@@ -70,11 +178,6 @@ impl<'a> TuiContext<'a> {
     pub(super) fn with_app_editor(mut self, enabled: bool) -> Self {
         self.app_editor = enabled;
         self
-    }
-
-    /// Whether this editable pane targets App rather than the selected scratch.
-    pub(super) fn is_app_editor(&self) -> bool {
-        self.app_editor
     }
 
     /// Current editor target, without granting publication authority.
@@ -176,6 +279,11 @@ impl<'a> TuiContextMut<'a> {
 /// Downstream consumers can implement this trait to add project-specific views
 /// while reusing Scope's terminal runtime, application state, and default panes.
 pub trait Pane {
+    /// Read-only local editor snapshot for an exact baseline; no publication authority.
+    fn editor_draft(&self, _baseline: &super::ScratchEditSnapshot) -> Option<EditorDraftSnapshot> {
+        None
+    }
+
     /// Whether execution would overlook an uncommitted local source draft.
     fn has_dirty_draft(&self) -> bool {
         false

@@ -25,7 +25,10 @@ mod workbench;
 #[cfg(feature = "tools")]
 pub use workbench::WorkbenchPane;
 
-pub use pane::{Pane, TuiContext, TuiContextMut};
+pub use pane::{
+    CheckCurrentness, CheckPresentation, EditorDraftOutcome, EditorDraftSnapshot, Pane, TuiContext,
+    TuiContextMut,
+};
 pub use panes::{DocumentPane, FilesPane, LanguagePane};
 
 use session::TerminalSession;

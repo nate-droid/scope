@@ -520,6 +520,10 @@ fn run_session_inner(
 
 /// Live sanitized lifecycle notifications, including a terminal snapshot on errors.
 /// Cancellation is checked around blocking calls, never interrupts them.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Preserve the public runner API with explicit policy, source binding, cancellation and observation"
+)]
 pub fn run_session_observed(
     model: &mut (impl DecisionModel + ?Sized),
     session: &mut AgentSession<'_>,
@@ -803,18 +807,18 @@ fn execute_session(
             "messages":messages.iter().map(|m| json!({"role":m.role,"content":m.content})).collect::<Vec<_>>(),
             "max_tokens":limits.max_tokens_per_decision, "settings":model.trace_settings()}));
         cancelled!();
-        if run.decisions == 1 {
-            if let Some((packet_bytes, initial_message_bytes)) = supplied_bytes {
-                // Notify with the model response, not between the final cancellation
-                // check and dispatch: callbacks can themselves request cancellation.
-                lifecycle
-                    .turn
-                    .record(AgentEvidence::ContextSupplied {
-                        packet_bytes,
-                        initial_message_bytes,
-                    })
-                    .expect("context delivery evidence");
-            }
+        if run.decisions == 1
+            && let Some((packet_bytes, initial_message_bytes)) = supplied_bytes
+        {
+            // Notify with the model response, not between the final cancellation
+            // check and dispatch: callbacks can themselves request cancellation.
+            lifecycle
+                .turn
+                .record(AgentEvidence::ContextSupplied {
+                    packet_bytes,
+                    initial_message_bytes,
+                })
+                .expect("context delivery evidence");
         }
         let response = model.decide(&messages, limits.max_tokens_per_decision);
         lifecycle.record(AgentEvidence::ModelResponse {

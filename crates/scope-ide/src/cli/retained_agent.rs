@@ -155,6 +155,10 @@ pub fn run_retained_scratch_agent<'a>(
 
 /// Retained runner with cooperative cancellation and authoritative lifecycle snapshots.
 /// The callback also observes failed/cancelled turns when no successful run is returned.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Preserve the public retained runner API with explicit source, authorization, cancellation and observation"
+)]
 pub fn run_retained_scratch_agent_observed<'a>(
     source: &'a ScratchBuffer,
     service: &dyn LanguageService,
@@ -183,6 +187,10 @@ pub fn run_retained_scratch_agent_observed<'a>(
 /// Authorization is opaque: the allowlist is only a ceiling, not a permission grant.
 /// Captures the source-binding trace event, but rich protocol tracing is unsupported
 /// for this branch. Lifecycle snapshots and bounded trace forwarding remain available.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Preserve the public retained runner API with explicit source, authorization, cancellation and observation"
+)]
 pub fn run_retained_scratch_agent_semantic_observed<'a>(
     source: &'a ScratchBuffer,
     service: &dyn LanguageService,
@@ -210,6 +218,10 @@ pub fn run_retained_scratch_agent_semantic_observed<'a>(
 
 /// Semantic retained run with explicit, bounded host-selected verification output.
 /// Uses the same semantic context and authorization as the non-projecting path.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Preserve the public retained runner API with explicit source, authorization, cancellation and observation"
+)]
 pub fn run_retained_scratch_agent_verification_observed<'a>(
     source: &'a ScratchBuffer,
     service: &dyn LanguageService,
@@ -236,6 +248,10 @@ pub fn run_retained_scratch_agent_verification_observed<'a>(
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Forward the public runner inputs and optional context/projection without changing their ownership or authorization"
+)]
 fn run_retained_scratch_agent_inner<'a>(
     source: &'a ScratchBuffer,
     service: &dyn LanguageService,

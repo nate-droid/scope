@@ -80,6 +80,32 @@ impl std::error::Error for ScratchError {
     }
 }
 
+/// Host-only evidence. Arc identity is the binding generation; paths and revisions
+/// are never used to authenticate it. The grant exposes no write operations.
+#[allow(dead_code)]
+#[derive(Debug)]
+pub(crate) struct SourceOrigin {
+    owner: SourceId,
+    path: ScopePath,
+    grant: crate::workspace::SourceReadGrant,
+}
+
+#[cfg(feature = "tui")]
+impl SourceOrigin {
+    pub(crate) fn path(&self) -> &ScopePath {
+        &self.path
+    }
+
+    /// Cell may read one extra byte to detect content exceeding this limit.
+    pub(crate) fn read_bounded(
+        &self,
+        path: &ScopePath,
+        max_bytes: usize,
+    ) -> Result<crate::workspace::RevisionedWorkspaceFile, cell_capability_fs::FsError> {
+        self.grant.read_document_source_bounded(path, max_bytes)
+    }
+}
+
 #[derive(Debug)]
 struct Destination {
     root: String,
@@ -96,9 +122,26 @@ pub struct ScratchBuffer {
     dirty: bool,
     version: u64,
     destination: Option<Destination>,
+    origin: Option<std::sync::Arc<SourceOrigin>>,
 }
 
 impl ScratchBuffer {
+    fn establish_origin(&mut self, workspace: &Workspace) {
+        self.origin = self.destination.as_ref().map(|destination| {
+            std::sync::Arc::new(SourceOrigin {
+                owner: self.source_id.clone(),
+                path: destination.path.clone(),
+                grant: workspace.source_read_grant(),
+            })
+        });
+    }
+
+    fn has_grant(&self, workspace: &Workspace) -> bool {
+        self.origin
+            .as_ref()
+            .is_some_and(|origin| origin.grant.same_grant(&workspace.source_read_grant()))
+    }
+
     pub fn id(&self) -> u64 {
         self.id
     }
@@ -145,6 +188,7 @@ impl ScratchBuffer {
         if self.dirty && !discard {
             return Err(ScratchError::UnsavedChanges(self.id));
         }
+        let grant_matches = self.has_grant(workspace);
         let destination = self
             .destination
             .as_ref()
@@ -165,6 +209,9 @@ impl ScratchBuffer {
             .checked_add(1)
             .expect("scratch version exhausted");
         self.dirty = false;
+        if !grant_matches {
+            self.origin = None;
+        }
         Ok(())
     }
 
@@ -210,6 +257,7 @@ impl ScratchBuffer {
             path,
             revision: file.revision,
         });
+        self.establish_origin(workspace);
         Ok(())
     }
 
@@ -218,7 +266,7 @@ impl ScratchBuffer {
     pub fn promote(&mut self, workspace: &Workspace, path: &str) -> Result<(), ScratchError> {
         self.dirty = true;
         let same_destination = self.destination.as_ref().is_some_and(|destination| {
-            destination.root == workspace.root() && destination.path.as_str() == path
+            self.has_grant(workspace) && destination.path.as_str() == path
         });
         if !same_destination {
             self.bind_destination(workspace, path)?;
@@ -230,6 +278,7 @@ impl ScratchBuffer {
     /// preserves the destination and baseline. Persistence does not edit version.
     pub fn save(&mut self, workspace: &Workspace) -> Result<(), ScratchError> {
         self.dirty = true;
+        let grant_matches = self.has_grant(workspace);
         let destination = self
             .destination
             .as_mut()
@@ -248,6 +297,9 @@ impl ScratchBuffer {
         )?;
         destination.revision = revision;
         self.dirty = false;
+        if !grant_matches {
+            self.origin = None;
+        }
         Ok(())
     }
 }
@@ -278,6 +330,7 @@ fn checked_save(
 pub struct ScratchBuffers {
     buffers: Vec<ScratchBuffer>,
     selected: Option<u64>,
+    selection_identity: u64,
     semantic_target: Option<u64>,
     next_id: u64,
 }
@@ -292,6 +345,35 @@ pub enum BoundSource {
 }
 
 impl ScratchBuffers {
+    /// Future analysis seam: validate against the live owner, never a displayed path.
+    /// A borrow of the collection pins closure/rebinding for the returned lifetime.
+    #[allow(dead_code)]
+    pub(crate) fn validate_origin<'a>(
+        &'a self,
+        owner: &SourceId,
+        evidence: &std::sync::Arc<SourceOrigin>,
+    ) -> Option<&'a SourceOrigin> {
+        let source = self
+            .buffers
+            .iter()
+            .find(|source| &source.source_id == owner)?;
+        let current = source.origin.as_ref()?;
+        (current.owner == *owner && std::sync::Arc::ptr_eq(current, evidence))
+            .then_some(current.as_ref())
+    }
+
+    #[cfg(feature = "tui")]
+    pub(crate) fn owner(&self, owner: &SourceId) -> Option<&ScratchBuffer> {
+        self.buffers
+            .iter()
+            .find(|source| source.evaluation_source_id() == owner)
+    }
+
+    #[cfg(feature = "tui")]
+    pub(crate) fn owner_origin(&self, owner: &SourceId) -> Option<&std::sync::Arc<SourceOrigin>> {
+        self.owner(owner)?.origin.as_ref()
+    }
+
     /// Captures identity, revision and exact text under one immutable owner borrow.
     /// Selection is deliberately independent from this binding.
     pub fn bound_source(&self) -> BoundSource {
@@ -348,12 +430,12 @@ impl ScratchBuffers {
             .iter()
             .find(|buffer| {
                 buffer.destination.as_ref().is_some_and(|destination| {
-                    destination.root == workspace.root() && destination.path == path
+                    buffer.has_grant(workspace) && destination.path == path
                 })
             })
             .map(|buffer| buffer.id)
         {
-            self.selected = Some(id);
+            self.select(id)?;
             return Ok(id);
         }
         let file = workspace
@@ -370,6 +452,7 @@ impl ScratchBuffers {
             path,
             revision: file.revision,
         });
+        buffer.establish_origin(workspace);
         buffer.dirty = false;
         Ok(id)
     }
@@ -390,16 +473,20 @@ impl ScratchBuffers {
         if let Some(other) = self.buffers.iter().find(|buffer| {
             buffer.id != id
                 && buffer.destination.as_ref().is_some_and(|destination| {
-                    destination.root == workspace.root() && destination.path == path
+                    buffer.has_grant(workspace) && destination.path == path
                 })
         }) {
             return Err(ScratchError::AlreadyOpen(other.id));
         }
         let buffer = self.selected_mut()?;
-        if buffer.destination.as_ref().is_some_and(|destination| {
-            destination.root == workspace.root() && destination.path == path
-        }) {
-            return buffer.save(workspace);
+        if buffer
+            .destination
+            .as_ref()
+            .is_some_and(|destination| buffer.has_grant(workspace) && destination.path == path)
+        {
+            buffer.save(workspace)?;
+            buffer.establish_origin(workspace);
+            return Ok(());
         }
         let revision = match workspace.read_document_source(&path) {
             Ok(file) => checked_save(workspace, &path, buffer.text(), &file.revision)?,
@@ -413,6 +500,7 @@ impl ScratchBuffers {
             path,
             revision,
         });
+        buffer.establish_origin(workspace);
         buffer.dirty = false;
         Ok(())
     }
@@ -436,8 +524,9 @@ impl ScratchBuffers {
             dirty: true,
             version: 0,
             destination: None,
+            origin: None,
         });
-        self.selected = Some(id);
+        self.set_selected(Some(id));
         id
     }
     pub fn list(&self) -> impl Iterator<Item = &ScratchBuffer> {
@@ -475,13 +564,29 @@ impl ScratchBuffers {
         if !self.buffers.iter().any(|buffer| buffer.id == id) {
             return Err(ScratchError::UnknownBuffer(id));
         }
-        self.selected = Some(id);
+        self.set_selected(Some(id));
         Ok(())
     }
+    /// Changes even for an unobserved A → B → A selection round trip.
+    #[cfg(feature = "tui")]
+    pub(crate) fn selection_identity(&self) -> u64 {
+        self.selection_identity
+    }
+
+    fn set_selected(&mut self, selected: Option<u64>) {
+        if self.selected != selected {
+            self.selection_identity = self
+                .selection_identity
+                .checked_add(1)
+                .expect("source selections exhausted");
+            self.selected = selected;
+        }
+    }
+
     pub fn discard_selected(&mut self) -> Result<(), ScratchError> {
         let id = self.selected()?.id;
         self.buffers.retain(|buffer| buffer.id != id);
-        self.selected = self.buffers.last().map(|buffer| buffer.id);
+        self.set_selected(self.buffers.last().map(|buffer| buffer.id));
         Ok(())
     }
 }
@@ -498,6 +603,92 @@ mod tests {
         text::{Position, TextRange},
     };
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn origin_binding_lifecycle_and_retained_access() {
+        let root = TempWorkspace::new("origin_binding");
+        root.write_file("a.txt", "alpha");
+        root.write_file("b.txt", "beta");
+        let workspace = root.workspace();
+        let replacement = root.workspace();
+        let registry = LanguageRegistry::default();
+        let mut buffers = ScratchBuffers::default();
+        buffers.create("text", "draft");
+        assert!(buffers.selected().unwrap().origin.is_none());
+        let id = buffers.open(&workspace, &registry, "a.txt").unwrap();
+        let owner = buffers.selected().unwrap().source_id.clone();
+        let first = buffers.selected().unwrap().origin.clone().unwrap();
+        assert!(buffers.validate_origin(&owner, &first).is_some());
+        assert_eq!(first.path.as_str(), "a.txt");
+        assert!(first.grant.same_grant(&workspace.source_read_grant()));
+        assert!(!first.grant.same_grant(&replacement.source_read_grant()));
+        assert_eq!(
+            first
+                .grant
+                .read_document_source(&first.path)
+                .unwrap()
+                .contents,
+            "alpha"
+        );
+        let selection = buffers.selection_identity;
+        buffers
+            .selected_mut()
+            .unwrap()
+            .bind_destination(&workspace, "a.txt")
+            .unwrap();
+        assert!(buffers.validate_origin(&owner, &first).is_none());
+        let second = buffers.selected().unwrap().origin.clone().unwrap();
+        assert_eq!(buffers.selected().unwrap().source_id, owner);
+        assert_eq!(buffers.selected().unwrap().version(), 0);
+        assert_eq!(buffers.selection_identity, selection);
+        assert!(
+            buffers
+                .selected_mut()
+                .unwrap()
+                .bind_destination(&workspace, "missing")
+                .is_err()
+        );
+        assert!(buffers.validate_origin(&owner, &second).is_some());
+        buffers
+            .selected_mut()
+            .unwrap()
+            .bind_destination(&replacement, "b.txt")
+            .unwrap();
+        assert!(buffers.validate_origin(&owner, &second).is_none());
+        let third = buffers.selected().unwrap().origin.clone().unwrap();
+        assert!(third.grant.same_grant(&replacement.source_read_grant()));
+        let other = buffers.open(&workspace, &registry, "b.txt").unwrap();
+        assert_ne!(other, id);
+        let other_owner = buffers.selected().unwrap().source_id.clone();
+        assert!(buffers.validate_origin(&other_owner, &third).is_none());
+        buffers.select(id).unwrap();
+        buffers.save_as_selected(&replacement, "b.txt").unwrap();
+        assert!(buffers.validate_origin(&owner, &third).is_none());
+        let saved = buffers.selected().unwrap().origin.clone().unwrap();
+        buffers.close_selected(false).unwrap();
+        assert!(buffers.validate_origin(&owner, &saved).is_none());
+        let reopened = buffers.open(&replacement, &registry, "b.txt").unwrap();
+        assert_ne!(reopened, id);
+        assert_ne!(buffers.selected().unwrap().source_id, owner);
+        assert!(buffers.validate_origin(&owner, &saved).is_none());
+        // A forged owner/grant combination cannot match the private generation.
+        let forged = std::sync::Arc::new(SourceOrigin {
+            owner: buffers.selected().unwrap().source_id.clone(),
+            path: saved.path.clone(),
+            grant: workspace.source_read_grant(),
+        });
+        assert!(buffers.validate_origin(&forged.owner, &forged).is_none());
+        drop(workspace);
+        drop(replacement);
+        assert_eq!(
+            saved
+                .grant
+                .read_document_source(&saved.path)
+                .unwrap()
+                .contents,
+            "alpha"
+        );
+    }
 
     #[cfg(unix)]
     #[test]

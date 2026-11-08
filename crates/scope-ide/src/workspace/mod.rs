@@ -14,7 +14,62 @@ pub struct Workspace {
     root: String,
     writable: bool,
     fs: cell_capability_fs::Workspace,
+    source_read_grant: SourceReadGrant,
     cell: std::sync::Arc<cell::Cell>,
+}
+
+/// Retains the original Cell grant, but exposes only document-source reads.
+#[derive(Clone, Debug)]
+pub(crate) struct SourceReadGrant(std::sync::Arc<SourceReadGrantInner>);
+
+#[derive(Debug)]
+struct SourceReadGrantInner {
+    fs: cell_capability_fs::Workspace,
+}
+
+impl SourceReadGrant {
+    pub(crate) fn read_document_source(
+        &self,
+        path: &ScopePath,
+    ) -> Result<RevisionedWorkspaceFile, cell_capability_fs::FsError> {
+        let cell_path = if path.as_str() == "." {
+            DEFAULT_MOUNT_NAME.to_string()
+        } else {
+            format!("{DEFAULT_MOUNT_NAME}/{}", path.as_str())
+        };
+        let file = self.0.fs.read_text_revision(cell_path)?;
+        Ok(RevisionedWorkspaceFile {
+            path: path.clone(),
+            contents: file.contents,
+            revision: file.revision,
+        })
+    }
+
+    /// Bounds retained content; Cell may read one additional overflow-probe byte.
+    #[cfg(feature = "tui")]
+    pub(crate) fn read_document_source_bounded(
+        &self,
+        path: &ScopePath,
+        max_bytes: usize,
+    ) -> Result<RevisionedWorkspaceFile, cell_capability_fs::FsError> {
+        let cell_path = if path.as_str() == "." {
+            DEFAULT_MOUNT_NAME.to_string()
+        } else {
+            format!("{DEFAULT_MOUNT_NAME}/{}", path.as_str())
+        };
+        let file = self.0.fs.read_text_revision_bounded(cell_path, max_bytes)?;
+        Ok(RevisionedWorkspaceFile {
+            path: path.clone(),
+            contents: file.contents,
+            revision: file.revision,
+        })
+    }
+
+    /// Identity is shared by clones, never inferred from a root path.
+    #[allow(dead_code)] // Reserved for the private document-source seam.
+    pub(crate) fn same_grant(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 impl std::fmt::Debug for Workspace {
@@ -59,6 +114,9 @@ impl Workspace {
         Ok(Self {
             root,
             writable,
+            source_read_grant: SourceReadGrant(std::sync::Arc::new(SourceReadGrantInner {
+                fs: fs.clone(),
+            })),
             fs,
             cell: std::sync::Arc::new(cell),
         })
@@ -134,17 +192,17 @@ impl Workspace {
             })
     }
 
+    #[allow(dead_code)] // Reserved for the private document-source seam.
+    pub(crate) fn source_read_grant(&self) -> SourceReadGrant {
+        self.source_read_grant.clone()
+    }
+
     /// Read a confined text file while preserving Cell's structured filesystem errors.
     pub fn read_document_source(
         &self,
         path: &ScopePath,
     ) -> Result<RevisionedWorkspaceFile, cell_capability_fs::FsError> {
-        let file = self.fs.read_text_revision(self.cell_path(path))?;
-        Ok(RevisionedWorkspaceFile {
-            path: path.clone(),
-            contents: file.contents,
-            revision: file.revision,
-        })
+        self.source_read_grant.read_document_source(path)
     }
 
     /// Exclusively create through Cell's writable mount and return its revision.
@@ -404,6 +462,37 @@ mod tests {
     use crate::test_support::TempWorkspace;
     #[cfg(unix)]
     use crate::test_support::symlink_workspace;
+
+    #[test]
+    fn source_read_grant_retains_reads_and_clone_identity() {
+        let root = TempWorkspace::new("source_read_grant");
+        let workspace = root.workspace();
+        let path = "source.txt".to_scope_path().unwrap();
+        workspace.save_file(&path, "original").unwrap();
+        let grant = workspace.source_read_grant();
+        assert!(grant.same_grant(&grant.clone()));
+        assert!(grant.same_grant(&workspace.source_read_grant()));
+        assert!(grant.same_grant(&workspace.clone().source_read_grant()));
+        assert!(!grant.same_grant(&root.workspace().source_read_grant()));
+        assert!(
+            !grant.same_grant(
+                &Workspace::read_only(root.root().to_string_lossy())
+                    .unwrap()
+                    .source_read_grant()
+            )
+        );
+        let expected = workspace.read_document_source(&path).unwrap();
+        drop(workspace);
+        let actual = grant.read_document_source(&path).unwrap();
+        assert_eq!(actual.path, expected.path);
+        assert_eq!(actual.contents, "original");
+        assert_eq!(actual.revision, expected.revision);
+        assert!(
+            grant
+                .read_document_source(&"missing.txt".to_scope_path().unwrap())
+                .is_err()
+        );
+    }
 
     #[test]
     fn lists_installed_capabilities_for_both_write_policies() {

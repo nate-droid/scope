@@ -110,10 +110,10 @@ Follow-up: the [DX2 source-proposal measurements](source-proposal-pty-performanc
 reduce the first workload below from about 224 s to 144 s using scenario-local
 F4 entry synchronization. The figures below retain this audit's original baseline.
 
-1. **Source-proposal launcher: 223.83 s.** Highest-impact follow-up: profile its
-   repeated F4/pane/redraw transitions and add fresh, bounded mode-specific waits.
-   Preserve exact revisions, stale-source rejection, duplicate acceptance,
-   unchanged disk and exit assertions. Do not infer full frames from title text.
+1. **Source-proposal launcher: 223.83 s historical baseline.** The linked
+   source-proposal report records the completed F4 synchronization work, retained
+   revision/rejection/disk/exit assertions, and remaining follow-up constraints.
+   Do not infer full frames from title text.
 2. **Configured-agent launcher: 86.41 s.** Separate model-fixture delay, mode
    switching and deliberate pending/rejection windows before optimizing. Loopback
    permissions are required; no external endpoint is needed.

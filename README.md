@@ -45,7 +45,7 @@ For an App document, **Ctrl-O** opens a path and **Ctrl-R** publishes the exact
 editor draft in memory, then directly invokes the unique eligible candidate
 evaluation. This trusted native-host Run gesture authorizes that exact request
 once; no extra Enter is required. Run is unavailable when there is no unique
-eligible operation. **Shift-F5** publishes and checks diagnostics
+eligible operation. **Ctrl-T** (Alt-Enter / Shift-F5 aliases) publishes and checks diagnostics
 without moving editor focus. These require the corresponding language services;
 they do not turn the pure Script runner into a downstream runtime. Use **Ctrl-G**
 for actions/help (**F1** is an alias), including explicit **Save** to disk.

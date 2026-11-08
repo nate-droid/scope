@@ -159,7 +159,7 @@ class Workspace:
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
             screen = self.read()
-            if 'F4 command' in screen or ('┌editor' in screen and 'F1 actions' in screen):
+            if '┌editor' in screen and 'Ctrl-O open' in screen:
                 return screen
         raise AssertionError('workspace did not redraw after resize:\n' + self.screen.text())
 
@@ -203,6 +203,19 @@ class Workspace:
 
 
 class WorkspaceTests(unittest.TestCase):
+    def assert_editor_focused(self, ui):
+        # Empty paste materializes a cursor even for an untouched/canceled draft,
+        # without changing source text or moving an existing cursor. Other panes
+        # cannot satisfy this check merely by containing matching source text.
+        ui.paste('')
+        rows = ui.screen.cells
+        self.assertTrue(''.join(rows[0]).startswith('┌editor'))
+        right = rows[0].index('┐')
+        bottom = next(i for i, row in enumerate(rows[1:], 1) if row[0] == '└')
+        self.assertGreater(ui.wire.rfind(b'\x1b[?25h'), ui.wire.rfind(b'\x1b[?25l'))
+        self.assertTrue(0 < ui.screen.row < bottom, ui.screen.text())
+        self.assertTrue(0 < ui.screen.col < right, ui.screen.text())
+
     def test_workspace_direct_action_workflow(self):
         ui = Workspace(BINARY)
         self.addCleanup(ui.close)
@@ -216,7 +229,7 @@ class WorkspaceTests(unittest.TestCase):
         initial_leaves = ui.wire.count(b'\x1b[?1049l')
 
         def editor_focused():
-            self.assertIn('FOCUSED', ui.screen.text().splitlines()[1])
+            self.assert_editor_focused(ui)
 
         def output_lines():
             # Read each output row via single-line scrolling; no transcript
@@ -268,7 +281,7 @@ class WorkspaceTests(unittest.TestCase):
         ui.send(b'\x1b[15~')  # xterm F5: direct run, not shell command
         editor_focused()
         ui.action('Focus output')
-        self.assertNotIn('FOCUSED', ui.screen.text().splitlines()[1])
+        self.assertGreater(ui.wire.rfind(b'\x1b[?25l'), ui.wire.rfind(b'\x1b[?25h'))
         success = output_lines()
         revisions = {re.search(r'revision RevisionId\((\d+)\)', success).group(1)}
         self.assertIn('Result 1/1', success)
@@ -348,7 +361,9 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(ui.wire.count(b'\x1b[?1049l'), initial_leaves)
         self.assertEqual(list(Path(ui.workspace.name).rglob('*')), [])
 
+        # Unsaved in-memory source requires explicit discard confirmation.
         # Normal exit must restore the terminal, not just terminate the child.
+        self.assertIn('Unsaved work: Ctrl-Q again', ui.send(b'\x11'))
         ui.send(b'\x11')
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
@@ -404,7 +419,7 @@ class WorkspaceTests(unittest.TestCase):
         while 'F4 command' not in screen and time.monotonic() < deadline:
             screen = ui.read()
         self.assertEqual(ui.wire.count(b'\x1b[?1049h'), enters + 1)
-        self.assertIn('FOCUSED', screen.splitlines()[1])
+        self.assert_editor_focused(ui)
         self.assertIn(f'Selected scratch {selected}', screen)
         self.assertIn(f'Revision: RevisionId({revision})', screen)
 
@@ -421,6 +436,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(list(Path(ui.workspace.name).rglob('*')), [])
 
         exit_start = len(ui.wire)
+        self.assertIn('Unsaved work: Ctrl-Q again', ui.send(b'\x11'))
         ui.send(b'\x11')
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
@@ -449,7 +465,7 @@ class WorkspaceTests(unittest.TestCase):
         deadline = time.monotonic() + 10
         while 'F4 command' not in screen and time.monotonic() < deadline:
             screen = ui.read()
-        self.assertIn('FOCUSED', screen)
+        self.assert_editor_focused(ui)
         self.assertIn('Read-only inspector', screen)
         self.assertIn('Semantic target: unbound', screen)
         original = re.search(r'Selected scratch (\d+)', screen).group(1)
@@ -459,12 +475,12 @@ class WorkspaceTests(unittest.TestCase):
         marker = 'original雪😀'
         ui.paste(marker + '\n:scope script run')
         self.assertIn(marker, ui.screen.text())
-        self.assertIn('LOCAL DRAFT', ui.screen.text())
+        self.assertIn('Local draft', ui.screen.text())
         ui.command('pane inspector')
         ui.paste('READONLY_SENTINEL')
         self.assertNotIn('READONLY_SENTINEL', ui.screen.text())
         ui.command('pane last')
-        self.assertIn('FOCUSED', ui.screen.text().splitlines()[1])
+        self.assert_editor_focused(ui)
 
         # This exact grammar must reach the existing scratch parser, not a new
         # workspace shorthand. The reported live ID is used rather than assumed.
@@ -474,7 +490,7 @@ class WorkspaceTests(unittest.TestCase):
         ui.command('pane last')
         ui.paste('print("script雪😀"); 42')
         ui.send(b'\x13')  # Ctrl-S commits the selected Script, not semantic target.
-        self.assertIn('committed to', ui.screen.text())
+        self.assertIn('Published in memory', ui.screen.text())
         self.assertIn('Committed text:', ui.screen.text())
         ui.command(':scope script run')
         ui.output_containing('commit or cancel all editor drafts')
@@ -492,7 +508,7 @@ class WorkspaceTests(unittest.TestCase):
         ui.output_containing('print: "script雪😀"')
         ui.output_containing('status: interpreter success')
         ui.command('pane editor')
-        self.assertIn('FOCUSED', ui.screen.text().splitlines()[1])
+        self.assert_editor_focused(ui)
 
         # Canceling F4 input must not execute it or insert it in the editor.
         ui.send(b'\x1bOS')
@@ -519,6 +535,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertNotIn('missing;', ui.screen.text())
         self.assertIn('Semantic target: unbound', ui.screen.text())
         self.assertEqual(list(Path(ui.workspace.name).rglob('*')), [])
+        self.assertIn('Unsaved work: Ctrl-Q again', ui.send(b'\x11'))
         ui.send(b'\x11')
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:

@@ -285,7 +285,9 @@ trusted host code. This gesture grants no ambient session or agent authority;
 agents retain their separate allowlist. Advanced **Evaluate / inspect** still
 requires explicit capture/review and confirmation before invocation.
 
-**Shift-F5** publishes and checks diagnostics, leaving editor focus in place.
+**Ctrl-T** publishes and checks diagnostics, leaving editor focus in place.
+**Alt-Enter** and **Shift-F5** remain aliases. The quiet App view shows **No errors**
+when clean, or diagnostic locations and messages without the technical header.
 Neither Run nor Check saves to disk. **Ctrl-S remains Publish**, not disk Save;
 use **Ctrl-G** → **Save** for explicit persistence. Ctrl-G opens actions/help;
 **F1** remains an alias. The primary catalog still exposes advanced actions.
@@ -418,7 +420,7 @@ Script runner has no downstream authority, even with a target bound.
 | Ctrl-G / F1 | Search workspace actions/help; Escape cancels; disabled actions explain why. |
 | Ctrl-O | Open an App document by path. |
 | Ctrl-R | Publish focused App draft and directly invoke the unique eligible candidate evaluation once. |
-| Shift-F5 | Publish focused App draft and check diagnostics; retain editor focus. |
+| Ctrl-T / Alt-Enter / Shift-F5 | Publish focused App draft and check diagnostics; retain editor focus. |
 | F5 | App editor: same direct Run as Ctrl-R; Script scratch: run selected committed Script. |
 | F3 | Focus previous visible pane. |
 | Alt-Left / Alt-Right | Previous / next retained direct Script result. |

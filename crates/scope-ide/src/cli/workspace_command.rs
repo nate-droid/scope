@@ -255,10 +255,6 @@ impl WorkspaceCommandOutput {
 
     /// Synchronous lifecycle observations; callbacks cannot service in-flight input.
     #[cfg(feature = "agent")]
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Explicit borrowed execution and presentation owners"
-    )]
     pub fn submit_observed(
         &mut self,
         line: &str,

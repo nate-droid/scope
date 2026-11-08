@@ -15,7 +15,7 @@ is historical; its review-before-Run description does not describe UX5 direct Ru
   publication, then directly runs the unique eligible candidate. No extra Enter
   is required. Editing focus remains in place; **F5** is an App Run alias.
 - The quiet view has a small output strip (at most five rows) and a short
-  **Ctrl-O Open · Ctrl-R Run · Ctrl-Q Quit · Ctrl-G More** footer.
+  **Ctrl-O Open · Ctrl-R Run · Ctrl-T Check · Ctrl-Q Quit · Ctrl-G More** footer.
 - Output uses the provider's typed evaluation summary, not inferred values from
   opaque JSON. Blocked results show the blocker and diagnostics; bridge/protocol
   failures show protocol status, message and diagnostics rather than a generic
@@ -25,7 +25,9 @@ is historical; its review-before-Run description does not describe UX5 direct Ru
 - Retained output is marked stale after source changes or closure, and while an
   editor has an unpublished draft. **Ctrl-G** → **Evaluate / inspect** exposes
   inspection; **d** in that modal toggles full retained Details.
-- **Shift-F5** publishes/checks diagnostics without moving editor focus.
+- **Ctrl-T** (Alt-Enter / Shift-F5 aliases) publishes/checks diagnostics without
+  moving editor focus. The quiet App view shows **No errors** when clean, or
+  diagnostic locations and messages, without the technical document/revision header.
   **Ctrl-S** publishes in memory, **not to disk**. Use **Ctrl-G** → **Save** for
   explicit persistence. **Ctrl-Q** retains dirty-work confirmation; App Escape
   stays in the workspace. **F2** still opens the advanced shell.
@@ -42,6 +44,46 @@ document; it does not copy the file into a scratch or rebind every inspector.
 The conventional split therefore opts into the quiet editor-only layout instead
 of treating unchanged scratch-inspector content as evidence that App Run used the
 wrong source. Custom compositions and explicit advanced inspection remain available.
+
+## UX6b: Check shortcut and quiet diagnostics
+
+Implemented from clean baseline `6fa677564e38a54bc65cad9dd07b31bd5c5a6c62`.
+**Ctrl-T** is the primary Check gesture: it has an ordinary terminal control-byte
+encoding and was unowned in the inspected workspace/editor/shell input paths.
+**Ctrl-K** is deliberately not used: the shell owns it for kill-line. Alt-Enter
+and Shift-F5 remain compatibility aliases; Ctrl-T avoids relying on terminal
+Alt-Enter or modified-function-key delivery. Command input and inspection/picker
+modals retain their existing input precedence. No real-terminal portability
+claim is made from unit tests alone.
+
+Check retains the exact-baseline editor publication path, unrelated-draft
+blocking, App source identity checks, and editor focus. It neither saves nor
+executes. Quiet App diagnostics replace older output, reset scrolling, and show
+**No errors** only for a clean diagnostic result; nonempty diagnostics retain
+locations, severity, attribution and messages. The advanced non-App output keeps
+its document/revision header. Existing retained Run evidence is not discarded.
+
+Ownership was limited to composition actions/input/footer/diagnostics, focused
+composition unit tests, and shortcut documentation. No edits were made to
+`scratch_editor`, workbench PTY tests, or `docs/ux/comfortable-editing.md`.
+
+Current-change verification (not the historical UX5 evidence below):
+
+| Exact command | Result |
+| --- | --- |
+| `cargo test --locked -p scope-ide --features tui --lib tui::composition::tests` | 58 passed, 0 failed, 0 ignored; 456 filtered out. Includes Ctrl-T/aliases/modifier rejection, footer, clean Check, diagnostic rendering, publication conflict, draft blocking and adjacent Run behavior. |
+| `cargo clippy --locked -p scope-ide --features tui --lib -- -D warnings` | Passed; Cargo emitted duplicate-package notices for the existing Cell checkout. |
+| `git diff --check` | Passed. |
+| `cargo fmt --all -- --check` | Passed. |
+| `python3 -B -m unittest discover -s .github/scripts -p 'test_*.py' -v` | 5 passed. |
+| `python3 -B .github/scripts/check_markdown_links.py` | Passed. |
+
+Verification scope is direct and adjacent for isolated UI input/presentation under
+the [verification policy](../verification.md). No source lifecycle, execution,
+authorization, dependency or public contract was changed. Full and PTY suites
+were not run; these results do not establish terminal/platform parity or release
+confidence, and do not close historical UX5 Full-verification gaps. No timing or
+build-warmth claim is made.
 
 ## Exact authority boundary
 

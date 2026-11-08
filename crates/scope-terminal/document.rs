@@ -113,6 +113,9 @@ fn replace(d: &mut impl DocumentEditor, range: Range<usize>, text: &str) -> io::
 /// Returns `Some(true)` for Ctrl-S and `Some(false)` for Ctrl-C/Escape.
 /// The caller owns rollback and must reserve its own host shortcuts first.
 /// `preferred` retains the grapheme column across vertical movement.
+/// Tab inserts spaces to the next four-grapheme-column stop (literal tabs
+/// advance to a stop). Shift-Tab removes leading ASCII spaces to the previous
+/// four-space indentation stop, without deleting source text or literal tabs.
 /// Horizontal movement stops at extended grapheme boundaries; deletion removes
 /// a whole grapheme even when a caller supplies a cursor inside that grapheme.
 pub fn apply_document_event(
@@ -211,7 +214,28 @@ pub fn apply_document_event(
             replace(d, start..end, "")?;
         }
         KeyCode::Enter => replace(d, cursor..cursor, "\n")?,
-        KeyCode::Tab => replace(d, cursor..cursor, "\t")?,
+        KeyCode::Tab if !key.modifiers.contains(KeyModifiers::SHIFT) => {
+            let column = text[line_start(text, cursor)..cursor].graphemes(true).fold(
+                0,
+                |column, grapheme| {
+                    if grapheme == "\t" {
+                        column + 4 - column % 4
+                    } else {
+                        column + 1
+                    }
+                },
+            );
+            replace(d, cursor..cursor, &"    "[..4 - column % 4])?;
+        }
+        KeyCode::BackTab | KeyCode::Tab => {
+            let start = line_start(text, cursor);
+            let indentation = text[start..].bytes().take_while(|b| *b == b' ').count();
+            if indentation > 0 {
+                let count = (indentation - 1) % 4 + 1;
+                replace(d, start..start + count, "")?;
+                d.set_cursor(cursor - (cursor - start).min(count));
+            }
+        }
         KeyCode::Char(c) if !c.is_control() => {
             replace(d, cursor..cursor, c.encode_utf8(&mut [0; 4]))?
         }
@@ -392,6 +416,119 @@ mod tests {
         .unwrap();
     }
     #[test]
+    fn soft_tab_stops_and_safe_dedent() {
+        for (source, cursor, expected) in [
+            ("", 0, "    "),
+            ("x", 1, "x   "),
+            ("abcd", 4, "abcd    "),
+            ("é👩‍💻", "é👩‍💻".len(), "é👩‍💻  "),
+            ("x\n a", 3, "x\n    a"),
+            ("\t", 1, "\t    "),
+        ] {
+            let mut d = Model {
+                text: source.into(),
+                cursor,
+                ..Model::default()
+            };
+            key(&mut d, KeyCode::Tab, &mut None);
+            assert_eq!(d.text, expected);
+            assert_eq!(d.edits, 1);
+            assert_eq!(d.cursor, cursor + expected.len() - source.len());
+        }
+        for (source, cursor, expected, position) in [
+            ("      code", 10, "    code", 8),
+            ("    code", 2, "code", 0),
+            ("    code", 0, "code", 0),
+            ("x\n   é", 7, "x\né", 4),
+            ("\tcode", 5, "\tcode", 5),
+            ("code  ", 6, "code  ", 6),
+            ("", 0, "", 0),
+        ] {
+            for (code, modifiers) in [
+                (KeyCode::BackTab, KeyModifiers::SHIFT),
+                (KeyCode::Tab, KeyModifiers::SHIFT),
+            ] {
+                let mut d = Model {
+                    text: source.into(),
+                    cursor,
+                    ..Model::default()
+                };
+                apply(
+                    &mut d,
+                    Event::Key(KeyEvent::new(code, modifiers)),
+                    &mut None,
+                )
+                .unwrap();
+                assert_eq!(d.text, expected);
+                assert_eq!(d.cursor, position);
+                assert_eq!(d.edits, usize::from(source != expected));
+            }
+        }
+    }
+
+    #[test]
+    fn indentation_edits_support_caller_owned_undo_redo() {
+        // The host owns history; each event must be one replacement with a valid
+        // final cursor, so snapshots can restore both text and position exactly.
+        for code in [KeyCode::Tab, KeyCode::BackTab] {
+            let mut d = Model {
+                text: "      é".into(),
+                cursor: 8,
+                ..Model::default()
+            };
+            let before = (d.text.clone(), d.cursor);
+            key(&mut d, code, &mut None);
+            let after = (d.text.clone(), d.cursor);
+            assert_ne!(before, after);
+            assert_eq!(d.edits, 1);
+            (d.text, d.cursor) = before.clone();
+            assert_eq!((&d.text, d.cursor), (&before.0, before.1));
+            (d.text, d.cursor) = after.clone();
+            assert_eq!((&d.text, d.cursor), (&after.0, after.1));
+            validate(&d).unwrap();
+        }
+    }
+
+    #[test]
+    fn modified_tabs_and_failed_indentation_preserve_document() {
+        for code in [KeyCode::Tab, KeyCode::BackTab] {
+            for modifiers in [
+                KeyModifiers::CONTROL,
+                KeyModifiers::ALT,
+                KeyModifiers::SUPER,
+            ] {
+                let mut d = Model {
+                    text: "    x".into(),
+                    cursor: 5,
+                    ..Model::default()
+                };
+                apply(
+                    &mut d,
+                    Event::Key(KeyEvent::new(code, modifiers)),
+                    &mut None,
+                )
+                .unwrap();
+                assert_eq!((d.text.as_str(), d.cursor, d.edits), ("    x", 5, 0));
+            }
+            let mut d = Model {
+                text: "    x".into(),
+                cursor: 5,
+                fail: true,
+                ..Model::default()
+            };
+            assert!(
+                apply(
+                    &mut d,
+                    Event::Key(KeyEvent::new(code, KeyModifiers::NONE)),
+                    &mut None
+                )
+                .is_err()
+            );
+            assert_eq!((d.text.as_str(), d.cursor, d.edits), ("    x", 5, 0));
+        }
+    }
+
+    #[test]
     fn unicode_lines_and_mutations() {
         let mut d = Model {
             text: "é🙂\nx\né🙂z".into(),
@@ -415,7 +552,7 @@ mod tests {
         key(&mut d, KeyCode::End, &mut p);
         key(&mut d, KeyCode::Left, &mut p);
         key(&mut d, KeyCode::Delete, &mut p);
-        assert_eq!(d.text, "é🙂\nx\n\té🙂");
+        assert_eq!(d.text, "é🙂\nx\n    é🙂");
         assert_eq!(d.edits, 4);
     }
     #[test]

@@ -1,12 +1,12 @@
 //! Explicit, in-memory source editing authority. No filesystem or execution access.
-use std::{io, ops::Range};
+use std::{cell::Cell, io, ops::Range};
 
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
-    layout::Rect,
-    style::{Modifier, Style},
+    layout::{Constraint, Layout, Rect},
+    style::{Color, Modifier, Style},
     text::{Line, Span as RenderSpan},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
 };
 use scope_terminal::DocumentEditor;
 use unicode_segmentation::UnicodeSegmentation;
@@ -16,6 +16,39 @@ use crate::{
     scratch::{BoundSource, ScratchBuffers},
     text::{Span, TextBuffer, TextEdit},
 };
+
+// Source byte offsets stay intact; terminal control characters must never reach
+// the cell backend. Tabs use source-relative stops, not terminal HT movement.
+fn display_graphemes(line: &str) -> Vec<(usize, String, usize)> {
+    let mut column = 0;
+    line.grapheme_indices(true)
+        .map(|(byte, grapheme)| {
+            let display = if grapheme == "\t" {
+                " ".repeat(4 - column % 4)
+            } else if grapheme.chars().any(char::is_control) {
+                "�".to_owned()
+            } else {
+                grapheme.to_owned()
+            };
+            let width = Line::raw(display.as_str()).width();
+            column += width;
+            (byte, display, width)
+        })
+        .collect()
+}
+
+// Retain the viewport until the cursor enters its context margin. Do not clamp
+// to document length: blank rows below EOF provide the same breathing room.
+fn contextual_top(top: usize, row: usize, height: usize) -> usize {
+    let margin = 3.min(height.saturating_sub(1) / 2);
+    if row < top.saturating_add(margin) {
+        row.saturating_sub(margin)
+    } else if row >= top.saturating_add(height.saturating_sub(margin)) {
+        row.saturating_sub(height.saturating_sub(margin + 1))
+    } else {
+        top
+    }
+}
 
 /// Find a lexical pair at the cursor, preferring the delimiter under it over
 /// the one immediately before it. Offsets are UTF-8 bytes, like DocumentEditor.
@@ -221,12 +254,14 @@ impl<'a> ScratchEditAccess<'a> {
 }
 
 struct Draft {
+    edit_identity: u64,
     app_document: bool,
     baseline: ScratchEditSnapshot,
     text: TextBuffer,
     cursor: usize,
     preferred: Option<usize>,
     editing: LocalEditing,
+    viewport_top: Cell<usize>,
 }
 
 #[derive(Clone)]
@@ -268,6 +303,10 @@ impl Draft {
     }
 
     fn event(&mut self, event: Event) -> io::Result<Option<bool>> {
+        if matches!(&event, Event::Key(key) if key.kind == crossterm::event::KeyEventKind::Release)
+        {
+            return Ok(None);
+        }
         let key = match &event {
             Event::Key(key) => Some(*key),
             _ => None,
@@ -318,11 +357,18 @@ impl Draft {
                 && key.is_some_and(|key| {
                     matches!(
                         key.code,
-                        KeyCode::Enter | KeyCode::Tab | KeyCode::Backspace | KeyCode::Delete
+                        KeyCode::Enter
+                            | KeyCode::Tab
+                            | KeyCode::BackTab
+                            | KeyCode::Backspace
+                            | KeyCode::Delete
                     )
                 }));
         let before = self.state();
         let had_selection = self.selection().is_some();
+        let indent_selection = plain
+            && had_selection
+            && key.is_some_and(|key| matches!(key.code, KeyCode::Tab | KeyCode::BackTab));
         if navigation {
             if key.unwrap().modifiers.contains(KeyModifiers::SHIFT) {
                 self.editing.anchor.get_or_insert(self.cursor);
@@ -347,7 +393,7 @@ impl Draft {
         }
         let deleting = plain
             && key.is_some_and(|key| matches!(key.code, KeyCode::Backspace | KeyCode::Delete));
-        if mutation {
+        if mutation && !indent_selection {
             if let Some(range) = self.selection() {
                 self.replace(range.clone(), "")?;
                 self.cursor = range.start;
@@ -355,7 +401,57 @@ impl Draft {
             self.editing.anchor = None;
         }
         let mut preferred = self.preferred.take();
-        let result = if deleting && had_selection {
+        let result = if indent_selection {
+            let selection = self.selection().unwrap();
+            let source = self.text.as_str();
+            let start = source[..selection.start].rfind('\n').map_or(0, |p| p + 1);
+            let dedent = key.is_some_and(|key| {
+                key.code == KeyCode::BackTab || key.modifiers.contains(KeyModifiers::SHIFT)
+            });
+            let mut replacement = String::new();
+            let mut cursor = self.cursor;
+            let mut anchor = self.editing.anchor.unwrap();
+            let mut end = start;
+            // A selection ending at column zero does not include that next line.
+            for line in source[start..].split_inclusive('\n') {
+                if end >= selection.end {
+                    break;
+                }
+                let spaces = line.bytes().take_while(|b| *b == b' ').count();
+                let removed = if dedent && spaces > 0 {
+                    (spaces - 1) % 4 + 1
+                } else {
+                    0
+                };
+                if dedent {
+                    replacement.push_str(&line[removed..]);
+                } else {
+                    replacement.push_str("    ");
+                    replacement.push_str(line);
+                }
+                // Map both endpoints in original coordinates, retaining direction.
+                for (original, mapped) in [
+                    (before.cursor, &mut cursor),
+                    (before.anchor.unwrap(), &mut anchor),
+                ] {
+                    if original >= end {
+                        if dedent {
+                            *mapped -= (original - end).min(removed);
+                        } else {
+                            *mapped += 4;
+                        }
+                    }
+                }
+                end += line.len();
+            }
+            if replacement != source[start..end] {
+                self.replace(start..end, &replacement)?;
+                self.cursor = cursor;
+                self.editing.anchor = Some(anchor);
+            }
+            preferred = None;
+            Ok(None)
+        } else if deleting && had_selection {
             Ok(None)
         } else {
             scope_terminal::apply_document_event(self, event, &mut preferred)
@@ -402,6 +498,7 @@ impl DocumentEditor for Draft {
 pub struct EditableScratchPane {
     draft: Option<Draft>,
     parked: Vec<Draft>,
+    cancelled: Vec<(scope_language::SourceId, u64)>,
     status: Option<String>,
 }
 impl EditableScratchPane {
@@ -448,12 +545,18 @@ impl EditableScratchPane {
             match access.snapshot() {
                 Ok(baseline) => {
                     self.draft = Some(Draft {
+                        edit_identity: self
+                            .cancelled
+                            .iter()
+                            .find(|(source, _)| source == &baseline.source.source_id)
+                            .map_or(0, |(_, identity)| *identity),
                         app_document: access.app_document.is_some(),
                         text: TextBuffer::new(baseline.source.text.as_ref()),
                         baseline,
                         cursor: 0,
                         preferred: None,
                         editing: LocalEditing::default(),
+                        viewport_top: Cell::new(0),
                     })
                 }
                 Err(error) => {
@@ -489,23 +592,28 @@ impl EditableScratchPane {
                 .unwrap_or(0);
             self.status = None;
         }
+        let before = draft.text.as_str().to_owned();
         let result = draft.event(event);
+        if before != draft.text.as_str() {
+            static NEXT_EDIT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            draft.edit_identity = NEXT_EDIT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         match result {
             Ok(Some(false)) => {
+                static NEXT_CANCEL: std::sync::atomic::AtomicU64 =
+                    std::sync::atomic::AtomicU64::new(u64::MAX);
+                let identity = NEXT_CANCEL.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                self.cancelled
+                    .retain(|(source, _)| source != &draft.baseline.source.source_id);
+                self.cancelled
+                    .push((draft.baseline.source.source_id.clone(), identity));
                 self.draft = None;
                 self.status = Some("draft cancelled".into());
             }
             Ok(Some(true)) => match access.commit(&draft.baseline, draft.text.as_str()) {
                 Ok(baseline) => {
                     draft.baseline = baseline;
-                    self.status = Some(
-                        if access.app_document.is_some() {
-                            "published to App document (not saved)"
-                        } else {
-                            "committed to scratch (not saved)"
-                        }
-                        .into(),
-                    );
+                    self.status = Some("Published in memory".into());
                 }
                 Err(error) => {
                     self.status = Some(format!("{error}; draft retained — Ctrl-C cancels"))
@@ -522,6 +630,44 @@ impl EditableScratchPane {
     }
 }
 impl Pane for EditableScratchPane {
+    fn editor_draft(
+        &self,
+        baseline: &super::ScratchEditSnapshot,
+    ) -> Option<super::EditorDraftSnapshot> {
+        let draft = self
+            .draft
+            .iter()
+            .chain(self.parked.iter())
+            .find(|draft| draft.baseline.source.source_id == baseline.source.source_id);
+        let modified =
+            draft.is_some_and(|draft| draft.text.as_str() != draft.baseline.source.text.as_ref());
+        if modified && draft.is_some_and(|draft| &draft.baseline != baseline) {
+            return None;
+        }
+        Some(super::EditorDraftSnapshot {
+            baseline: baseline.clone(),
+            text: if modified {
+                draft.unwrap().text.as_str().to_owned()
+            } else {
+                baseline.source.text.to_string()
+            },
+            edit_identity: draft.map_or_else(
+                || {
+                    self.cancelled
+                        .iter()
+                        .find(|(source, _)| source == &baseline.source.source_id)
+                        .map_or(0, |(_, identity)| *identity)
+                },
+                |draft| draft.edit_identity,
+            ),
+            editor: String::new(),
+            editor_generation: 0,
+            selection_identity: 0,
+            source_selection_identity: 0,
+            owner_binding_generation: 0,
+        })
+    }
+
     fn has_dirty_draft(&self) -> bool {
         self.draft
             .iter()
@@ -596,49 +742,26 @@ impl Pane for EditableScratchPane {
             (_, Some(BoundSource::Unbound)) => "UNBOUND — no editor source target bound",
             (_, None) => "UNAVAILABLE — no scratch owner supplied",
         };
-        let title = format!(
-            "Editor {} | {} | {} | {} | Ctrl-S publish · Ctrl-C discard",
-            if ctx.is_app_editor() {
-                ctx.app()
-                    .open_document()
-                    .map(|document| {
-                        format!(
-                            "App {} · revision {}",
-                            document.path().display(),
-                            document.version()
-                        )
-                    })
-                    .unwrap_or_else(|| "App document unavailable".into())
-            } else {
-                "selected scratch".into()
-            },
-            if ctx.is_focused() {
-                "FOCUSED"
-            } else {
-                "unfocused"
-            },
-            if draft.is_some_and(|draft| draft.text.as_str() != draft.baseline.source.text.as_ref())
-            {
-                "LOCAL DRAFT"
-            } else {
-                "type to edit"
-            },
-            conflict
-                .or(self.status.as_deref())
-                .unwrap_or(if draft.is_some() {
-                    "local draft"
+        let status = conflict.or(self.status.as_deref()).or_else(|| {
+            draft
+                .is_some_and(|draft| draft.text.as_str() != draft.baseline.source.text.as_ref())
+                .then_some("Local draft")
+        });
+        let inner = if let Some(status) = status {
+            let [source_area, status_area] =
+                Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
+            frame.render_widget(
+                Paragraph::new(status).style(Style::default().fg(if conflict.is_some() {
+                    Color::Yellow
                 } else {
-                    "ready"
-                })
-        );
-        let title = if ctx.is_app_editor() {
-            conflict.map(str::to_owned).unwrap_or_default()
+                    Color::DarkGray
+                })),
+                status_area,
+            );
+            source_area
         } else {
-            title
+            area
         };
-        let block = Block::default().borders(Borders::ALL).title(title);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
         if inner.width == 0 || inner.height == 0 {
             return;
         }
@@ -646,13 +769,24 @@ impl Pane for EditableScratchPane {
             let prefix = &text[..draft.cursor];
             (
                 prefix.bytes().filter(|byte| *byte == b'\n').count(),
-                Line::raw(prefix.rsplit('\n').next().unwrap_or("")).width(),
+                display_graphemes(prefix.rsplit('\n').next().unwrap_or(""))
+                    .iter()
+                    .map(|(_, _, width)| width)
+                    .sum::<usize>(),
             )
         });
         let (top, left) = cursor
             .map(|(row, column)| {
                 (
-                    row.saturating_sub(usize::from(inner.height) - 1),
+                    draft.map_or(0, |draft| {
+                        let top = contextual_top(
+                            draft.viewport_top.get(),
+                            row,
+                            usize::from(inner.height),
+                        );
+                        draft.viewport_top.set(top);
+                        top
+                    }),
                     column.saturating_sub(usize::from(inner.width) - 1),
                 )
             })
@@ -664,55 +798,45 @@ impl Pane for EditableScratchPane {
             .skip(top)
             .take(usize::from(inner.height))
             .map(|line| {
-                let mut width = 0;
-                let mut start = 0;
-                for (byte, ch) in line.grapheme_indices(true) {
-                    let next = width + Line::raw(ch.to_string()).width();
-                    if next > left {
-                        break;
-                    }
-                    width = next;
-                    start = byte + ch.len();
-                }
-                // A viewport cutting a wide scalar leaves blank cells, not half a glyph.
-                let padding = if width < left {
-                    let ch = line[start..].graphemes(true).next();
-                    if let Some(ch) = ch {
-                        start += ch.len();
-                        (width + Line::raw(ch.to_string()).width()).saturating_sub(left)
-                    } else {
-                        0
-                    }
-                } else {
-                    0
-                };
+                let mut column = 0;
                 let line_offset = line.as_ptr() as usize - text.as_ptr() as usize;
                 let selection = draft.and_then(Draft::selection);
-                let mut spans = vec![RenderSpan::raw(" ".repeat(padding))];
-                spans.extend(
-                    line[start..]
-                        .grapheme_indices(true)
-                        .map(|(offset, grapheme)| {
-                            let byte = line_offset + start + offset;
-                            if selection
-                                .as_ref()
-                                .is_some_and(|range| range.contains(&byte))
-                            {
-                                RenderSpan::styled(
-                                    grapheme,
-                                    Style::default().add_modifier(Modifier::REVERSED),
-                                )
-                            } else if matching.is_some_and(|pair| pair.contains(&byte)) {
-                                RenderSpan::styled(
-                                    grapheme,
-                                    Style::default()
-                                        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-                                )
-                            } else {
-                                RenderSpan::raw(grapheme)
-                            }
-                        }),
-                );
+                let mut spans = Vec::new();
+                spans.extend(display_graphemes(line).into_iter().filter_map(
+                    |(offset, grapheme, width)| {
+                        let start = column;
+                        column += width;
+                        if column <= left {
+                            return None;
+                        }
+                        // Never render half a wide glyph at either viewport edge.
+                        let grapheme = if start < left {
+                            " ".repeat(column - left)
+                        } else if column > left + usize::from(inner.width) {
+                            " ".repeat((left + usize::from(inner.width)).saturating_sub(start))
+                        } else {
+                            grapheme
+                        };
+                        let byte = line_offset + offset;
+                        if selection
+                            .as_ref()
+                            .is_some_and(|range| range.contains(&byte))
+                        {
+                            Some(RenderSpan::styled(
+                                grapheme,
+                                Style::default().add_modifier(Modifier::REVERSED),
+                            ))
+                        } else if matching.is_some_and(|pair| pair.contains(&byte)) {
+                            Some(RenderSpan::styled(
+                                grapheme,
+                                Style::default()
+                                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                            ))
+                        } else {
+                            Some(RenderSpan::raw(grapheme))
+                        }
+                    },
+                ));
                 Line::from(spans)
             })
             .collect();
@@ -731,6 +855,74 @@ impl Pane for EditableScratchPane {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dedent_clears_collapsed_selection_anchor() {
+        let mut sources = ScratchBuffers::default();
+        let id = sources.create("test", "    x");
+        sources.bind_semantic_target(Some(id)).unwrap();
+        let mut pane = EditableScratchPane::new();
+        for (code, modifiers) in [
+            (KeyCode::End, KeyModifiers::NONE),
+            (KeyCode::Left, KeyModifiers::SHIFT),
+            (KeyCode::Right, KeyModifiers::SHIFT),
+            (KeyCode::BackTab, KeyModifiers::SHIFT),
+            (KeyCode::Char('y'), KeyModifiers::NONE),
+        ] {
+            local_key(&mut pane, &mut sources, code, modifiers);
+        }
+        let draft = pane.draft.as_ref().unwrap();
+        assert_eq!(draft.text.as_str(), "xy");
+        assert_eq!(draft.cursor, 2);
+        assert_eq!(draft.editing.anchor, None);
+        local_key(
+            &mut pane,
+            &mut sources,
+            KeyCode::Char('z'),
+            KeyModifiers::CONTROL,
+        );
+        local_key(
+            &mut pane,
+            &mut sources,
+            KeyCode::Char('z'),
+            KeyModifiers::CONTROL,
+        );
+        assert_eq!(pane.draft.as_ref().unwrap().text.as_str(), "    x");
+        local_key(
+            &mut pane,
+            &mut sources,
+            KeyCode::Char('y'),
+            KeyModifiers::CONTROL,
+        );
+        local_key(
+            &mut pane,
+            &mut sources,
+            KeyCode::Char('y'),
+            KeyModifiers::CONTROL,
+        );
+        assert_eq!(pane.draft.as_ref().unwrap().text.as_str(), "xy");
+        assert_eq!(pane.draft.as_ref().unwrap().editing.anchor, None);
+    }
+
+    #[test]
+    fn display_cells_expand_tabs_and_never_emit_controls() {
+        let source = "猫\te\u{301}\t\r\u{1b}";
+        let displayed = display_graphemes(source);
+        assert_eq!(
+            displayed
+                .iter()
+                .map(|(_, s, _)| s.as_str())
+                .collect::<String>(),
+            "猫  e\u{301}   ��"
+        );
+        assert_eq!(
+            displayed.iter().map(|(_, _, width)| width).sum::<usize>(),
+            10
+        );
+        for (offset, _, _) in displayed {
+            assert!(source.is_char_boundary(offset));
+        }
+    }
 
     fn local_key(
         pane: &mut EditableScratchPane,
@@ -854,6 +1046,77 @@ mod tests {
     }
 
     #[test]
+    fn editor_uses_source_area_without_chrome_and_preserves_status() {
+        let mut sources = sources();
+        let mut pane = EditableScratchPane::new();
+        let root = crate::test_support::TempWorkspace::new("editor_presentation");
+        let app = crate::app::App::new(root.workspace()).unwrap();
+        let render = |pane: &EditableScratchPane, sources: &ScratchBuffers, app_editor| {
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 6)).unwrap();
+            terminal
+                .draw(|frame| {
+                    pane.render(
+                        frame,
+                        frame.area(),
+                        &TuiContext::with_view_sources(&app, true, 0, Some(sources))
+                            .with_app_editor(app_editor),
+                    )
+                })
+                .unwrap();
+            terminal.backend().buffer().clone()
+        };
+        let initial = render(&pane, &sources, false);
+        assert_eq!(initial[(0, 0)].symbol(), "é");
+        let screen = |buffer: &ratatui::buffer::Buffer| {
+            buffer
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+        };
+        let displayed = screen(&initial);
+        for absent in ["Editor", "FOCUSED", "Ctrl-S", "┌", "│", "└"] {
+            assert!(!displayed.contains(absent));
+        }
+        local_key(
+            &mut pane,
+            &mut sources,
+            KeyCode::Char('x'),
+            KeyModifiers::NONE,
+        );
+        assert!(screen(&render(&pane, &sources, false)).contains("Local draft"));
+        local_key(
+            &mut pane,
+            &mut sources,
+            KeyCode::Char('s'),
+            KeyModifiers::CONTROL,
+        );
+        let published = screen(&render(&pane, &sources, false));
+        assert!(published.contains("Published in memory"));
+        assert!(!published.contains("not saved"));
+        pane.status = Some("write denied; draft retained".into());
+        // App mode must not hide errors, even when its document is unavailable.
+        assert!(screen(&render(&pane, &sources, true)).contains("write denied; draft retained"));
+        local_key(
+            &mut pane,
+            &mut sources,
+            KeyCode::Char('y'),
+            KeyModifiers::NONE,
+        );
+        let baseline = ScratchEditAccess::selected(&mut sources)
+            .snapshot()
+            .unwrap();
+        ScratchEditAccess::selected(&mut sources)
+            .commit(&baseline, "external")
+            .unwrap();
+        let conflict = render(&pane, &sources, false);
+        assert!(screen(&conflict).contains("CONFLICT — draft retained"));
+        assert_eq!(conflict[(0, 5)].fg, Color::Yellow);
+        assert_eq!(sources.selected().unwrap().text(), "external");
+    }
+
+    #[test]
     fn delimiter_rendering_tracks_cursor_without_publishing_or_editing() {
         let mut sources = ScratchBuffers::default();
         let id = sources.create("test", "(x) z");
@@ -884,13 +1147,13 @@ mod tests {
                 })
                 .unwrap();
             let buffer = terminal.backend().buffer();
-            for x in [1, 3] {
+            for x in [0, 2] {
                 assert_eq!(
-                    buffer[(x, 1)].modifier.contains(Modifier::UNDERLINED),
+                    buffer[(x, 0)].modifier.contains(Modifier::UNDERLINED),
                     highlighted
                 );
             }
-            assert!(!buffer[(2, 1)].modifier.contains(Modifier::UNDERLINED));
+            assert!(!buffer[(1, 0)].modifier.contains(Modifier::UNDERLINED));
             let draft = pane.draft.as_ref().unwrap();
             assert_eq!(draft.text.as_str(), "(x) z");
             assert!(draft.editing.undo.is_empty());
@@ -951,6 +1214,22 @@ mod tests {
     }
 
     #[test]
+    fn contextual_margin_retains_viewport_and_adapts_to_height() {
+        assert_eq!(contextual_top(0, 6, 10), 0);
+        assert_eq!(contextual_top(0, 7, 10), 1);
+        assert_eq!(contextual_top(1, 7, 10), 1);
+        assert_eq!(contextual_top(10, 12, 10), 9);
+        assert_eq!(contextual_top(10, 0, 10), 0);
+        assert_eq!(contextual_top(0, 59, 31), 32);
+        assert_eq!(contextual_top(32, 59, 25), 38);
+        assert_eq!(contextual_top(38, 59, 31), 38);
+        for height in 1..8 {
+            let top = contextual_top(0, 20, height);
+            assert!(top <= 20 && 20 < top + height);
+        }
+    }
+
+    #[test]
     fn cursor_follows_unicode_draft_in_small_viewports() {
         let mut sources = sources();
         let mut pane = EditableScratchPane::new();
@@ -975,10 +1254,10 @@ mod tests {
             if width > 2 && height > 2 {
                 use ratatui::backend::Backend;
                 let cursor = terminal.backend_mut().get_cursor_position().unwrap();
-                assert!(cursor.x >= 1 && cursor.x < width - 1);
-                assert!(cursor.y >= 1 && cursor.y < height - 1);
+                assert!(cursor.x < width);
+                assert!(cursor.y < height - 1);
                 if width == 40 {
-                    assert_eq!(cursor.x, 7);
+                    assert_eq!(cursor.x, 6);
                 }
             }
         }
@@ -1247,10 +1526,7 @@ mod tests {
             );
             assert!(!pane.has_dirty_draft());
             assert!(pane.dirty_draft_sources().is_empty());
-            assert_eq!(
-                pane.status.as_deref(),
-                Some("committed to scratch (not saved)")
-            );
+            assert_eq!(pane.status.as_deref(), Some("Published in memory"));
         }
         pane.handle_source_event(
             Event::Paste("!".into()),
@@ -1327,6 +1603,89 @@ mod tests {
             ScratchEditAccess::new(&mut sources).commit(&baseline, "bad"),
             Err(ScratchEditError::Rebound)
         );
+    }
+
+    #[test]
+    fn selected_indentation_is_atomic_preserves_direction_and_never_publishes() {
+        for reverse in [false, true] {
+            for (code, modifiers, original, expected, mapped) in [
+                (
+                    KeyCode::Tab,
+                    KeyModifiers::NONE,
+                    "é\nx\nz",
+                    "    é\n    x\nz",
+                    (4, 13),
+                ),
+                (
+                    KeyCode::BackTab,
+                    KeyModifiers::SHIFT,
+                    "  é\n    x\nz",
+                    "é\nx\nz",
+                    (0, 5),
+                ),
+                (
+                    KeyCode::Tab,
+                    KeyModifiers::SHIFT,
+                    "  é\n    x\nz",
+                    "é\nx\nz",
+                    (0, 5),
+                ),
+                (
+                    KeyCode::BackTab,
+                    KeyModifiers::SHIFT,
+                    "é\nx\nz",
+                    "é\nx\nz",
+                    (0, 5),
+                ),
+            ] {
+                let mut sources = sources();
+                let mut pane = EditableScratchPane::new();
+                local_key(&mut pane, &mut sources, KeyCode::Home, KeyModifiers::NONE);
+                let revision = sources.selected().unwrap().version();
+                let published = sources.selected().unwrap().text().to_owned();
+                let draft = pane.draft.as_mut().unwrap();
+                draft.text = TextBuffer::new(original);
+                let end = original.rfind('z').unwrap();
+                draft.cursor = if reverse { 0 } else { end };
+                draft.editing.anchor = Some(if reverse { end } else { 0 });
+                let before = draft.state();
+                local_key(&mut pane, &mut sources, code, modifiers);
+                let draft = pane.draft.as_ref().unwrap();
+                assert_eq!(draft.text.as_str(), expected);
+                assert_eq!(draft.cursor, if reverse { mapped.0 } else { mapped.1 });
+                assert_eq!(
+                    draft.editing.anchor,
+                    Some(if reverse { mapped.1 } else { mapped.0 })
+                );
+                let changed = original != expected;
+                assert_eq!(draft.editing.undo.len(), usize::from(changed));
+                let after = draft.state();
+                local_key(
+                    &mut pane,
+                    &mut sources,
+                    KeyCode::Char('z'),
+                    KeyModifiers::CONTROL,
+                );
+                let draft = pane.draft.as_ref().unwrap();
+                assert_eq!(draft.text.as_str(), before.text);
+                assert_eq!(draft.cursor, before.cursor);
+                assert_eq!(draft.editing.anchor, before.anchor);
+                assert_eq!(draft.editing.redo.len(), usize::from(changed));
+                local_key(
+                    &mut pane,
+                    &mut sources,
+                    KeyCode::Char('y'),
+                    KeyModifiers::CONTROL,
+                );
+                let draft = pane.draft.as_ref().unwrap();
+                assert_eq!(draft.text.as_str(), after.text);
+                assert_eq!(draft.cursor, after.cursor);
+                assert_eq!(draft.editing.anchor, after.anchor);
+                assert!(draft.editing.redo.is_empty());
+                assert_eq!(sources.selected().unwrap().version(), revision);
+                assert_eq!(sources.selected().unwrap().text(), published);
+            }
+        }
     }
 }
 

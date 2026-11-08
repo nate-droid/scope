@@ -13,6 +13,7 @@ pub enum WorkspaceAction {
     InspectDocument,
     /// Open a workspace file as the existing editor's App-owned target.
     OpenAppDocument,
+    OpenSuppliedDocuments,
     SaveAppDocument,
     FocusAppDocument,
     /// Check the committed App document, never an unpublished editor draft.
@@ -90,6 +91,240 @@ pub(super) struct Picker {
 }
 
 impl WorkspaceTui {
+    /// Exact current selected editor text, with committed fallback before editing starts.
+    /// Conflicting editor baselines are rejected rather than silently checking old text.
+    pub fn current_editor_draft(
+        &self,
+        app: &App,
+        sources: Option<&ScratchBuffers>,
+    ) -> Option<super::super::EditorDraftSnapshot> {
+        match self.editor_draft_outcome(app, sources) {
+            super::super::EditorDraftOutcome::Available(draft) => Some(draft),
+            _ => None,
+        }
+    }
+
+    /// Resolve source-local editor authority independently of incidental focus.
+    pub fn editor_draft_outcome(
+        &self,
+        app: &App,
+        sources: Option<&ScratchBuffers>,
+    ) -> super::super::EditorDraftOutcome {
+        use super::super::EditorDraftOutcome;
+        let baseline = if self.app_editor {
+            app.open_document()
+                .map(super::super::ScratchEditAccess::document_snapshot)
+        } else {
+            super::super::TuiContext::with_view_sources(app, false, 0, sources).selected_source()
+        };
+        let Some(baseline) = baseline else {
+            return EditorDraftOutcome::NoMatchingEditor;
+        };
+        let mut selection = self.editor_selection.borrow_mut();
+        let selected = selection
+            .retained
+            .iter_mut()
+            .find(|authority| authority.source == baseline.source.source_id);
+        let (editor, instance, identity) = if let Some(authority) = selected {
+            if authority.invalidated {
+                return EditorDraftOutcome::NoMatchingEditor;
+            }
+            let Some(instance) = self.instances.get(&authority.editor).filter(|instance| {
+                instance.editable && instance.generation == authority.generation
+            }) else {
+                authority.invalidated = true;
+                return EditorDraftOutcome::NoMatchingEditor;
+            };
+            (authority.editor.clone(), instance, authority.identity)
+        } else {
+            let mut eligible = self.instances.iter().filter(|(_, instance)| {
+                instance.editable && instance.pane.editor_draft(&baseline).is_some()
+            });
+            let Some((editor, instance)) = eligible.next() else {
+                return if self
+                    .instances
+                    .values()
+                    .any(|instance| instance.editable && instance.pane.has_dirty_draft())
+                {
+                    EditorDraftOutcome::Conflict
+                } else {
+                    EditorDraftOutcome::NoMatchingEditor
+                };
+            };
+            if eligible.next().is_some() {
+                return EditorDraftOutcome::Ambiguous;
+            }
+            (editor.clone(), instance, 0)
+        };
+        let Some(mut draft) = instance.pane.editor_draft(&baseline) else {
+            if instance.pane.has_dirty_draft() {
+                return EditorDraftOutcome::Conflict;
+            }
+            if let Some(authority) = selection
+                .retained
+                .iter_mut()
+                .find(|authority| authority.source == baseline.source.source_id)
+            {
+                authority.invalidated = true;
+            }
+            return EditorDraftOutcome::NoMatchingEditor;
+        };
+        draft.editor = editor.clone();
+        draft.editor_generation = instance.generation;
+        draft.selection_identity = identity;
+        draft.owner_binding_generation = self.owner_binding_generation;
+        draft.source_selection_identity = if self.app_editor {
+            0
+        } else {
+            sources.map_or(0, ScratchBuffers::selection_identity)
+        };
+        if !selection
+            .retained
+            .iter()
+            .any(|authority| authority.source == baseline.source.source_id)
+        {
+            selection.retained.push(super::EditorAuthority {
+                source: baseline.source.source_id,
+                editor,
+                generation: instance.generation,
+                identity,
+                invalidated: false,
+            });
+        }
+        EditorDraftOutcome::Available(draft)
+    }
+
+    /// Validate all inspection evidence immediately before a read-only dispatch.
+    pub fn validate_editor_draft(
+        &self,
+        app: &App,
+        sources: Option<&ScratchBuffers>,
+        pinned: &super::super::EditorDraftSnapshot,
+    ) -> Result<(), String> {
+        if self.current_editor_draft(app, sources).as_ref() == Some(pinned) {
+            Ok(())
+        } else {
+            Err("selected editor draft changed; inspect again before checking".into())
+        }
+    }
+
+    /// Dispatch an inspected draft only if the editor, generation, source, baseline,
+    /// edit identity and text still match. This never publishes or saves source.
+    pub fn check_pinned_editor_draft(
+        &mut self,
+        app: &App,
+        sources: &ScratchBuffers,
+        pinned: &super::super::EditorDraftSnapshot,
+        host: &mut dyn crate::cli::ReadOnlyCommand,
+    ) -> Result<(), String> {
+        self.latest_check = None;
+        self.validate_editor_draft(app, Some(sources), pinned)?;
+        let Some(WorkspaceAction::Downstream { id, .. }) = self.scratch_check_action(sources)
+        else {
+            return Err("Check is unavailable for the selected scratch language".into());
+        };
+        if self.app_editor {
+            return Err("scratch Check is unavailable for an App document".into());
+        }
+        let entry = self
+            .downstream_actions
+            .iter()
+            .find(|entry| entry.id == id)
+            .ok_or("unknown downstream check")?;
+        let mut output = Vec::new();
+        let mut context = crate::analysis::AnalysisContext::new(
+            sources,
+            pinned.clone(),
+            crate::analysis::AnalysisLimits::default(),
+        )?;
+        let result = host.check_analysis(entry, &mut context, &mut output);
+        let evidence = context.seal();
+        self.latest_check = Some((evidence, false));
+        self.show_result = false;
+        self.output.append(&output);
+        let editor_result = self.validate_editor_draft(app, Some(sources), pinned);
+        result?;
+        editor_result?;
+        let (evidence, accepted) = self.latest_check.as_mut().expect("sealed Check evidence");
+        evidence.validate(sources)?;
+        *accepted = true;
+        Ok(())
+    }
+
+    /// Validate once for a downstream presentation using the existing full validator.
+    /// No owner means validation is unavailable; rejected invocations stay historical.
+    pub fn check_presentation(
+        &self,
+        app: &App,
+        sources: Option<&ScratchBuffers>,
+    ) -> super::super::CheckPresentation {
+        use super::super::{CheckCurrentness, CheckPresentation};
+        let Some((evidence, accepted)) = &self.latest_check else {
+            return CheckPresentation {
+                invocation: None,
+                status: CheckCurrentness::NoEvidence,
+            };
+        };
+        let status = if !accepted {
+            CheckCurrentness::Historical
+        } else if let Some(sources) = sources {
+            if self.current_check_evidence(app, sources).is_ok() {
+                CheckCurrentness::Current
+            } else {
+                CheckCurrentness::ValidationUnavailable
+            }
+        } else {
+            CheckCurrentness::ValidationUnavailable
+        };
+        CheckPresentation {
+            invocation: Some(evidence.invocation_id()),
+            status,
+        }
+    }
+
+    /// Historical mappings only; this does not assert successful or current analysis.
+    pub fn check_evidence(&self) -> Option<&crate::analysis::CheckEvidence> {
+        self.latest_check.as_ref().map(|(evidence, _)| evidence)
+    }
+
+    /// Revalidate the full editor identity and every dependency on each presentation.
+    pub fn current_check_evidence(
+        &self,
+        app: &App,
+        sources: &ScratchBuffers,
+    ) -> Result<&crate::analysis::CheckEvidence, String> {
+        let (evidence, succeeded) = self.latest_check.as_ref().ok_or("no Check evidence")?;
+        if !succeeded {
+            return Err("Check was not accepted; evidence is historical only".into());
+        }
+        self.validate_editor_draft(app, Some(sources), evidence.draft())?;
+        evidence.validate(sources)?;
+        Ok(evidence)
+    }
+
+    /// Bind canonical scratch Check to an existing registration; no source is published.
+    pub fn set_downstream_check_action(&mut self, id: Option<String>) {
+        self.downstream_check_action = id;
+    }
+
+    fn scratch_check_action(&self, sources: &ScratchBuffers) -> Option<WorkspaceAction> {
+        if self.app_editor {
+            return None;
+        }
+        let source = sources.selected().ok()?;
+        let entry = self.downstream_actions.iter().find(|entry| {
+            Some(&entry.id) == self.downstream_check_action.as_ref()
+                && entry.language == source.language_id()
+        })?;
+        Some(WorkspaceAction::Downstream {
+            id: entry.id.clone(),
+            scratch: source.id(),
+            source: source.evaluation_source_id().clone(),
+            language: source.language_id().into(),
+            version: source.version(),
+        })
+    }
+
     pub(super) fn refresh_action_context(&mut self, app: &App) {
         self.action_document_present = app.open_document().is_some();
         self.action_candidate_available =
@@ -108,6 +343,11 @@ impl WorkspaceTui {
             return self
                 .action_candidate_available
                 .then_some(WorkspaceAction::RunCurrentDocument);
+        }
+        if modifiers.contains(event::KeyModifiers::SHIFT)
+            && self.scratch_check_action(sources).is_some()
+        {
+            return Some(WorkspaceAction::CheckCurrentDocument);
         }
         // Non-Script views retain their own F5 key handling.
         (modifiers.is_empty()
@@ -222,12 +462,26 @@ impl WorkspaceTui {
                 WorkspaceAction::CheckCurrentDocument,
                 "document.check-current",
                 "Check",
-                Some("Alt-Enter / Shift-F5"),
+                Some("Ctrl-T / Alt-Enter / Shift-F5"),
             ),
         ] {
             if action == WorkspaceAction::RunCurrentDocument
                 && (!self.app_editor || !self.action_candidate_available)
             {
+                continue;
+            }
+            if action == WorkspaceAction::CheckCurrentDocument && !self.app_editor {
+                add(
+                    action,
+                    id.into(),
+                    label.into(),
+                    shortcut,
+                    if self.scratch_check_action(sources).is_some() {
+                        None
+                    } else {
+                        Some("Check is unavailable for the selected scratch language".into())
+                    },
+                );
                 continue;
             }
             add(
@@ -265,6 +519,15 @@ impl WorkspaceTui {
             None,
             self.draft_blocker(),
         );
+        if !self.open_targets.is_empty() {
+            add(
+                WorkspaceAction::OpenSuppliedDocuments,
+                "document.open-supplied".into(),
+                self.open_targets_label.clone(),
+                None,
+                None,
+            );
+        }
         add(
             WorkspaceAction::OpenAppDocument,
             "document.open-app".into(),
@@ -518,18 +781,24 @@ impl WorkspaceTui {
         if let Ok(source) = sources.selected() {
             for entry in &self.downstream_actions {
                 if entry.language == source.language_id() {
+                    let action = WorkspaceAction::Downstream {
+                        id: entry.id.clone(),
+                        scratch: source.id(),
+                        source: source.evaluation_source_id().clone(),
+                        language: source.language_id().into(),
+                        version: source.version(),
+                    };
+                    let blocker = if self.scratch_check_action(sources).as_ref() == Some(&action) {
+                        None
+                    } else {
+                        self.draft_blocker()
+                    };
                     add(
-                        WorkspaceAction::Downstream {
-                            id: entry.id.clone(),
-                            scratch: source.id(),
-                            source: source.evaluation_source_id().clone(),
-                            language: source.language_id().into(),
-                            version: source.version(),
-                        },
+                        action,
                         format!("downstream.{}", entry.id),
                         entry.label.clone(),
                         None,
-                        self.draft_blocker(),
+                        blocker,
                     );
                 }
             }
@@ -560,6 +829,37 @@ impl WorkspaceTui {
             self.show_result = false;
         }
         self.refresh_action_context(app);
+        let scratch_check = self.scratch_check_action(sources);
+        if action == WorkspaceAction::CheckCurrentDocument
+            || scratch_check.as_ref() == Some(&action)
+        {
+            self.latest_check = None;
+        }
+        if !self.app_editor
+            && (action == WorkspaceAction::CheckCurrentDocument
+                || scratch_check.as_ref() == Some(&action))
+        {
+            scratch_check.ok_or("Check is unavailable for the selected scratch language")?;
+            let draft = match self.editor_draft_outcome(app, Some(sources)) {
+                super::super::EditorDraftOutcome::Available(draft) => draft,
+                super::super::EditorDraftOutcome::NoMatchingEditor => {
+                    return Err(
+                        "no matching selected editor; explicitly select an eligible editor".into(),
+                    );
+                }
+                super::super::EditorDraftOutcome::Ambiguous => {
+                    return Err("multiple eligible editors; explicitly select an editor".into());
+                }
+                super::super::EditorDraftOutcome::Conflict => {
+                    return Err(
+                        "editor draft baseline changed; resolve the conflict before checking"
+                            .into(),
+                    );
+                }
+            };
+            let host = host.ok_or("no downstream host installed")?;
+            return self.check_pinned_editor_draft(app, sources, &draft, host);
+        }
         let supported = host.as_ref().is_some_and(|h| h.supports_direct_script());
         let info = self
             .actions(sources, supported)
@@ -568,6 +868,8 @@ impl WorkspaceTui {
             .ok_or_else(|| {
                 if action == WorkspaceAction::RunCurrentDocument && self.app_editor {
                     "Run requires exactly one eligible zero-argument, read-only document CandidateEvaluation operation; use Inspect to choose explicitly"
+                } else if action == WorkspaceAction::RunCurrentDocument {
+                    "Run is unavailable for the selected scratch; use Check if supported (Ctrl-T) or Run selected Script"
                 } else {
                     "action is not available in this workspace"
                 }
@@ -575,7 +877,8 @@ impl WorkspaceTui {
         if let Some(reason) = info.disabled_reason {
             return Err(reason);
         }
-        if self.open_app_prompt {
+        if self.open_app_prompt || self.open_copy_prompt {
+            self.open_copy_prompt = false;
             self.open_app_prompt = false;
             self.command_line = None;
         }
@@ -647,14 +950,34 @@ impl WorkspaceTui {
                 crate::cli::print_diagnostics(app, &mut diagnostics).map_err(|e| e.to_string())?;
                 self.show_result = false;
                 self.output_scroll = 0;
-                self.output_errors.push_str(&format!(
-                    "Check document diagnostics — App {} — revision {}\n{}",
-                    document.path().display(),
-                    document.version(),
-                    String::from_utf8_lossy(&diagnostics),
-                ));
+                let diagnostics = String::from_utf8_lossy(&diagnostics);
+                if self.app_editor {
+                    self.output_errors = if diagnostics.trim() == "diagnostics: clean" {
+                        "No errors\n".into()
+                    } else {
+                        diagnostics.into_owned()
+                    };
+                } else {
+                    self.output_errors.push_str(&format!(
+                        "Check document diagnostics — App {} — revision {}\n{}",
+                        document.path().display(),
+                        document.version(),
+                        diagnostics,
+                    ));
+                }
+            }
+            WorkspaceAction::OpenSuppliedDocuments => {
+                self.command_line = Some(String::new());
+                self.open_copy_prompt = true;
+                self.open_suggestions = super::super::quick_open::QuickOpen::supplied(
+                    self.open_targets
+                        .iter()
+                        .map(|entry| (entry.target.clone(), entry.label.clone()))
+                        .collect(),
+                );
             }
             WorkspaceAction::OpenAppDocument => {
+                self.open_suggestions = Default::default();
                 self.command_line = Some(String::new());
                 self.open_app_prompt = true;
             }
@@ -662,17 +985,8 @@ impl WorkspaceTui {
                 if app.open_document().is_none() {
                     return Err("no App document is open".into());
                 }
-                let editor = self
-                    .visible_focus_ids()
-                    .into_iter()
-                    .find(|id| {
-                        self.instances
-                            .get(id)
-                            .is_some_and(|instance| instance.editable)
-                    })
-                    .ok_or("no visible editable pane")?;
-                self.focus_named(&editor)?;
-                self.app_editor = true;
+                self.set_app_editor(true);
+                self.focus_source_editor(app, Some(sources))?;
             }
             WorkspaceAction::SaveAppDocument => {
                 app.save_open_document()
@@ -688,15 +1002,9 @@ impl WorkspaceTui {
                 );
             }
             WorkspaceAction::SelectDocument(id) => {
-                self.app_editor = false;
+                self.set_app_editor(false);
                 sources.select(id).map_err(|e| e.to_string())?;
-                if let Some(editor) = self
-                    .visible_focus_ids()
-                    .into_iter()
-                    .find(|id| self.instances.get(id).is_some_and(|i| i.editable))
-                {
-                    self.focus_named(&editor)?;
-                }
+                self.focus_source_editor(app, Some(sources))?;
             }
             WorkspaceAction::Downstream {
                 id,
@@ -767,18 +1075,12 @@ impl WorkspaceTui {
                 self.output_scroll = 0;
             }
             WorkspaceAction::NewScript => {
-                self.app_editor = false;
+                self.set_app_editor(false);
                 sources.create("scope-script", "");
-                if let Some(editor) = self.visible_focus_ids().into_iter().find(|id| {
-                    self.instances
-                        .get(id)
-                        .is_some_and(|instance| instance.editable)
-                }) {
-                    self.focus_named(&editor)?;
-                }
+                self.focus_source_editor(app, Some(sources))?;
             }
-            WorkspaceAction::Focus(id) => self.focus_named(&id)?,
-            WorkspaceAction::PreviousPane => self.focus_named("last")?,
+            WorkspaceAction::Focus(id) => self.select_editor(&id, app, Some(sources))?,
+            WorkspaceAction::PreviousPane => self.select_editor("last", app, Some(sources))?,
             WorkspaceAction::CommitDraft => {
                 self.handle_event_with_sources(
                     Event::Key(KeyEvent::new(
@@ -790,9 +1092,9 @@ impl WorkspaceTui {
                 );
             }
             WorkspaceAction::FocusDraft { pane, scratch } => {
-                self.focus_named(&pane)?;
-                self.app_editor = false;
+                self.set_app_editor(false);
                 sources.select(scratch).map_err(|e| e.to_string())?;
+                self.select_editor(&pane, app, Some(sources))?;
             }
             WorkspaceAction::PreviousResult => {
                 self.result_index = self.result_index.map(|i| i - 1);
@@ -810,7 +1112,7 @@ impl WorkspaceTui {
             }
             WorkspaceAction::Help => {
                 self.show_result = false;
-                self.output_errors.push_str("Actions: F1 search, Up/Down select, Enter invoke, Esc cancel.\nNew Script scratch explicitly changes selection. Ctrl-S publishes in memory only; use the explicit Save action to write to disk. Ctrl-R/F5 publishes the current App editor draft and authorizes one exact candidate evaluation into output. Evaluate / inspect retains explicit review and confirmation. Alt-Enter (Shift-F5 alias) publishes and checks diagnostics. Neither Run nor Check saves to disk or falls back to scratch. Run selected Script remains an explicit separate action.\nOutput: F6 focus, Up/Down or PageUp/PageDown scroll, Alt-Left/Right history; F3 returns to previous pane.\nF4 commands and F2 shell remain available. Results indicate interpreter completion only, not semantic approval.\nDirty drafts (including parked/unrelated drafts) conservatively block runs. F1 lists blockers. Run/Check explicitly publish the focused App draft; unrelated drafts still block. No implicit save or native authority.\n");
+                self.output_errors.push_str("Actions: F1 search, Up/Down select, Enter invoke, Esc cancel.\nNew Script scratch explicitly changes selection. Ctrl-S publishes in memory only; use the explicit Save action to write to disk. Ctrl-R/F5 publishes the current App editor draft and authorizes one exact candidate evaluation into output. Evaluate / inspect retains explicit review and confirmation. Ctrl-T (Alt-Enter / Shift-F5 aliases) publishes and checks diagnostics without moving editor focus. Neither App Run nor App Check saves to disk or falls back to scratch. In a configured scratch workbench, Check invokes the read-only language checker on the current editor draft; it never publishes drafts. Ctrl-S explicitly publishes scratch drafts. Run selected Script remains an explicit separate action.\nOutput: F6 focus, Up/Down or PageUp/PageDown scroll, Alt-Left/Right history; F3 returns to previous pane.\nF4 commands and F2 shell remain available. Results indicate interpreter completion only, not semantic approval.\nDirty drafts (including parked/unrelated drafts) conservatively block runs. F1 lists blockers. Run/Check explicitly publish the focused App draft; unrelated drafts still block. No implicit save or native authority.\n");
             }
         }
         Ok(())
@@ -984,12 +1286,16 @@ impl WorkspaceTui {
                                 .selected()
                                 .is_ok_and(|source| source.language_id() == "scope-script")
                     }
-                    WorkspaceAction::CheckCurrentDocument
-                    | WorkspaceAction::SaveAppDocument
-                    | WorkspaceAction::InspectDocument => {
+                    WorkspaceAction::CheckCurrentDocument => {
+                        (self.app_editor && self.action_document_present)
+                            || self.scratch_check_action(sources).is_some()
+                    }
+                    WorkspaceAction::SaveAppDocument | WorkspaceAction::InspectDocument => {
                         self.app_editor && self.action_document_present
                     }
-                    WorkspaceAction::OpenAppDocument | WorkspaceAction::MoreActions => true,
+                    WorkspaceAction::OpenAppDocument
+                    | WorkspaceAction::OpenSuppliedDocuments
+                    | WorkspaceAction::MoreActions => true,
                     _ => false,
                 }
             })

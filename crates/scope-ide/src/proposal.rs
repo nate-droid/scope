@@ -126,6 +126,7 @@ impl SourceEditProposal {
     pub fn validation(&self) -> &scope_language::CandidateValidation {
         &self.validation
     }
+    #[cfg(any(feature = "tools", test))]
     pub(crate) fn set_validation(&mut self, validation: scope_language::CandidateValidation) {
         self.validation = validation;
     }
@@ -162,6 +163,7 @@ impl SourceEditProposal {
     pub fn evidence(&self) -> Option<&ValidationEvidence> {
         self.evidence.as_ref()
     }
+    #[cfg(any(feature = "tools", test))]
     pub(crate) fn set_evidence(&mut self, evidence: ValidationEvidence) {
         self.evidence = Some(evidence);
     }

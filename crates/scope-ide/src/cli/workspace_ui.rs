@@ -7,6 +7,14 @@ use crate::{
     tui::{EditableScratchPane, Pane, TuiContext, View, WorkspaceTui},
 };
 
+/// A host-curated canonical source opened as a destination-free session copy.
+#[derive(Clone, Debug)]
+pub struct WorkspaceOpenTarget {
+    pub target: String,
+    pub label: String,
+    pub path: String,
+}
+
 /// Optional downstream startup values. Scope retains source, input, and proposal ownership.
 /// Pane IDs in `layout` and `focus` refer to `editor` and `inspector`.
 pub struct WorkspaceConfig {
@@ -16,6 +24,9 @@ pub struct WorkspaceConfig {
     /// Takes precedence over language/content and never writes the file.
     pub open_path: Option<String>,
     pub bind_selected: bool,
+    /// Curated copy targets; reads use ordinary workspace authority.
+    pub open_targets: Vec<WorkspaceOpenTarget>,
+    pub open_targets_label: String,
     pub focus: String,
     pub layout: Option<View>,
     /// Inspector with focused read-only view input; source-edit and legacy mutable
@@ -29,6 +40,8 @@ impl Default for WorkspaceConfig {
             content: String::new(),
             open_path: None,
             bind_selected: false,
+            open_targets: Vec::new(),
+            open_targets_label: "Open exercises".into(),
             focus: "editor".into(),
             layout: None,
             inspector: None,
@@ -143,6 +156,10 @@ fn build_configured(
     mut config: WorkspaceConfig,
 ) -> Result<WorkspaceTui, Box<dyn std::error::Error>> {
     let mut ui = WorkspaceTui::new();
+    ui.set_open_targets(
+        config.open_targets_label.clone(),
+        std::mem::take(&mut config.open_targets),
+    )?;
     ui.register_editable("editor", EditableScratchPane::new())?;
     ui.register(
         "inspector",
@@ -193,7 +210,11 @@ pub(super) fn run(
         .as_deref()
         .map(|host| host.downstream_actions())
         .unwrap_or_default();
+    let check_action = host
+        .as_deref()
+        .and_then(|host| host.downstream_check_action());
     let mut ui = build_configured(config)?;
+    ui.set_downstream_check_action(check_action);
     for action in actions {
         ui.register_downstream_action(action)?;
     }

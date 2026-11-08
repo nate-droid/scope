@@ -180,6 +180,7 @@ impl PaneAction {
 }
 
 struct Instance {
+    generation: u64,
     pane: Box<dyn Pane>,
     scroll: u16,
     editable: bool,
@@ -188,16 +189,37 @@ struct Instance {
 /// Instance keys are independent of `Pane::id()` (the view type). No capability
 /// or execution context is created by registration or rendering.
 #[derive(Default)]
+struct EditorSelection {
+    identity: u64,
+    retained: Vec<EditorAuthority>,
+}
+
+struct EditorAuthority {
+    source: scope_language::SourceId,
+    editor: String,
+    generation: u64,
+    identity: u64,
+    invalidated: bool,
+}
+
+#[derive(Default)]
 pub struct WorkspaceTui {
     instances: BTreeMap<String, Instance>,
     layouts: Vec<(String, View)>,
     active: usize,
     focused: Option<String>,
     last_focused: Option<String>,
+    editor_selection: std::cell::RefCell<EditorSelection>,
+    next_generation: u64,
     command_line: Option<String>,
     open_app_prompt: bool,
+    open_copy_prompt: bool,
+    open_targets: Vec<crate::cli::WorkspaceOpenTarget>,
+    open_targets_label: String,
+    opened_targets: BTreeMap<(String, String), u64>,
     open_suggestions: super::quick_open::QuickOpen,
     app_editor: bool,
+    owner_binding_generation: u64,
     // Display hints only: invocation always rediscovers and captures from App.
     action_document_present: bool,
     action_candidate_available: bool,
@@ -211,6 +233,9 @@ pub struct WorkspaceTui {
     semantic_inspection: Option<super::semantic::SemanticInspection>,
     retained_inspection: Option<super::semantic::SemanticInspection>,
     downstream_actions: Vec<DownstreamAction>,
+    downstream_check_action: Option<String>,
+    latest_check: Option<(crate::analysis::CheckEvidence, bool)>,
+    scratch_run_available: bool,
     results: Vec<crate::cli::ScriptPresentation>,
     result_index: Option<usize>,
     show_result: bool,
@@ -225,6 +250,77 @@ pub enum WorkspaceInput {
 impl WorkspaceTui {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Register a bounded host-curated copy catalog. Targets are opaque, not paths.
+    pub fn set_open_targets(
+        &mut self,
+        label: String,
+        targets: Vec<crate::cli::WorkspaceOpenTarget>,
+    ) -> Result<(), String> {
+        let mut seen = BTreeSet::new();
+        if targets.len() > 64
+            || label.trim().is_empty()
+            || targets.iter().any(|entry| {
+                entry.target.is_empty()
+                    || entry.target.len() > 4096
+                    || entry.label.trim().is_empty()
+                    || entry.target.contains(['\n', '\r'])
+                    || !seen.insert(entry.target.clone())
+                    || crate::path::ScopePath::new(&entry.path).is_err()
+            })
+        {
+            return Err("invalid supplied open catalog".into());
+        }
+        self.open_targets_label = label;
+        self.open_targets = targets;
+        self.opened_targets.clear();
+        Ok(())
+    }
+
+    fn open_workspace_target(
+        &mut self,
+        app: &App,
+        sources: &mut crate::scratch::ScratchBuffers,
+        target: &str,
+    ) -> Result<u64, String> {
+        let id = if let Some(entry) = self
+            .open_targets
+            .iter()
+            .find(|entry| entry.target == target)
+        {
+            if let Some(id) = self
+                .opened_targets
+                .get(&(app.workspace().root().to_owned(), target.to_owned()))
+                .copied()
+                .filter(|id| sources.get(*id).is_ok())
+            {
+                sources.select(id).map_err(|e| e.to_string())?;
+                id
+            } else {
+                let path = crate::path::ScopePath::new(&entry.path).map_err(|e| e.to_string())?;
+                let file = app
+                    .workspace()
+                    .read_document_source(&path)
+                    .map_err(|e| e.to_string())?;
+                let language = app
+                    .languages()
+                    .language_for_path(&path)
+                    .map(|l| l.language_id())
+                    .unwrap_or("text");
+                let id = sources.create(language, file.contents);
+                self.opened_targets
+                    .insert((app.workspace().root().to_owned(), target.into()), id);
+                id
+            }
+        } else {
+            sources
+                .open(app.workspace(), app.languages(), target)
+                .map_err(|e| e.to_string())?
+        };
+        self.set_app_editor(false);
+        self.focus_source_editor(app, Some(sources))?;
+        Ok(id)
     }
 
     /// Open a confined workspace file directly into App and edit that same document.
@@ -274,8 +370,8 @@ impl WorkspaceTui {
             self.select_layout("editor")?;
             self.geometry(area);
         }
-        self.focus_named(&editor)?;
-        self.app_editor = true;
+        self.set_app_editor(true);
+        self.focus_source_editor(app, None)?;
         self.refresh_action_context(app);
         Ok(())
     }
@@ -297,9 +393,11 @@ impl WorkspaceTui {
         if id.is_empty() || id == "output" || self.instances.contains_key(&id) {
             return Err(format!("empty or duplicate instance: {id}"));
         }
+        self.next_generation += 1;
         self.instances.insert(
             id,
             Instance {
+                generation: self.next_generation,
                 pane: Box::new(pane),
                 scroll: 0,
                 editable: false,
@@ -362,6 +460,18 @@ impl WorkspaceTui {
         Ok(())
     }
 
+    /// Owner changes invalidate inspection pins without replacing source-local
+    /// editor authority. Record transitions here, not when a snapshot is read.
+    fn set_app_editor(&mut self, enabled: bool) {
+        if self.app_editor != enabled {
+            self.owner_binding_generation = self
+                .owner_binding_generation
+                .checked_add(1)
+                .expect("editor owner transitions exhausted");
+            self.app_editor = enabled;
+        }
+    }
+
     pub fn focused(&self) -> Option<&str> {
         self.focused.as_deref()
     }
@@ -373,8 +483,9 @@ impl WorkspaceTui {
         ids
     }
 
-    /// Focus a visible instance, output, the previous pane, or a one-based
-    /// position in the current visible layout (not registration order).
+    /// Move input focus without selecting editor authority. Use `select_editor`
+    /// for an explicit user selection with its exact current source.
+    /// Positions follow the current visible layout, not registration order.
     pub fn focus_named(&mut self, name: &str) -> Result<(), String> {
         let target = if name == "last" {
             self.last_focused.clone().ok_or("no previous pane")?
@@ -391,11 +502,101 @@ impl WorkspaceTui {
         {
             return Err(format!("pane is not visible: {target}"));
         }
+
         if self.focused.as_ref() != Some(&target) {
             self.last_focused = self.focused.replace(target);
         }
         Ok(())
     }
+    /// Explicitly select the focused editable instance for the source that is
+    /// selected now, never for a source discovered at a later snapshot query.
+    pub fn select_editor(
+        &mut self,
+        name: &str,
+        app: &App,
+        sources: Option<&crate::scratch::ScratchBuffers>,
+    ) -> Result<(), String> {
+        self.focus_named(name)?;
+        let editor = self.focused.as_ref().unwrap();
+        let Some(instance) = self
+            .instances
+            .get(editor)
+            .filter(|instance| instance.editable)
+        else {
+            return Ok(());
+        };
+        let baseline = if self.app_editor {
+            app.open_document()
+                .map(super::ScratchEditAccess::document_snapshot)
+        } else {
+            TuiContext::with_view_sources(app, false, 0, sources).selected_source()
+        }
+        .ok_or("no source selected for editor authority")?;
+        let mut selection = self.editor_selection.borrow_mut();
+        let previous = selection
+            .retained
+            .iter()
+            .find(|authority| authority.source == baseline.source.source_id);
+        if previous.is_some_and(|authority| {
+            !authority.invalidated
+                && authority.editor == *editor
+                && authority.generation == instance.generation
+        }) {
+            return Ok(());
+        }
+        selection.identity += 1;
+        let identity = selection.identity;
+        selection
+            .retained
+            .retain(|authority| authority.source != baseline.source.source_id);
+        selection.retained.push(EditorAuthority {
+            source: baseline.source.source_id,
+            editor: editor.clone(),
+            generation: instance.generation,
+            identity,
+            invalidated: false,
+        });
+        Ok(())
+    }
+
+    fn focus_source_editor(
+        &mut self,
+        app: &App,
+        sources: Option<&crate::scratch::ScratchBuffers>,
+    ) -> Result<(), String> {
+        let source = if self.app_editor {
+            app.open_document().map(|document| {
+                super::ScratchEditAccess::document_snapshot(document)
+                    .source
+                    .source_id
+            })
+        } else {
+            sources
+                .and_then(|sources| sources.selected().ok())
+                .map(|source| source.evaluation_source_id().clone())
+        };
+        let retained = self
+            .editor_selection
+            .borrow()
+            .retained
+            .iter()
+            .find(|authority| Some(&authority.source) == source.as_ref() && !authority.invalidated)
+            .map(|authority| authority.editor.clone());
+        let editor = retained
+            .filter(|editor| self.visible.iter().any(|(id, _)| id == editor))
+            .or_else(|| {
+                self.visible_focus_ids().into_iter().find(|id| {
+                    self.instances
+                        .get(id)
+                        .is_some_and(|instance| instance.editable)
+                })
+            });
+        if let Some(editor) = editor {
+            self.focus_named(&editor)?;
+        }
+        Ok(())
+    }
+
     fn geometry(&mut self, area: Rect) {
         self.visible.clear();
         if let Some((_, view)) = self.layouts.get(self.active) {
@@ -438,6 +639,8 @@ impl WorkspaceTui {
             .instances
             .values()
             .any(|instance| instance.pane.has_dirty_draft());
+        let current_draft = self.editor_draft_outcome(app, sources);
+        let check = self.check_presentation(app, sources);
         for (id, area) in &self.visible {
             let instance = &self.instances[id];
             let focused = self.focused.as_ref() == Some(id);
@@ -456,6 +659,8 @@ impl WorkspaceTui {
                 inner,
                 &TuiContext::with_view_sources(app, focused, instance.scroll, sources)
                     .with_editor_drafts(editor_drafts)
+                    .with_check_presentation(check.clone())
+                    .with_draft_outcome(current_draft.clone())
                     .with_app_editor(self.app_editor && instance.editable),
             );
         }
@@ -511,7 +716,7 @@ impl WorkspaceTui {
                 return WorkspaceInput::Handled;
             }
             KeyCode::F(3) => {
-                let _ = self.focus_named("last");
+                let _ = self.select_editor("last", app, sources.as_deref());
                 return WorkspaceInput::Handled;
             }
             KeyCode::F(4) => {
@@ -521,7 +726,7 @@ impl WorkspaceTui {
             }
             KeyCode::Esc if self.app_editor => {
                 if self.focused.as_deref() == Some("output") {
-                    let _ = self.focus_named("last");
+                    let _ = self.select_editor("last", app, sources.as_deref());
                 }
                 return WorkspaceInput::Handled;
             }
@@ -545,7 +750,7 @@ impl WorkspaceTui {
                 } else {
                     1
                 };
-                let _ = self.focus_named(&ids[(old + step) % ids.len()]);
+                let _ = self.select_editor(&ids[(old + step) % ids.len()], app, sources.as_deref());
                 return WorkspaceInput::Handled;
             }
             _ => {}
@@ -584,25 +789,30 @@ impl WorkspaceTui {
             .iter()
             .find(|(id, _)| Some(id) == self.focused.as_ref())
         {
+            let current_draft = self.editor_draft_outcome(app, sources.as_deref());
+            let check = self.check_presentation(app, sources.as_deref());
+            let editor_drafts = self
+                .instances
+                .values()
+                .any(|instance| instance.pane.has_dirty_draft());
             let instance = self.instances.get_mut(id).unwrap();
             let inner = Block::default().borders(Borders::ALL).inner(*area);
             if let Some(path) = instance.pane.workspace_document_request(
                 &input,
-                &TuiContext::with_view_sources(app, true, instance.scroll, sources.as_deref()),
+                &TuiContext::with_view_sources(app, true, instance.scroll, sources.as_deref())
+                    .with_check_presentation(check.clone())
+                    .with_draft_outcome(current_draft.clone())
+                    .with_editor_drafts(editor_drafts)
+                    .with_app_editor(self.app_editor && instance.editable),
             ) {
                 self.show_result = false;
                 let result = sources
                     .as_deref_mut()
                     .ok_or_else(|| "no workspace source owner available".to_owned())
-                    .and_then(|sources| {
-                        sources
-                            .open(app.workspace(), app.languages(), &path)
-                            .map_err(|error| error.to_string())
-                    });
+                    .and_then(|sources| self.open_workspace_target(app, sources, &path));
                 match result {
                     Ok(_) => {
-                        self.app_editor = false;
-                        let _ = self.focus_named("editor");
+                        self.set_app_editor(false);
                     }
                     Err(error) => self.output_errors.push_str(&format!("{error}\n")),
                 }
@@ -630,7 +840,11 @@ impl WorkspaceTui {
             }
             if instance.pane.handle_view_event(
                 input.clone(),
-                &TuiContext::with_view_sources(app, true, instance.scroll, sources.as_deref()),
+                &TuiContext::with_view_sources(app, true, instance.scroll, sources.as_deref())
+                    .with_check_presentation(check.clone())
+                    .with_draft_outcome(current_draft.clone())
+                    .with_editor_drafts(editor_drafts)
+                    .with_app_editor(self.app_editor && instance.editable),
             ) {
                 return WorkspaceInput::Handled;
             }
@@ -704,6 +918,7 @@ impl WorkspaceTui {
                 KeyCode::Esc | KeyCode::F(4) => {
                     self.command_line = None;
                     self.open_app_prompt = false;
+                    self.open_copy_prompt = false;
                     self.open_suggestions = Default::default();
                     self.pending_prompt = None;
                 }
@@ -820,10 +1035,20 @@ impl WorkspaceTui {
         #[cfg(feature = "agent")] observer: &mut dyn FnMut(&crate::agent::AgentTurn),
     ) {
         self.show_result = false;
-        if self.open_app_prompt {
+        if self.open_app_prompt || self.open_copy_prompt {
+            let copy = self.open_copy_prompt;
             self.open_app_prompt = false;
+            self.open_copy_prompt = false;
             self.open_suggestions = Default::default();
-            let result = self.open_app_document(app, line);
+            let result = if copy {
+                if self.open_targets.iter().any(|entry| entry.target == line) {
+                    self.open_workspace_target(app, sources, line).map(|_| ())
+                } else {
+                    Err("unknown supplied open target".into())
+                }
+            } else {
+                self.open_app_document(app, line)
+            };
             if let Err(error) = result {
                 self.output_errors.push_str(&format!("{error}\n"));
             }
@@ -834,7 +1059,7 @@ impl WorkspaceTui {
             .ok()
             .map(|source| source.evaluation_source_id().clone());
         let result = match PaneAction::parse(line) {
-            Some(PaneAction::Focus(name)) => self.focus_named(&name),
+            Some(PaneAction::Focus(name)) => self.select_editor(&name, app, Some(sources)),
             Some(PaneAction::Help) => {
                 self.output_errors.push_str("F4 command • Esc cancel • F6/Shift-F6 focus • PageUp/PageDown scroll output\npane <registered visible name|output|last|1|2|…> • help\nNumbers follow visible layout order, then output. Names are exact instance names; no editor alias.\n:scope help lists existing shell actions; :scope context shows source owners.\nSubmit existing :scope commands unchanged; commit editor drafts before :scope script run.\n");
                 Ok(())
@@ -881,7 +1106,7 @@ impl WorkspaceTui {
                 .ok()
                 .map(|source| source.evaluation_source_id().clone())
         {
-            self.app_editor = false;
+            self.set_app_editor(false);
         }
         if let Err(error) = result {
             self.output_errors.push_str(&format!("{error}\n"));
@@ -893,7 +1118,8 @@ impl WorkspaceTui {
             return None;
         }
         match (key.code, key.modifiers) {
-            (KeyCode::Enter, event::KeyModifiers::ALT) => {
+            (KeyCode::Char('t'), event::KeyModifiers::CONTROL)
+            | (KeyCode::Enter, event::KeyModifiers::ALT) => {
                 Some(WorkspaceAction::CheckCurrentDocument)
             }
             (KeyCode::Char('r'), event::KeyModifiers::CONTROL) => {
@@ -940,11 +1166,16 @@ impl WorkspaceTui {
             frame.render_widget(paragraph.scroll((scroll, 0)), areas[2]);
         } else {
             frame.render_widget(Paragraph::new(self.command_line.as_ref()
-                .map(|s| format!("{}> {s}", if self.open_app_prompt { "Open document: " } else { "" }))
+                .map(|s| format!("{}> {s}", if self.open_app_prompt || self.open_copy_prompt { "Open document: " } else { "" }))
                 .unwrap_or_else(|| if self.app_editor {
-                    "Ctrl-O Open · Ctrl-R Run · Ctrl-Q Quit · Ctrl-G More".into()
+                    if self.action_candidate_available {
+                        "Ctrl-O Open · Ctrl-R Run · Ctrl-T Check · Ctrl-Q Quit · Ctrl-G More".into()
+                    } else {
+                        "Ctrl-O Open · Ctrl-T Check · Ctrl-Q Quit · Ctrl-G More".into()
+                    }
                 } else {
-                    "Ctrl-O open • Ctrl-R run • Alt-Enter check • Ctrl-S publish (memory) • Ctrl-G actions/Save • Ctrl-Q quit".into()
+                    format!("Ctrl-O open • {}Ctrl-T check • Ctrl-S publish (memory) • Ctrl-G actions/Save • Ctrl-Q quit",
+                        if self.scratch_run_available { "F5 Run Script • " } else { "" })
                 })), area);
         }
     }
@@ -1026,13 +1257,17 @@ impl WorkspaceTui {
         } else {
             self.render_footer(frame, areas[2]);
         }
-        if self.open_app_prompt {
-            self.open_suggestions.render_titled(
-                frame,
-                areas[1],
-                app,
-                "Open document — ↑/↓ select · Tab complete · Enter open · Esc cancel",
-            );
+        if self.open_app_prompt || self.open_copy_prompt {
+            let title = if self.open_copy_prompt {
+                format!(
+                    "{} — ↑/↓ select · Tab complete · Enter open · Esc cancel",
+                    self.open_targets_label
+                )
+            } else {
+                "Open document — ↑/↓ select · Tab complete · Enter open · Esc cancel".into()
+            };
+            self.open_suggestions
+                .render_titled(frame, areas[1], app, &title);
         }
     }
 
@@ -1071,6 +1306,13 @@ impl WorkspaceTui {
         let mut terminal = Some(TerminalSession::enter()?);
         let mut quit_pending = false;
         loop {
+            self.scratch_run_available =
+                command.as_ref().is_some_and(|h| h.supports_direct_script())
+                    && sources
+                        .as_deref()
+                        .unwrap_or(&fallback_sources)
+                        .selected()
+                        .is_ok_and(|source| source.language_id() == "scope-script");
             terminal.as_mut().unwrap().draw(|frame| {
                 self.render_run_frame(frame, app, sources.as_deref(), quit_pending);
                 self.render_picker(
@@ -1156,7 +1398,7 @@ impl WorkspaceTui {
                     continue;
                 }
                 if self.command_line.is_some() {
-                    let submitted = if self.open_app_prompt {
+                    let submitted = if self.open_app_prompt || self.open_copy_prompt {
                         self.open_document_event(&input, app)
                     } else {
                         self.command_event(&input)

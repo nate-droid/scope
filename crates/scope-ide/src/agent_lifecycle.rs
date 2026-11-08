@@ -327,10 +327,9 @@ impl TryFrom<RetainedAgentTurn> for AgentTurn {
                         return Err(AgentLifecycleError::InvalidSnapshot);
                     }
                 }
-                AgentState::Failed(AgentFailure::Model) => {
-                    if !turn.evidence.iter().any(|e| matches!(e, AgentEvidence::ModelResponse { ordinal, outcome: AgentModelResponseOutcome::Error(AgentFailure::Model), .. } if Some(*ordinal) == transition.request_ordinal)) {
+                AgentState::Failed(AgentFailure::Model)
+                    if !turn.evidence.iter().any(|e| matches!(e, AgentEvidence::ModelResponse { ordinal, outcome: AgentModelResponseOutcome::Error(AgentFailure::Model), .. } if Some(*ordinal) == transition.request_ordinal)) => {
                         return Err(AgentLifecycleError::InvalidSnapshot);
-                    }
                 }
                 _ => {}
             }
@@ -580,16 +579,14 @@ impl AgentTurn {
             call_ordinal,
             observation,
         } = &evidence
-        {
-            if self.state
+            && self.state
                 != (AgentState::ToolRunning {
                     request_ordinal: *request_ordinal,
                     call_ordinal: *call_ordinal,
                     name: observation.operation.clone(),
                 })
-            {
-                return Err(AgentLifecycleError::InvalidEvidence);
-            }
+        {
+            return Err(AgentLifecycleError::InvalidEvidence);
         }
         self.validate_evidence(&evidence)?;
         self.account_evidence(&evidence);

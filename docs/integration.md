@@ -240,7 +240,7 @@ report with no argument or clear with `none`. Selection and binding are independ
 borrows. Its default delegates to `invoke_script`. A closed explicit target fails,
 never falling back to App/disk/selection. Source selection is not authorization.
 See the complete [launcher example](../crates/scope-script/examples/semantic_target_cli.rs)
-and [SI6 source/authorization contract](../crates/scope-script/docs/SI6.md).
+and [live scratch source/authorization contract](../crates/scope-script/docs/semantic-targets.md).
 
 ## Namespaced downstream shell commands (SC1)
 

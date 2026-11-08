@@ -280,16 +280,14 @@ still matters.
 
 ## Heavy-path follow-up and reclamation (DX2)
 
-See the [measured development-cost report](development-costs.md) for the current
+See the [measured development-cost report](development-costs.md) for the historical
 storage inventory, owner-approved reclamation plan, warm PTY/execution timings,
 incremental probe and artifact-reuse limits. No artifacts were deleted. Historical
 example targets are potential recovery, not proven duplicate shared artifacts;
 preserve the h1 experiment's `target/results` when reclaiming its compiler output.
 
-For same-package, same-feature targets, repeat `--test` in one invocation rather
-than launching Cargo separately. Three alternating warm measurements of execution
-and policy retained all 27 tests and reduced median wall time from 1.746 to 1.591 s.
-This is a small local observation, not permission to omit Focused/Full checks.
+The report retains same-package execution/policy batching measurements; use the
+[target batching guidance](#discover-targets-and-reuse-builds) for current checks.
 PTY runtime dominated the selected warm launcher workloads; ordinary PTY targets
 already launch existing binaries, not nested Cargo. Do not weaken their wait,
 lifecycle or authorization assertions based on startup-only benchmarks.

@@ -523,7 +523,7 @@ pub struct ScriptReduction {
 }
 
 #[cfg(feature = "tui")]
-pub use workspace_ui::WorkspaceConfig;
+pub use workspace_ui::{WorkspaceConfig, WorkspaceOpenTarget};
 
 pub trait ReadOnlyCommand {
     /// Optional initial ordinary-workspace presentation and document. Ignored by shell.
@@ -557,6 +557,36 @@ pub trait ReadOnlyCommand {
     #[cfg(feature = "tui")]
     fn downstream_actions(&self) -> Vec<crate::tui::DownstreamAction> {
         Vec::new()
+    }
+
+    /// Existing registered action used for canonical Check on a matching scratch language.
+    /// This grants no publication or execution authority. App editors are unaffected.
+    #[cfg(feature = "tui")]
+    fn downstream_check_action(&self) -> Option<String> {
+        None
+    }
+
+    /// Check immutable current editor text only. No publication, proposal controller,
+    /// execution capability, or generic command fallback is supplied.
+    #[cfg(feature = "tui")]
+    fn check_editor_draft(
+        &mut self,
+        _action: &crate::tui::DownstreamAction,
+        _draft: &crate::tui::EditorDraftSnapshot,
+        _output: &mut dyn std::io::Write,
+    ) -> Result<(), String> {
+        Err("draft checking is unsupported by this host".into())
+    }
+
+    /// Check invocation-scoped analysis snapshots without publication or execution authority.
+    #[cfg(feature = "tui")]
+    fn check_analysis(
+        &mut self,
+        action: &crate::tui::DownstreamAction,
+        context: &mut crate::analysis::AnalysisContext<'_>,
+        output: &mut dyn std::io::Write,
+    ) -> Result<(), String> {
+        self.check_editor_draft(action, context.draft(), output)
     }
 
     /// Resolve contextual choices against the live pinned source when invoked.

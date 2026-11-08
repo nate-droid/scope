@@ -2,6 +2,8 @@
 pub mod agent;
 #[cfg(feature = "agent")]
 pub mod agent_edit;
+#[cfg(feature = "tui")]
+pub mod analysis;
 pub mod app;
 pub mod cli;
 pub mod document;

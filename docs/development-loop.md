@@ -75,21 +75,14 @@ reported duplicate Cell-package source warnings, without test failures.
 
 ### Comparison with the documented broad path
 
-The [terminal verification report](terminal-verification-performance.md) recorded:
-
-| Historical broad check | Tests passed | Cargo preparation | Wall |
-| --- | ---: | ---: | ---: |
-| Workspace all-features | 1,194 | 0.71 s, warm | 455.17 s |
-| Workspace defaults | 902 | 25.19 s, partial-cache | 391.44 s |
-
-Those two invocations alone sum to **846.61 s (14.11 minutes)**; this is historical
-arithmetic, not a newly measured Full run. They do not include the remaining
-isolated configurations, Clippy, docs or standalone matrix. The narrow warm
-regression plus warm integration closure sum to **0.71 s of command wall time**,
-not end-to-end task time. Different scope/cache conditions mean this is **not an
-equivalent-assurance speedup ratio**. It demonstrates why an ordinary narrow task
-should not repeatedly pay the broad-path cost. No broad suite was rerun merely
-to produce a comparison.
+The [terminal verification report](terminal-verification-performance.md) owns the
+historical default/all-features workspace measurements and their cache conditions.
+Those runs did not include the remaining isolated configurations, Clippy, docs or
+standalone matrix. The narrow warm regression plus warm integration closure here
+sum to **0.71 s of command wall time**, not end-to-end task time. Different scope
+and cache conditions mean this is **not an equivalent-assurance speedup ratio**.
+It demonstrates why an ordinary narrow task should not repeatedly pay the
+broad-path cost. No broad suite was rerun merely to produce a comparison.
 
 **Assurance:** the selected rejection regression and types/meta package tests,
 including their integration tests and one doctest, passed locally. No manifest,
@@ -104,7 +97,7 @@ authorization, feature-matrix or cross-platform correctness.
 | --- | --- |
 | [Verification audit](#audit-and-bounded-evaluation-2026-11-01) | Historical manifest cold compilation/wall 4.60/4.94 s; small-target artifact reduction 3.7%, no demonstrated warm latency gain |
 | [DX2 development costs](development-costs.md) | Same-feature execution/policy batching retained 27 tests; median 1.746 → 1.591 s; partial-cache builds and conditional reclamation plan |
-| [Terminal verification performance](terminal-verification-performance.md) | Downstream scenario approximately 24% faster; broad default/all-feature costs above; binary reuse already present |
+| [Terminal verification performance](terminal-verification-performance.md) | Downstream scenario approximately 24% faster; historical broad default/all-feature costs; binary reuse already present |
 | [Terminal synchronization](terminal-test-synchronization.md) | Warm launcher median 57.755 → 54.774 s; no demonstrated workbench speedup; retained negative waits |
 | [Source-proposal PTY performance](source-proposal-pty-performance.md) | Scenario approximately 225 → 144 s; removed transition overhead, not authorization/lifecycle assertions |
 
@@ -143,13 +136,8 @@ No H1 rebuild or sibling dependency work is part of this task.
 
 Historical standalone sizes (2.707 / 1.984 / 3.114 GiB) and the previous approximate
 7.92 GiB recovery estimate are **not current reclaimable-byte measurements**.
-No recursive compiler-artifact size scan or deletion was performed. The tracked
-empty root file `,` is not profiling debris and was left alone.
-
-Consolidation means this index plus the existing detailed reports, not rewriting
-historical evidence or introducing permanent profiling machinery. Future raw
-measurements belong in ignored task-owned `target/<task>/`; retain only commands,
-cache state, results, limitations and the engineering decision in tracked docs.
+No recursive compiler-artifact size scan or deletion was performed. Future raw
+measurements follow the [artifact policy](verification.md#bounded-performance-investigations).
 
 ## Completion reporting
 

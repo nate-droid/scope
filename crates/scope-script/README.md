@@ -20,7 +20,7 @@ interpretation of domain results. Start with the actual implementations:
   [semantic host example](examples/semantic.rs), and
   [opt-in scratch shell runner](examples/scratch_runner.rs).
 - [Normal launcher with an independent live scratch target](examples/semantic_target_cli.rs)
-  and [SI6 API contract / Path integration handoff](docs/SI6.md).
+  and [live scratch target contracts](docs/semantic-targets.md).
 
 `RegistryHost` delegates validation and dispatch to `OperationRegistry::invoke`;
 missing policy denies invocation. This adapter additionally rejects non-read

@@ -106,7 +106,10 @@ fn launcher_child() {
     assert_eq!(consumer.calls, 2, "only matching F1 actions may dispatch");
 }
 
-struct H4Language(std::sync::atomic::AtomicUsize);
+struct H4Language {
+    executions: std::sync::atomic::AtomicUsize,
+    checked_revisions: std::sync::atomic::AtomicUsize,
+}
 
 impl LanguageService for H4Language {
     fn language_id(&self) -> &'static str {
@@ -118,8 +121,33 @@ impl LanguageService for H4Language {
     fn matches_path(&self, path: &LanguagePath<'_>) -> bool {
         path.extension() == Some("h4")
     }
-    fn analyze(&self, _: LanguageDocument<'_>) -> LanguageAnalysis {
-        LanguageAnalysis::default()
+    fn analyze(&self, document: LanguageDocument<'_>) -> LanguageAnalysis {
+        use scope_language::{Diagnostic, Position, TextRange};
+        let mut analysis = LanguageAnalysis::default();
+        if let Some(column) = document.text().find("check-error-") {
+            assert_eq!(
+                document.text(),
+                "published-draft-run-draft-after-run-check-error-original"
+            );
+            assert_eq!(document.version(), 3);
+            self.checked_revisions
+                .fetch_or(1, std::sync::atomic::Ordering::SeqCst);
+            analysis.diagnostics.push(
+                Diagnostic::error(
+                    TextRange::new(Position::new(0, column), Position::new(0, column + 12)),
+                    "remove check-error-",
+                )
+                .with_source("h4"),
+            );
+        } else if document.version() == 4 {
+            assert_eq!(
+                document.text(),
+                "published-draft-run-draft-after-run-original"
+            );
+            self.checked_revisions
+                .fetch_or(2, std::sync::atomic::Ordering::SeqCst);
+        }
+        analysis
     }
     fn semantic_operations(&self) -> Vec<scope_language::SemanticOperationDescription> {
         use scope_language::*;
@@ -149,7 +177,8 @@ impl LanguageService for H4Language {
         assert_eq!(request.document.version(), 2);
         assert!(request.selection.is_none());
         assert_eq!(request.arguments, serde_json::json!({}));
-        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.executions
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(scope_language::SemanticOperationResult::Evaluated {
             value: serde_json::json!({"value": 16, "evidence": "H4_EXACT_SOURCE_OK"}),
             rationale: "Captured source only; no disk write".into(),
@@ -168,13 +197,26 @@ impl LanguageService for H4Language {
 #[ignore = "PTY child; invoked by h4_shortcuts_through_real_launcher"]
 fn h4_launcher_child() {
     assert_eq!(std::env::var("SCOPE_H4_PTY_CHILD").as_deref(), Ok("1"));
-    let service = Box::leak(Box::new(H4Language(std::sync::atomic::AtomicUsize::new(0))));
+    let service = Box::leak(Box::new(H4Language {
+        executions: std::sync::atomic::AtomicUsize::new(0),
+        checked_revisions: std::sync::atomic::AtomicUsize::new(0),
+    }));
     cli::run_with_registry(
         ["workspace", "."].map(str::to_owned),
         LanguageRegistry::builtins().with_language(service),
     )
     .unwrap();
-    assert_eq!(service.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(
+        service.executions.load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+    assert_eq!(
+        service
+            .checked_revisions
+            .load(std::sync::atomic::Ordering::SeqCst),
+        3,
+        "Ctrl-T must analyze both exact published Check revisions"
+    );
 }
 
 #[test]

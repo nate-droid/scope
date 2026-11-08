@@ -1,4 +1,4 @@
-# SI6 — live scratch semantic targets
+# Live scratch semantic targets
 
 ## Integrated callback
 
@@ -14,11 +14,9 @@ pub fn invoke_script_with_target(
 ) -> Result<(), Box<dyn std::error::Error>>
 ```
 
-The shell dispatches `:scope script run` through this callback. The complete
-integration spans upstream scope-ide changes (the trait callback, shell command,
-and scratch binding state) and downstream scope-script changes (runner forwarding,
-examples, and acceptance tests). This downstream follow-up edits only scope-script;
-it consumes the already-landed scope-ide APIs.
+The shell dispatches `:scope script run` through this callback. `scope-ide` owns
+the trait callback, shell command, and scratch binding state; `scope-script`
+provides runner forwarding, examples, and acceptance tests.
 
 * `:scope semantic-target ID` binds an explicit scratch identity independently of
   active scratch selection; `:scope semantic-target none` clears it. With no
@@ -116,9 +114,9 @@ The following transcript is covered by the enabled shell integration test:
 Finals are `"answer"`, then `"renamed"`; the third run is unsupported. No save is
 performed. This assumes a fresh shell assigning IDs 0 and 1.
 
-## Path DX2 handoff and limits
+## Downstream integration and limits
 
-Path can register its existing static language service in `LanguageRegistry`,
+A downstream host can register its static language service in `LanguageRegistry`,
 install its callback with `cli::run_with_registry_and_command`, and implement
 `ReadOnlyCommand::invoke_script_with_target` to obtain the Script and optional
 live language scratch separately. Use `target.evaluation_source_id()` for the
@@ -144,20 +142,16 @@ no binding resolves to `Ok(None)`. Language validation occurs at semantic provid
 setup, not selection. The generic callback may implement its own Script-only
 behavior; this example semantic runner retains its pre-existing unsupported
 no-target behavior. It uses whole-target selection; App `:scope run` still supports
-an explicit target range. No Path semantics or Path integration has been added.
+an explicit target range. The example declaration service does not install a
+downstream language integration.
 
-## Verified tests
+## Regression coverage
 
-```sh
-cargo test -p scope-script --test scratch_runner --offline --locked
-cargo test -p scope-script --offline --locked
-cargo check -p scope-script --example semantic_target_cli --offline --locked
-```
-
-The scratch runner suite passes all 17 tests with none ignored. Both previously
-ignored shell-contract tests are enabled and pass through trait-object dispatch.
-They cover explicit binding across active switching, unsaved edits, fresh revisions,
-clearing the target, denial and wrong language. Existing App-shell tests pass too.
+The [`scratch_runner` suite](../tests/scratch_runner.rs) covers explicit binding
+across active switching, unsaved edits, fresh revisions, clearing the target,
+denial and wrong language, including trait-object dispatch through the shell.
+Select checks using the [verification policy](../../../docs/verification.md);
+these coverage descriptions are not a claim of a fresh verification run.
 
 ### Opened persisted-file acceptance
 
@@ -174,32 +168,6 @@ retained target snapshots, two service dispatches, and byte-for-byte unchanged d
 This exercises registry-based language inference on open, not `scratch new` with an
 explicit language label.
 
-The normal launcher was also verified as a real subprocess, not only the owned
-shell harness. After `cargo build -p scope-script --example semantic_target_cli
---offline --locked`, a Python driver created a temporary workspace containing the
-same persisted file and piped the opened-file sequence above to:
-
-```text
-target/debug/examples/semantic_target_cli --allow-read --workspace TEMP_WORKSPACE shell
-```
-
-Observed output:
-
-```text
-target: SourceId(0) revision RevisionId(1)
-final: "unsaved"
-status: interpreter success (see semantic envelopes for semantic status)
-target: SourceId(0) revision RevisionId(2)
-final: "changed"
-status: interpreter success (see semantic envelopes for semantic status)
-scope> error: script execution is unsupported by this read-only host command
-```
-
-The driver additionally cleared the binding with `:scope semantic-target none`
-and ran again to verify the compatibility error above. It asserted process exit 0,
-both final values, the unsupported message, and unchanged persisted bytes. This was
-a manually executed subprocess acceptance check, not an added automated subprocess
-test. The temporary workspace was removed after verification.
 
 Direct callback tests cover retained old snapshots, whole-target selection and
 unsupported `None`. The stale-precondition regression captures scratch text/version,

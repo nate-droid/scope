@@ -6,13 +6,14 @@ import select
 import shlex
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from pty_editable_workspace import Workspace
 
-# Reuse the stdlib VT model, matching the transport's actual terminal geometry.
+# Reconstruct bounded visible cells at the transport's actual terminal geometry.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scope-workbench/tests'))
-from pty_workspace import Screen
+from visible_screen import VisibleScreen
 
 
 def main():
@@ -27,7 +28,10 @@ def main():
         )
         wrapper.chmod(0o700)
         workspace = Workspace(wrapper)
-        screen = Screen(rows=50, cols=220)
+        # Extra Check redraws retain the transport's negative-observation waits;
+        # allow headroom over its original 90-second scenario, still bounded.
+        workspace.deadline = time.monotonic() + 120
+        screen = VisibleScreen(rows=50, cols=220)
         rendered_bytes = 0
 
         def rendered():
@@ -46,8 +50,8 @@ def main():
             assert 'Ctrl-O Open · Ctrl-R Run' in quiet, quiet
             for detail in ('publish', 'revision', 'source id', 'source_id', 'Ctrl-S'):
                 assert detail.lower() not in quiet.lower(), (detail, quiet)
-            # Alt-Enter is ESC+CR on conventional terminals. Check keeps the
-            # editor active and must not invoke candidate evaluation.
+            # Retain the conventional Alt-Enter compatibility-alias exercise.
+            # Actual Ctrl-T draft publication/visible diagnostics are checked below.
             checked = workspace.send(b'\x1b\r')
             assert 'H4_EXACT_SOURCE_OK' not in checked, repr(checked)
             assert 'scope> ' not in checked, repr(checked)
@@ -77,6 +81,39 @@ def main():
             assert 'after-run-' in stale, stale
             assert 'STALE (unpublished editor draft)' in stale, stale
             assert any(line.strip(' │') == '16' for line in stale.splitlines()), stale
+            # Start with an unpublished error draft. Ctrl-T must publish/check
+            # that exact source, not the prior Run revision or the file on disk.
+            workspace.send(b'\x1b[200~check-error-\x1b[201~')
+            draft = rendered()
+            assert 'published-draft-run-draft-after-run-check-error-original' in draft, draft
+            error_cursor = (screen.row, screen.col)
+            assert screen.cells[screen.row][screen.col] == 'o', draft
+            workspace.send(b'\x14')  # actual Ctrl-T control byte
+            checked = rendered()
+            assert (screen.row, screen.col) == error_cursor, checked
+            assert '1:37:49: h4: error: remove check-error-' in checked, checked
+            for absent in ('No errors', 'Check document diagnostics', 'revision', 'scope> ',
+                           'Run current program?', 'H4_EXACT_SOURCE_OK', 'STALE'):
+                assert absent not in checked, (absent, checked)
+            assert not any(line.strip(' │') == '16' for line in checked.splitlines()), checked
+            assert source.read_text() == 'original', 'Ctrl-T saved error draft'
+
+            # Typing/deleting without a focus gesture proves Check left editing
+            # active; the next Check must clear the previous diagnostic cells.
+            workspace.send(b'\x7f' * len('check-error-'))
+            clean_draft = rendered()
+            assert 'published-draft-run-draft-after-run-original' in clean_draft, clean_draft
+            clean_cursor = (screen.row, screen.col)
+            assert clean_cursor == (error_cursor[0], error_cursor[1] - len('check-error-'))
+            assert screen.cells[screen.row][screen.col] == 'o', clean_draft
+            workspace.send(b'\x14')
+            clean = rendered()
+            assert (screen.row, screen.col) == clean_cursor, clean
+            assert any(line.strip(' │') == 'No errors' for line in clean.splitlines()), clean
+            for absent in ('remove check-error-', 'Check document diagnostics', 'revision',
+                           'scope> ', 'Run current program?', 'H4_EXACT_SOURCE_OK', 'STALE'):
+                assert absent not in clean, (absent, clean)
+            assert source.read_text() == 'original', 'Ctrl-T saved clean draft'
             workspace.send(b'\x04')  # App editor Ctrl-D is still not shell EOF.
             escaped = workspace.send(b'\x1b')  # bare workspace Esc also stays
             assert 'scope> ' not in escaped, repr(escaped)
@@ -105,9 +142,9 @@ def main():
             assert select.select([workspace.restore_read], [], [], 1)[0], 'missing terminal attributes'
             restored = pickle.loads(os.read(workspace.restore_read, 65536))
             assert restored == workspace.original, 'terminal attributes were not restored'
-            print('H4 Ctrl-O/S/R/G: direct Run, rendered scalar output, editor focus/stale '
+            print('H4 Ctrl-O/S/R/T/G: direct Run, visible scalar/error/No errors cells, retained Check cursor, editor focus/stale '
                   'feedback, advanced access, no save, dirty quit cancellation/confirmation '
-                  'and terminal restoration passed; child verified exact revision 2 once')
+                  'and terminal restoration passed; child verified exact Run revision 2 once and Check revisions 3/4')
         except BaseException:
             print(bytes(workspace.raw[-16000:]), file=sys.stderr)
             raise

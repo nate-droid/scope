@@ -8,12 +8,32 @@ use crate::app::App;
 
 #[derive(Default)]
 pub(super) struct QuickOpen {
+    targets: Option<Vec<(String, String)>>,
     query: String,
     selected: usize,
     error: Option<String>,
 }
 
 impl QuickOpen {
+    pub(super) fn supplied(targets: Vec<(String, String)>) -> Self {
+        Self {
+            targets: Some(targets),
+            ..Self::default()
+        }
+    }
+
+    fn entries(&self, app: &App) -> Vec<(String, String)> {
+        self.targets.clone().unwrap_or_else(|| {
+            app.files()
+                .iter()
+                .map(|entry| {
+                    let path = entry.path.display().to_string();
+                    (path.clone(), path)
+                })
+                .collect()
+        })
+    }
+
     pub(super) fn set_query(&mut self, query: &str) {
         if self.query != query {
             self.query = query.into();
@@ -26,7 +46,7 @@ impl QuickOpen {
         let matches = self.matches(app);
         matches
             .get(self.selected.min(matches.len().saturating_sub(1)))
-            .map(|&index| app.files()[index].path.display().to_string())
+            .map(|&index| self.entries(app)[index].0.clone())
     }
 
     pub(super) fn navigate(&mut self, code: KeyCode, app: &App) -> bool {
@@ -44,16 +64,11 @@ impl QuickOpen {
 
     fn matches(&self, app: &App) -> Vec<usize> {
         let query = self.query.to_lowercase();
-        app.files()
+        self.entries(app)
             .iter()
             .enumerate()
-            .filter(|(_, entry)| {
-                entry
-                    .path
-                    .display()
-                    .to_string()
-                    .to_lowercase()
-                    .contains(&query)
+            .filter(|(_, (target, label))| {
+                target.to_lowercase().contains(&query) || label.to_lowercase().contains(&query)
             })
             .map(|(index, _)| index)
             .collect()
@@ -148,6 +163,7 @@ impl QuickOpen {
         let selected = self.selected.min(matches.len().saturating_sub(1));
         // Keep the selected result on screen without mutable render state.
         let offset = selected.saturating_sub(rows.saturating_sub(1));
+        let entries = self.entries(app);
         let lines = if matches.is_empty() {
             vec![Line::raw("No matching files")]
         } else {
@@ -157,7 +173,7 @@ impl QuickOpen {
                 .skip(offset)
                 .take(rows)
                 .map(|(position, &index)| {
-                    let path = app.files()[index].path.display().to_string();
+                    let path = &entries[index].1;
                     if position == selected {
                         Line::styled(
                             format!("> {path}"),

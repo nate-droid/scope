@@ -78,6 +78,111 @@ where
     }
 }
 
+fn safe_label(label: &str) -> bool {
+    !label.is_empty() && label.len() <= 256 && !label.chars().any(char::is_control)
+}
+
+pub(super) fn observation(
+    operation: String,
+    source: SourceSnapshot<'_>,
+    selection: VerificationSelection,
+    cap: usize,
+) -> Result<ToolResult, ToolError> {
+    let failure = || ToolError::Execution {
+        tool: "language.semantic".into(),
+        message: "verification projection unavailable".into(),
+    };
+    if !safe_label(&operation) || !safe_label(source.language) {
+        return Err(failure());
+    }
+    let identity = match source.id {
+        SourceId::Scratch(id) => AgentSourceIdentity::ScratchBuffer(id.to_string()),
+        SourceId::Document(id) => AgentSourceIdentity::Host(id.as_u64().to_string()),
+    };
+    let mut observation = VerificationObservation {
+        metadata: VerificationMetadata {
+            operation,
+            source: AgentSourceBinding {
+                identity,
+                revision: source.version,
+                language: source.language.into(),
+            },
+            classification: selection.classification,
+            subject: selection.subject,
+            completeness: selection.completeness,
+            authority: selection.authority,
+        },
+        fields: selection.fields,
+    };
+    // Model-facing revisions are decimal strings; retained metadata stays u64.
+    let metadata_json = |metadata: &VerificationMetadata| {
+        let mut value = serde_json::to_value(metadata).expect("metadata is JSON");
+        value["source"]["revision"] = metadata.source.revision.to_string().into();
+        value
+    };
+    let envelope = |observation: &VerificationObservation, reason: Option<&str>| {
+        let mut value = ToolValue::object([
+            ("status", "verification_observation".into()),
+            (
+                "observation",
+                super::semantic::from_json(metadata_json(&observation.metadata))
+                    .expect("metadata is representable"),
+            ),
+            ("fields", observation.fields.clone()),
+        ]);
+        if let Some(reason) = reason
+            && let ToolValue::Object(fields) = &mut value
+        {
+            fields.insert("reason".into(), reason.into());
+        }
+        value
+    };
+    let metadata_size = serde_json::to_vec(&metadata_json(&observation.metadata))
+        .expect("metadata is JSON")
+        .len();
+    let value = envelope(&observation, None);
+    let invalid = !safe_label(&observation.metadata.authority)
+        || (observation.metadata.completeness == VerificationCompleteness::Unavailable
+            && (observation.metadata.classification != VerificationClassification::Inconclusive
+                || observation.fields != ToolValue::Null));
+    let oversized = metadata_size > 2048
+        || serde_json::to_vec(&super::semantic::to_json(value.clone()))
+            .expect("tool JSON")
+            .len()
+            > cap.min(4096);
+    let value = if invalid || oversized {
+        observation.metadata.classification = VerificationClassification::Inconclusive;
+        observation.metadata.completeness = VerificationCompleteness::Unavailable;
+        observation.metadata.authority = "projection unavailable".into();
+
+        observation.fields = ToolValue::Null;
+        envelope(
+            &observation,
+            Some(if invalid {
+                "projection_invalid_selection"
+            } else {
+                "projection_too_large"
+            }),
+        )
+    } else {
+        value
+    };
+    if serde_json::to_vec(&metadata_json(&observation.metadata))
+        .expect("metadata JSON")
+        .len()
+        > 2048
+        || serde_json::to_vec(&super::semantic::to_json(value.clone()))
+            .expect("tool JSON")
+            .len()
+            > cap.min(4096)
+    {
+        return Err(failure());
+    }
+    let mut result = ToolResult::new(value);
+    result.verification = Some(observation);
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,109 +291,4 @@ mod tests {
             assert!(!json.to_string().contains("secret"));
         }
     }
-}
-
-fn safe_label(label: &str) -> bool {
-    !label.is_empty() && label.len() <= 256 && !label.chars().any(char::is_control)
-}
-
-pub(super) fn observation(
-    operation: String,
-    source: SourceSnapshot<'_>,
-    selection: VerificationSelection,
-    cap: usize,
-) -> Result<ToolResult, ToolError> {
-    let failure = || ToolError::Execution {
-        tool: "language.semantic".into(),
-        message: "verification projection unavailable".into(),
-    };
-    if !safe_label(&operation) || !safe_label(source.language) {
-        return Err(failure());
-    }
-    let identity = match source.id {
-        SourceId::Scratch(id) => AgentSourceIdentity::ScratchBuffer(id.to_string()),
-        SourceId::Document(id) => AgentSourceIdentity::Host(id.as_u64().to_string()),
-    };
-    let mut observation = VerificationObservation {
-        metadata: VerificationMetadata {
-            operation,
-            source: AgentSourceBinding {
-                identity,
-                revision: source.version,
-                language: source.language.into(),
-            },
-            classification: selection.classification,
-            subject: selection.subject,
-            completeness: selection.completeness,
-            authority: selection.authority,
-        },
-        fields: selection.fields,
-    };
-    // Model-facing revisions are decimal strings; retained metadata stays u64.
-    let metadata_json = |metadata: &VerificationMetadata| {
-        let mut value = serde_json::to_value(metadata).expect("metadata is JSON");
-        value["source"]["revision"] = metadata.source.revision.to_string().into();
-        value
-    };
-    let envelope = |observation: &VerificationObservation, reason: Option<&str>| {
-        let mut value = ToolValue::object([
-            ("status", "verification_observation".into()),
-            (
-                "observation",
-                super::semantic::from_json(metadata_json(&observation.metadata))
-                    .expect("metadata is representable"),
-            ),
-            ("fields", observation.fields.clone()),
-        ]);
-        if let Some(reason) = reason
-            && let ToolValue::Object(fields) = &mut value
-        {
-            fields.insert("reason".into(), reason.into());
-        }
-        value
-    };
-    let metadata_size = serde_json::to_vec(&metadata_json(&observation.metadata))
-        .expect("metadata is JSON")
-        .len();
-    let value = envelope(&observation, None);
-    let invalid = !safe_label(&observation.metadata.authority)
-        || (observation.metadata.completeness == VerificationCompleteness::Unavailable
-            && (observation.metadata.classification != VerificationClassification::Inconclusive
-                || observation.fields != ToolValue::Null));
-    let oversized = metadata_size > 2048
-        || serde_json::to_vec(&super::semantic::to_json(value.clone()))
-            .expect("tool JSON")
-            .len()
-            > cap.min(4096);
-    let value = if invalid || oversized {
-        observation.metadata.classification = VerificationClassification::Inconclusive;
-        observation.metadata.completeness = VerificationCompleteness::Unavailable;
-        observation.metadata.authority = "projection unavailable".into();
-
-        observation.fields = ToolValue::Null;
-        envelope(
-            &observation,
-            Some(if invalid {
-                "projection_invalid_selection"
-            } else {
-                "projection_too_large"
-            }),
-        )
-    } else {
-        value
-    };
-    if serde_json::to_vec(&metadata_json(&observation.metadata))
-        .expect("metadata JSON")
-        .len()
-        > 2048
-        || serde_json::to_vec(&super::semantic::to_json(value.clone()))
-            .expect("tool JSON")
-            .len()
-            > cap.min(4096)
-    {
-        return Err(failure());
-    }
-    let mut result = ToolResult::new(value);
-    result.verification = Some(observation);
-    Ok(result)
 }
