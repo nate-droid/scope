@@ -6,6 +6,8 @@ pub mod agent_edit;
 pub mod analysis;
 pub mod app;
 pub mod cli;
+#[cfg(feature = "tools")]
+pub mod closure_inspection;
 pub mod document;
 pub mod history;
 pub mod language;
@@ -13,6 +15,8 @@ pub mod language;
 pub mod logging;
 pub mod path;
 pub mod proposal;
+#[cfg(feature = "experimental-sprout-closure")]
+pub mod registered_document_closure;
 pub mod scratch;
 #[cfg(feature = "agent")]
 pub mod semantic_context;

@@ -3,16 +3,52 @@ use crate::language::{
     Diagnostic, LanguageAction, LanguageAnalysis, LanguageRegistry, LanguageService, Symbol,
 };
 use crate::path::ToScopePath;
+#[cfg(feature = "experimental-sprout-closure")]
+use crate::registered_document_closure::{
+    InertProvider, RegisteredDocuments, TrustedClosureProvider,
+};
+#[cfg(not(feature = "experimental-sprout-closure"))]
+#[doc(hidden)]
+pub trait TrustedClosureProvider {}
+#[cfg(not(feature = "experimental-sprout-closure"))]
+impl TrustedClosureProvider for () {}
+
+#[cfg(feature = "experimental-sprout-closure")]
+pub type App<P = InertProvider> = AppState<P>;
+#[cfg(not(feature = "experimental-sprout-closure"))]
+pub type App = AppState<()>;
 use crate::workspace::{Workspace, WorkspaceEntry, WorkspaceError};
 
-#[derive(Debug, Clone)]
-pub struct App {
+/// App's experimental registered session has exclusive document ownership.
+/// With `experimental-sprout-closure`, App is deliberately not Clone: duplicating
+/// an owner would duplicate live evaluation identities and authorization state.
+#[cfg_attr(not(feature = "experimental-sprout-closure"), derive(Clone))]
+pub struct AppState<P> {
+    #[cfg(not(feature = "experimental-sprout-closure"))]
+    provider: std::marker::PhantomData<P>,
     workspace: Workspace,
     languages: LanguageRegistry,
     files: Vec<WorkspaceEntry>,
     selected: usize,
     open_document: Option<Document>,
     next_document_id: u64,
+    #[cfg(feature = "experimental-sprout-closure")]
+    registered_session: Option<RegisteredSession<P>>,
+}
+
+#[cfg(feature = "experimental-sprout-closure")]
+struct RegisteredSession<P> {
+    documents: RegisteredDocuments<P>,
+    selected: Option<String>,
+}
+
+impl<P: TrustedClosureProvider> std::fmt::Debug for AppState<P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("App")
+            .field("workspace", &self.workspace)
+            .field("open_document", &self.open_document())
+            .finish_non_exhaustive()
+    }
 }
 
 impl App {
@@ -23,7 +59,9 @@ impl App {
     pub fn builder(workspace: Workspace) -> AppBuilder {
         AppBuilder::new(workspace)
     }
+}
 
+impl<P: TrustedClosureProvider> AppState<P> {
     /// Create an isolated disk snapshot without touching the active buffer.
     pub fn proposal(
         &self,
@@ -33,12 +71,28 @@ impl App {
         crate::workspace::Proposal::new(&self.workspace, paths, limits)
     }
 
-    /// Human-only acceptance. Refuse while any active buffer is dirty.
+    /// Whether any active or parked enrolled document has unsaved edits.
+    pub fn has_unsaved_documents(&self) -> bool {
+        if self.open_document.as_ref().is_some_and(Document::is_dirty) {
+            return true;
+        }
+        #[cfg(feature = "experimental-sprout-closure")]
+        if self.registered_documents().is_some_and(|documents| {
+            documents
+                .documents()
+                .any(|(_, document)| document.is_dirty())
+        }) {
+            return true;
+        }
+        false
+    }
+
+    /// Human-only acceptance. Refuse while any owned buffer is dirty.
     pub fn accept_proposal(
         &mut self,
         proposal: &mut crate::workspace::Proposal,
     ) -> crate::workspace::Acceptance {
-        if self.open_document.as_ref().is_some_and(Document::is_dirty) {
+        if self.has_unsaved_documents() {
             return crate::workspace::Acceptance {
                 applied: Vec::new(),
                 error: Some("save or revert the dirty buffer before acceptance".into()),
@@ -70,11 +124,220 @@ impl App {
     }
 
     pub fn open_document(&self) -> Option<&Document> {
+        #[cfg(feature = "experimental-sprout-closure")]
+        match &self.registered_session {
+            Some(session) if session.selected.is_some() => session
+                .documents
+                .document(session.selected.as_deref().unwrap()),
+            _ => self.open_document.as_ref(),
+        }
+        #[cfg(not(feature = "experimental-sprout-closure"))]
         self.open_document.as_ref()
     }
 
     pub fn open_document_mut(&mut self) -> Option<&mut Document> {
+        #[cfg(feature = "experimental-sprout-closure")]
+        match &mut self.registered_session {
+            Some(session) if session.selected.is_some() => session
+                .documents
+                .document_mut(session.selected.as_deref().unwrap()),
+            _ => self.open_document.as_mut(),
+        }
+        #[cfg(not(feature = "experimental-sprout-closure"))]
         self.open_document.as_mut()
+    }
+
+    /// A configured owner must be empty. Failure returns the unchanged owner.
+    #[cfg(feature = "experimental-sprout-closure")]
+    pub fn enable_registered_session(
+        &mut self,
+        documents: RegisteredDocuments<P>,
+    ) -> Result<(), Box<RegisteredDocuments<P>>> {
+        if self.registered_session.is_some() || !documents.is_empty() {
+            return Err(Box::new(documents));
+        }
+        self.registered_session = Some(RegisteredSession {
+            documents,
+            selected: None,
+        });
+        Ok(())
+    }
+
+    #[cfg(feature = "experimental-sprout-closure")]
+    pub fn registered_documents(&self) -> Option<&RegisteredDocuments<P>> {
+        self.registered_session
+            .as_ref()
+            .map(|session| &session.documents)
+    }
+
+    /// Capture against the authoritative session. `None` means it is disabled.
+    #[cfg(feature = "experimental-sprout-closure")]
+    pub fn capture_registered_execution(
+        &self,
+        root: &str,
+        operation: &str,
+    ) -> Option<
+        Result<
+            crate::registered_document_closure::RegisteredClosureBinding,
+            crate::closure_inspection::ClosureInspectionError,
+        >,
+    > {
+        self.registered_documents()
+            .map(|documents| documents.capture(root, operation))
+    }
+
+    /// Parameterized capture against the authoritative session; disabled is None.
+    #[cfg(feature = "experimental-sprout-closure")]
+    pub fn capture_registered_invocation(
+        &self,
+        root: &str,
+        operation: &str,
+        arguments: serde_json::Value,
+        contract: crate::registered_document_closure::InvocationContract,
+    ) -> Option<
+        Result<
+            crate::registered_document_closure::RegisteredClosureBinding,
+            crate::registered_document_closure::RegisteredCaptureRejection,
+        >,
+    > {
+        self.registered_documents()
+            .map(|documents| documents.capture_invocation(root, operation, arguments, contract))
+    }
+
+    /// Consume a selection using the registry's freshness and policy checks.
+    /// `None` means the session is disabled; no authorization is requested then.
+    #[cfg(feature = "experimental-sprout-closure")]
+    pub fn invoke_registered_execution(
+        &mut self,
+        selection: crate::registered_document_closure::RegisteredClosureBinding,
+        policy: &mut impl crate::tool::semantic::HostSemanticPolicy,
+    ) -> Option<
+        Result<
+            crate::registered_document_closure::RegisteredClosureResult<P::Output>,
+            crate::closure_inspection::ClosureRejection,
+        >,
+    > {
+        self.registered_documents_mut()
+            .map(|documents| documents.invoke(selection, policy))
+    }
+
+    /// Capture and invoke through the authoritative owner. Invocation consumes its
+    /// binding and retains the registry's freshness and authorization checks.
+    #[cfg(feature = "experimental-sprout-closure")]
+    pub fn registered_documents_mut(&mut self) -> Option<&mut RegisteredDocuments<P>> {
+        self.registered_session
+            .as_mut()
+            .map(|session| &mut session.documents)
+    }
+
+    #[cfg(feature = "experimental-sprout-closure")]
+    pub fn selected_registered_module(&self) -> Option<&str> {
+        self.registered_session.as_ref()?.selected.as_deref()
+    }
+
+    #[cfg(feature = "experimental-sprout-closure")]
+    pub fn set_registered_policy(&mut self, policy: serde_json::Value) -> Result<(), AppError> {
+        self.registered_session
+            .as_mut()
+            .ok_or(AppError::RegisteredSession("session is disabled"))?
+            .documents
+            .set_policy(policy);
+        Ok(())
+    }
+
+    #[cfg(feature = "experimental-sprout-closure")]
+    pub fn disable_registered_session(
+        &mut self,
+    ) -> Result<Option<RegisteredDocuments<P>>, AppError> {
+        if self
+            .registered_documents()
+            .is_some_and(|documents| !documents.is_empty())
+        {
+            return Err(AppError::RegisteredSession(
+                "remove enrolled documents before disabling",
+            ));
+        }
+        Ok(self
+            .registered_session
+            .take()
+            .map(|session| session.documents))
+    }
+
+    #[cfg(feature = "experimental-sprout-closure")]
+    pub fn enroll_open_document(
+        &mut self,
+        module: String,
+        language: String,
+    ) -> Result<(), AppError> {
+        let session = self
+            .registered_session
+            .as_mut()
+            .ok_or(AppError::RegisteredSession("session is disabled"))?;
+        let document = self.open_document.take().ok_or(AppError::NoOpenDocument)?;
+        match session
+            .documents
+            .try_register_with_language(module.clone(), document, language)
+        {
+            Ok(()) => {
+                session.selected = Some(module);
+                Ok(())
+            }
+            Err(rejected) => {
+                let (error, document) = *rejected;
+                self.open_document = Some(document);
+                Err(AppError::Registration(error))
+            }
+        }
+    }
+
+    #[cfg(feature = "experimental-sprout-closure")]
+    pub fn select_registered_document(&mut self, module: &str) -> Result<&Document, AppError> {
+        let session = self
+            .registered_session
+            .as_mut()
+            .ok_or(AppError::RegisteredSession("session is disabled"))?;
+        if session.documents.document(module).is_none() {
+            return Err(AppError::RegisteredSession("unknown enrolled module"));
+        }
+        if self.open_document.as_ref().is_some_and(Document::is_dirty) {
+            return Err(AppError::RegisteredSession(
+                "save or close the dirty unenrolled document first",
+            ));
+        }
+        self.open_document = None;
+        session.selected = Some(module.to_owned());
+        Ok(self.open_document().expect("selected enrolled document"))
+    }
+
+    /// Transfers ownership, including unsaved edits, to the caller.
+    #[cfg(feature = "experimental-sprout-closure")]
+    pub fn remove_registered_document(&mut self, module: &str) -> Result<Document, AppError> {
+        let session = self
+            .registered_session
+            .as_mut()
+            .ok_or(AppError::RegisteredSession("session is disabled"))?;
+        let document = session
+            .documents
+            .remove(module)
+            .ok_or(AppError::RegisteredSession("unknown enrolled module"))?;
+        if session.selected.as_deref() == Some(module) {
+            session.selected = None;
+        }
+        Ok(document)
+    }
+
+    pub fn close_open_document(&mut self) -> Result<(), AppError> {
+        if self.open_document().is_some_and(Document::is_dirty) {
+            return Err(AppError::RegisteredSession(
+                "save or revert the dirty document before closing",
+            ));
+        }
+        #[cfg(feature = "experimental-sprout-closure")]
+        if let Some(module) = self.selected_registered_module().map(str::to_owned) {
+            self.remove_registered_document(&module)?;
+        }
+        self.open_document = None;
+        Ok(())
     }
 
     fn allocate_document_id(&mut self) -> DocumentId {
@@ -84,8 +347,7 @@ impl App {
     }
 
     pub fn open_language(&self) -> Option<&'static dyn LanguageService> {
-        self.open_document
-            .as_ref()
+        self.open_document()
             .and_then(|document| self.languages.language_for_document(document))
     }
 
@@ -98,40 +360,28 @@ impl App {
 
     /// Analyze diagnostics and outline together, without caching across calls.
     pub fn open_analysis(&self) -> Result<LanguageAnalysis, AppError> {
-        let document = self
-            .open_document
-            .as_ref()
-            .ok_or(AppError::NoOpenDocument)?;
+        let document = self.open_document().ok_or(AppError::NoOpenDocument)?;
         let language = self.semantic_service_for_document(document);
 
         Ok(language.analyze(document.as_language_document()))
     }
 
     pub fn open_diagnostics(&self) -> Result<Vec<Diagnostic>, AppError> {
-        let document = self
-            .open_document
-            .as_ref()
-            .ok_or(AppError::NoOpenDocument)?;
+        let document = self.open_document().ok_or(AppError::NoOpenDocument)?;
         let language = self.semantic_service_for_document(document);
 
         Ok(language.diagnostics(document.as_language_document()))
     }
 
     pub fn open_outline(&self) -> Result<Vec<Symbol>, AppError> {
-        let document = self
-            .open_document
-            .as_ref()
-            .ok_or(AppError::NoOpenDocument)?;
+        let document = self.open_document().ok_or(AppError::NoOpenDocument)?;
         let language = self.semantic_service_for_document(document);
 
         Ok(language.outline(document.as_language_document()))
     }
 
     pub fn open_actions(&self) -> Result<Vec<LanguageAction>, AppError> {
-        let document = self
-            .open_document
-            .as_ref()
-            .ok_or(AppError::NoOpenDocument)?;
+        let document = self.open_document().ok_or(AppError::NoOpenDocument)?;
         let language = self.semantic_service_for_document(document);
 
         Ok(language.actions(document.as_language_document()))
@@ -164,19 +414,32 @@ impl App {
             .workspace
             .load_file_revision(path)
             .map_err(AppError::Workspace)?;
+        #[cfg(feature = "experimental-sprout-closure")]
+        if let Some(session) = &self.registered_session {
+            if session
+                .documents
+                .documents()
+                .any(|(_, document)| document.path() == &file.path)
+            {
+                return Err(AppError::RegisteredSession("path is already enrolled"));
+            }
+            if self.open_document.as_ref().is_some_and(Document::is_dirty) {
+                return Err(AppError::RegisteredSession(
+                    "save or close the dirty unenrolled document first",
+                ));
+            }
+        }
         let document_id = self.allocate_document_id();
+        #[cfg(feature = "experimental-sprout-closure")]
+        if let Some(session) = &mut self.registered_session {
+            session.selected = None;
+        }
         self.open_document = Some(Document::from_revisioned_workspace_file(document_id, file));
-        Ok(self
-            .open_document
-            .as_ref()
-            .expect("document was just opened"))
+        Ok(self.open_document().expect("document was just opened"))
     }
 
     pub fn save_open_document(&mut self) -> Result<(), AppError> {
-        let document = self
-            .open_document
-            .as_ref()
-            .ok_or(AppError::NoOpenDocument)?;
+        let document = self.open_document().ok_or(AppError::NoOpenDocument)?;
         let path = document.path().clone();
         let contents = document.text().to_owned();
 
@@ -186,18 +449,14 @@ impl App {
         let revision = self
             .workspace
             .save_file_checked(path, contents, expected_revision)?;
-        self.open_document
-            .as_mut()
+        self.open_document_mut()
             .expect("document was checked above")
             .mark_saved_revision(revision);
         Ok(())
     }
 
     pub fn revert_open_document(&mut self) -> Result<(), AppError> {
-        let document = self
-            .open_document
-            .as_mut()
-            .ok_or(AppError::NoOpenDocument)?;
+        let document = self.open_document_mut().ok_or(AppError::NoOpenDocument)?;
         document.revert();
         Ok(())
     }
@@ -210,6 +469,85 @@ impl App {
             self.selected = self.selected.min(self.files.len() - 1);
         }
         Ok(())
+    }
+}
+
+#[cfg(feature = "experimental-sprout-closure")]
+impl App {
+    /// Attach a prepared implementation while preserving the existing editing
+    /// session. Failure returns the original App; `None` means no session exists.
+    pub fn try_with_prepared_provider<T: Send + Sync + 'static, O>(
+        self,
+        descriptor: crate::registered_document_closure::PreparedImplementationDescriptor,
+        prepared: T,
+        dispatch: fn(
+            &T,
+            crate::registered_document_closure::ProviderRequest<'_>,
+        ) -> Result<O, crate::registered_document_closure::ProviderFailure>,
+    ) -> Result<
+        App<crate::registered_document_closure::PreparedProvider<T, O>>,
+        (
+            Option<crate::closure_inspection::ClosureInspectionError>,
+            Self,
+        ),
+    > {
+        let Self {
+            workspace,
+            languages,
+            files,
+            selected,
+            open_document,
+            next_document_id,
+            registered_session,
+        } = self;
+        let Some(session) = registered_session else {
+            return Err((
+                None,
+                Self {
+                    workspace,
+                    languages,
+                    files,
+                    selected,
+                    open_document,
+                    next_document_id,
+                    registered_session: None,
+                },
+            ));
+        };
+        match RegisteredDocuments::try_with_prepared_provider(
+            session.documents,
+            descriptor,
+            prepared,
+            dispatch,
+        ) {
+            Ok(documents) => Ok(AppState {
+                workspace,
+                languages,
+                files,
+                selected,
+                open_document,
+                next_document_id,
+                registered_session: Some(RegisteredSession {
+                    documents,
+                    selected: session.selected,
+                }),
+            }),
+            Err((error, documents)) => Err((
+                Some(error),
+                Self {
+                    workspace,
+                    languages,
+                    files,
+                    selected,
+                    open_document,
+                    next_document_id,
+                    registered_session: Some(RegisteredSession {
+                        documents,
+                        selected: session.selected,
+                    }),
+                },
+            )),
+        }
     }
 }
 
@@ -248,13 +586,17 @@ impl AppBuilder {
     pub fn build(self) -> Result<App, WorkspaceError> {
         let files = self.workspace.list_files()?;
 
-        Ok(App {
+        Ok(AppState {
+            #[cfg(not(feature = "experimental-sprout-closure"))]
+            provider: std::marker::PhantomData,
             workspace: self.workspace,
             languages: self.languages,
             files,
             selected: 0,
             open_document: None,
             next_document_id: 1,
+            #[cfg(feature = "experimental-sprout-closure")]
+            registered_session: None,
         })
     }
 }
@@ -264,6 +606,9 @@ pub enum AppError {
     NoFiles,
     NoOpenDocument,
     MissingDiskRevision,
+    RegisteredSession(&'static str),
+    #[cfg(feature = "experimental-sprout-closure")]
+    Registration(crate::closure_inspection::ClosureInspectionError),
     Workspace(WorkspaceError),
 }
 
@@ -273,6 +618,9 @@ impl std::fmt::Display for AppError {
             Self::NoFiles => write!(formatter, "workspace has no files"),
             Self::NoOpenDocument => write!(formatter, "no document is open"),
             Self::MissingDiskRevision => write!(formatter, "open document has no disk revision"),
+            Self::RegisteredSession(message) => formatter.write_str(message),
+            #[cfg(feature = "experimental-sprout-closure")]
+            Self::Registration(error) => write!(formatter, "registration failed: {error:?}"),
             Self::Workspace(source) => source.fmt(formatter),
         }
     }
@@ -281,7 +629,12 @@ impl std::fmt::Display for AppError {
 impl std::error::Error for AppError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::NoFiles | Self::NoOpenDocument | Self::MissingDiskRevision => None,
+            Self::NoFiles
+            | Self::NoOpenDocument
+            | Self::MissingDiskRevision
+            | Self::RegisteredSession(_) => None,
+            #[cfg(feature = "experimental-sprout-closure")]
+            Self::Registration(_) => None,
             Self::Workspace(source) => Some(source),
         }
     }
@@ -298,6 +651,223 @@ mod tests {
     use super::*;
     use crate::path::ScopePath;
     use crate::test_support::TempWorkspace;
+
+    #[cfg(feature = "experimental-sprout-closure")]
+    #[test]
+    fn prepared_transfer_preserves_live_session_and_recovers_invalid_descriptor() {
+        use crate::registered_document_closure::*;
+        let root = TempWorkspace::new("prepared-app-transfer");
+        root.write_file("main.sprout", "original");
+        let mut app = session_app(&root);
+        app.open_path("main.sprout").unwrap();
+        app.enroll_open_document("main".into(), "sprout".into())
+            .unwrap();
+        let id = app.open_document().unwrap().evaluation_source_id().clone();
+        let selected = app.selected_index();
+        let mut descriptor = PreparedImplementationDescriptor {
+            sha256: "invalid".into(),
+            abi: "test".into(),
+            execution_policy: serde_json::json!({}),
+        };
+        let (_, app) = app
+            .try_with_prepared_provider(descriptor.clone(), (), |_, _| Ok(42u32))
+            .unwrap_err();
+        assert_eq!(app.open_document().unwrap().evaluation_source_id(), &id);
+        assert_eq!(app.selected_registered_module(), Some("main"));
+        descriptor.sha256 = "ab".repeat(32);
+        let mut app = app
+            .try_with_prepared_provider(descriptor, (), |_, _| Ok(42u32))
+            .unwrap();
+        assert_eq!(app.open_document().unwrap().evaluation_source_id(), &id);
+        assert_eq!(app.selected_index(), selected);
+        assert_eq!(app.selected_registered_module(), Some("main"));
+        app.open_document_mut()
+            .unwrap()
+            .apply_edit(crate::text::TextEdit::insert(
+                crate::text::Position::new(0, 0),
+                "edited",
+            ))
+            .unwrap();
+        assert!(app.has_unsaved_documents());
+        assert!(app.disable_registered_session().is_err());
+        let document = app.remove_registered_document("main").unwrap();
+        assert_eq!(document.text(), "editedoriginal");
+        assert_eq!(document.evaluation_source_id(), &id);
+        assert!(app.disable_registered_session().unwrap().is_some());
+    }
+
+    #[cfg(feature = "experimental-sprout-closure")]
+    fn session_app(root: &TempWorkspace) -> App {
+        use crate::registered_document_closure::*;
+        struct NoDiscovery;
+        impl Discovery for NoDiscovery {
+            fn capture(
+                &self,
+                _: &str,
+                _: Vec<RegisteredSource>,
+                _: Limits,
+            ) -> Result<DiscoveredClosure, DiscoveryError> {
+                Err(DiscoveryError {
+                    phase: DiscoveryPhase::Acquisition,
+                    category: DiscoveryCategory::MissingSource,
+                })
+            }
+        }
+        let mut app = App::new(root.workspace()).unwrap();
+        assert!(
+            app.enable_registered_session(RegisteredDocuments::new(
+                NoDiscovery,
+                TrustedLoadedArtifact::default(),
+                vec![],
+                serde_json::Value::Null,
+                Limits::default(),
+                10,
+            ))
+            .is_ok()
+        );
+        app
+    }
+
+    #[cfg(feature = "experimental-sprout-closure")]
+    #[test]
+    fn registered_session_identity_revision_save_and_close_lifecycle() {
+        let root = TempWorkspace::new("registered_session_lifecycle");
+        root.write_file("a.sprout", "same");
+        root.write_file("b.sprout", "same");
+        let mut app = session_app(&root);
+        app.open_path("a.sprout").unwrap();
+        let identity = app.open_document().unwrap().evaluation_source_id().clone();
+        app.enroll_open_document("a".into(), "sprout".into())
+            .unwrap();
+        app.open_document_mut()
+            .unwrap()
+            .apply_edit(crate::text::TextEdit::insert(
+                crate::text::Position::new(0, 4),
+                "!",
+            ))
+            .unwrap();
+        let version = app.open_document().unwrap().version();
+        assert!(app.close_open_document().is_err());
+        app.open_path("b.sprout").unwrap();
+        assert!(app.open_path("a.sprout").is_err());
+        assert!(app.open_path("missing").is_err());
+        app.enroll_open_document("b".into(), "sprout".into())
+            .unwrap();
+        app.select_registered_document("a").unwrap();
+        assert_eq!(
+            app.open_document().unwrap().evaluation_source_id(),
+            &identity
+        );
+        assert_eq!(app.open_document().unwrap().version(), version);
+        assert_eq!(app.open_document().unwrap().text(), "same!");
+        app.save_open_document().unwrap();
+        assert_eq!(root.read_file("a.sprout"), "same!");
+        assert_eq!(app.open_document().unwrap().version(), version);
+        assert!(app.disable_registered_session().is_err());
+        app.close_open_document().unwrap();
+        assert!(app.registered_documents().unwrap().document("a").is_none());
+        let b = app.remove_registered_document("b").unwrap();
+        assert_eq!(b.text(), "same");
+        assert!(app.disable_registered_session().unwrap().is_some());
+    }
+
+    #[cfg(feature = "experimental-sprout-closure")]
+    #[test]
+    fn registered_session_failed_enrollment_and_dirty_selection_preserve_document() {
+        let root = TempWorkspace::new("registered_session_failures");
+        root.write_file("a.sprout", "same");
+        root.write_file("b.sprout", "same");
+        let mut app = session_app(&root);
+        app.open_path("a.sprout").unwrap();
+        app.enroll_open_document("a".into(), "sprout".into())
+            .unwrap();
+        app.open_path("b.sprout").unwrap();
+        let identity = app.open_document().unwrap().evaluation_source_id().clone();
+        assert_ne!(
+            app.registered_documents()
+                .unwrap()
+                .document("a")
+                .unwrap()
+                .evaluation_source_id(),
+            &identity
+        );
+        for (module, language) in [("a", "sprout"), ("b", ""), ("", "sprout")] {
+            assert!(
+                app.enroll_open_document(module.into(), language.into())
+                    .is_err()
+            );
+            assert_eq!(
+                app.open_document().unwrap().evaluation_source_id(),
+                &identity
+            );
+        }
+        app.open_document_mut()
+            .unwrap()
+            .apply_edit(crate::text::TextEdit::insert(
+                crate::text::Position::new(0, 4),
+                "!",
+            ))
+            .unwrap();
+        assert!(app.select_registered_document("a").is_err());
+        assert!(app.open_path("a.sprout").is_err());
+        assert_eq!(
+            app.open_document().unwrap().evaluation_source_id(),
+            &identity
+        );
+        app.enroll_open_document("b".into(), "sprout".into())
+            .unwrap();
+        assert!(app.open_path("missing").is_err());
+        assert_eq!(app.selected_registered_module(), Some("b"));
+        let document = app.remove_registered_document("b").unwrap();
+        assert!(document.is_dirty());
+        assert_eq!(document.evaluation_source_id(), &identity);
+        assert!(app.open_document().is_none());
+    }
+
+    #[cfg(feature = "experimental-sprout-closure")]
+    #[test]
+    fn unsaved_documents_include_inactive_enrolled_buffers_and_block_proposals() {
+        let root = TempWorkspace::new("inactive_dirty_proposal_guard");
+        root.write_file("a.sprout", "same");
+        root.write_file("b.sprout", "same");
+        let mut app = session_app(&root);
+        assert!(!app.has_unsaved_documents());
+        app.open_path("a.sprout").unwrap();
+        app.open_document_mut()
+            .unwrap()
+            .apply_edit(crate::text::TextEdit::insert(
+                crate::text::Position::new(0, 4),
+                "!",
+            ))
+            .unwrap();
+        assert!(app.has_unsaved_documents());
+        app.enroll_open_document("a".into(), "sprout".into())
+            .unwrap();
+        app.open_path("b.sprout").unwrap();
+        assert!(!app.open_document().unwrap().is_dirty());
+        assert!(app.has_unsaved_documents());
+        let mut proposal = app
+            .proposal(&[ScopePath::new("a.sprout").unwrap()], Default::default())
+            .unwrap();
+        let acceptance = app.accept_proposal(&mut proposal);
+        assert!(acceptance.applied.is_empty());
+        assert!(acceptance.error.is_some());
+        assert_eq!(root.read_file("a.sprout"), "same");
+        app.select_registered_document("a").unwrap();
+        app.revert_open_document().unwrap();
+        assert!(!app.has_unsaved_documents());
+        app.open_document_mut()
+            .unwrap()
+            .apply_edit(crate::text::TextEdit::insert(
+                crate::text::Position::new(0, 4),
+                "!",
+            ))
+            .unwrap();
+        assert!(app.has_unsaved_documents());
+        let removed = app.remove_registered_document("a").unwrap();
+        assert!(removed.is_dirty());
+        assert!(!app.has_unsaved_documents());
+    }
 
     #[test]
     fn starts_with_workspace_files_and_no_open_document() {
@@ -375,6 +945,7 @@ mod tests {
         let mut app = App::new(root.workspace()).unwrap();
         let first_id = app.open_path("README.md").unwrap().id();
         let first_source = app.open_document().unwrap().evaluation_source_id().clone();
+        #[cfg(not(feature = "experimental-sprout-closure"))]
         assert_eq!(
             app.clone().open_document().unwrap().evaluation_source_id(),
             &first_source

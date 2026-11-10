@@ -5,6 +5,10 @@ Read [the verification contract](docs/verification.md) before choosing checks.
 - Start Fast: select `-p <affected-package>` and `--lib` or `--test <target>` before
   filtering test names. A filter alone does not avoid compiling unrelated targets.
   Verify a named test actually ran (zero matches is not success).
+- During implementation run only the narrowest direct target. At completion add
+  targeted adjacent checks and one meaningful acceptance journey where applicable.
+  System matrices require a changed boundary or explicit request; using an
+  unchanged security/history API does not itself change its contract.
 - Complete direct and adjacent verification; low-risk isolated changes need not
   run complete packages or downstream PTYs. Select system/integration/feature and
   reverse-dependent checks by changed boundaries using the linked policy.

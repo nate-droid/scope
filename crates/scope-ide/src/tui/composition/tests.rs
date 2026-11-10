@@ -1864,7 +1864,7 @@ fn downstream_prompt_selects_goal_and_preserves_exact_text() {
             event::KeyModifiers::NONE,
         )))
         .unwrap();
-    h.ui.submit_prompt(line, &mut h.sources, Some(&mut host))
+    h.ui.submit_prompt(line, &h.app, &mut h.sources, Some(&mut host))
         .unwrap();
     assert_eq!(
         host.calls[0].2,
@@ -1935,7 +1935,7 @@ fn downstream_prompt_cancel_empty_dirty_and_stale_never_dispatch() {
                     "candidate"
                 };
                 assert!(
-                    h.ui.submit_prompt(text.into(), &mut h.sources, Some(&mut host))
+                    h.ui.submit_prompt(text.into(), &h.app, &mut h.sources, Some(&mut host))
                         .is_err(),
                     "{change}"
                 );
@@ -1962,6 +1962,7 @@ fn downstream_prompt_footer_reserves_wrapped_candidate_space() {
                 }],
             },
             selected: 0,
+            draft: None,
         });
         assert_eq!(ui.footer_height(), 4);
         ui.command_line = Some(format!("{}\nTAIL", "proof ".repeat(80)));
@@ -2871,6 +2872,165 @@ fn portable_check_shortcut_and_publication_help_are_explicit() {
     assert!(!screen.contains("Ctrl-S publish (memory)"));
 }
 
+#[cfg(feature = "experimental-sprout-closure")]
+#[test]
+fn registered_app_editor_journey_retains_authoritative_unsaved_documents() {
+    use crate::registered_document_closure::{
+        DiscoveredClosure, Discovery, DiscoveryError, DiscoveryEvidence, Limits,
+        RegisteredDocuments, RegisteredSource, TrustedLoadedArtifact,
+    };
+    // Fixed discovery fixture: this journey tests App/editor ownership, not a parser.
+    struct PairDiscovery;
+    impl Discovery for PairDiscovery {
+        fn capture(
+            &self,
+            root: &str,
+            sources: Vec<RegisteredSource>,
+            limits: Limits,
+        ) -> Result<DiscoveredClosure, DiscoveryError> {
+            let compiler_sources = sources.iter().map(|s| s.identity.clone()).collect();
+            let portable_identity = sources.iter().flat_map(|s| s.text.bytes()).collect();
+            DiscoveredClosure::new(DiscoveryEvidence {
+                root: root.into(),
+                sources,
+                graph: vec![
+                    ("root".into(), vec!["math".into()]),
+                    ("math".into(), vec![]),
+                ],
+                exports: vec![
+                    ("root".into(), vec![]),
+                    ("math".into(), vec!["value".into()]),
+                ],
+                compiler_sources,
+                compiler_identity: "editor-journey-fixture".into(),
+                identity_version: 1,
+                portable_identity,
+                limits,
+            })
+        }
+    }
+    let root = TempWorkspace::new("registered-app-editor-journey");
+    root.write_file("main.sprout", "main source");
+    root.write_file("math.sprout", "math source");
+    let mut app = App::new(root.workspace()).unwrap();
+    let registry = RegisteredDocuments::new(
+        PairDiscovery,
+        TrustedLoadedArtifact::default(),
+        vec![scope_language::SemanticOperationDescription {
+            id: "inspect".into(),
+            description: "Capture only".into(),
+            arguments: vec![],
+            effect: scope_language::SemanticOperationEffect::Read,
+            target: scope_language::SemanticTargetRequirement::Document,
+            constraints: None,
+        }],
+        serde_json::json!({}),
+        Limits::default(),
+        1,
+    );
+    assert!(app.enable_registered_session(registry).is_ok());
+    let mut ui = WorkspaceTui::new();
+    ui.register_editable("editor", crate::tui::EditableScratchPane::new())
+        .unwrap();
+    ui.layout("main", View::leaf("editor")).unwrap();
+    ui.geometry(Rect::new(0, 0, 80, 20));
+    let mut sources = crate::scratch::ScratchBuffers::default();
+    ui.open_app_document(&mut app, "main.sprout").unwrap();
+    let main_id = app.open_document().unwrap().evaluation_source_id().clone();
+    app.enroll_open_document("root".into(), "sprout".into())
+        .unwrap();
+    ui.open_app_document(&mut app, "math.sprout").unwrap();
+    let math_id = app.open_document().unwrap().evaluation_source_id().clone();
+    app.enroll_open_document("math".into(), "sprout".into())
+        .unwrap();
+    ui.handle_event_with_sources(Event::Paste("unsaved ".into()), &mut app, &mut sources);
+    assert!(ui.select_registered_app_document(&mut app, "root").is_err());
+    assert_eq!(app.open_document().unwrap().text(), "math source");
+    ui.handle_event_with_sources(
+        Event::Key(KeyEvent::new(
+            KeyCode::Char('s'),
+            event::KeyModifiers::CONTROL,
+        )),
+        &mut app,
+        &mut sources,
+    );
+    let math = app.open_document().unwrap();
+    assert_eq!(math.text(), "unsaved math source");
+    assert_eq!(math.version(), 1);
+    assert_eq!(math.evaluation_source_id(), &math_id);
+    assert!(math.is_dirty());
+    assert!(app.close_open_document().is_err());
+    assert_eq!(root.read_file("math.sprout"), "math source");
+    ui.select_registered_app_document(&mut app, "root").unwrap();
+    assert_eq!(
+        app.open_document().unwrap().evaluation_source_id(),
+        &main_id
+    );
+    assert!(!app.open_document().unwrap().is_dirty());
+    assert!(app.has_unsaved_documents());
+    let registry = app.registered_documents().unwrap();
+    let capture = registry.capture("root", "inspect").unwrap();
+    assert!(
+        capture
+            .discovered()
+            .sources()
+            .iter()
+            .any(|s| s.module == "math" && s.text == "unsaved math source" && s.revision == "1")
+    );
+    assert_eq!(
+        registry.document("root").unwrap().evaluation_source_id(),
+        &main_id
+    );
+    assert_eq!(
+        registry.document("math").unwrap().evaluation_source_id(),
+        &math_id
+    );
+    ui.select_registered_app_document(&mut app, "math").unwrap();
+    assert_eq!(app.open_document().unwrap().text(), "unsaved math source");
+    // Route another edit after switching to ensure pane bindings follow selection.
+    ui.handle_event_with_sources(Event::Paste("again ".into()), &mut app, &mut sources);
+    ui.handle_event_with_sources(
+        Event::Key(KeyEvent::new(
+            KeyCode::Char('s'),
+            event::KeyModifiers::CONTROL,
+        )),
+        &mut app,
+        &mut sources,
+    );
+    assert_eq!(app.open_document().unwrap().version(), 2);
+    assert_eq!(
+        app.open_document().unwrap().evaluation_source_id(),
+        &math_id
+    );
+    assert_eq!(
+        app.registered_documents()
+            .unwrap()
+            .document("root")
+            .unwrap()
+            .text(),
+        "main source"
+    );
+    ui.invoke_action(
+        WorkspaceAction::SaveAppDocument,
+        &mut app,
+        &mut sources,
+        None,
+    )
+    .unwrap();
+    assert!(!app.has_unsaved_documents());
+    assert_eq!(
+        root.read_file("math.sprout"),
+        app.open_document().unwrap().text()
+    );
+    app.close_open_document().unwrap();
+    ui.open_app_document(&mut app, "math.sprout").unwrap();
+    assert_ne!(
+        app.open_document().unwrap().evaluation_source_id(),
+        &math_id
+    );
+    assert!(sources.selected().is_err(), "no parallel scratch source");
+}
+
 #[test]
 fn current_draft_check_publishes_in_memory_and_rejects_stale_baseline() {
     let root = TempWorkspace::new("current-draft-check");
@@ -3367,6 +3527,176 @@ fn minimal_app_rejected_run_prioritizes_failure_and_retains_inspection_evidence(
     .unwrap();
     assert!(h.ui.semantic_inspection.is_some());
     assert_eq!(format!("{:?}", h.ui.inspection_result().unwrap()), evidence);
+}
+
+#[test]
+fn run_test_pins_unpublished_draft_prompts_and_retains_stale_output() {
+    #[derive(Default)]
+    struct Host {
+        selected: bool,
+        fail: bool,
+        calls: Vec<(String, super::super::EditorDraftSnapshot)>,
+    }
+    impl crate::cli::ReadOnlyCommand for Host {
+        fn invoke(
+            &mut self,
+            _: &crate::document::Document,
+            _: crate::text::TextRange,
+            _: &str,
+            _: &mut dyn std::io::Write,
+        ) -> Result<(), Box<dyn std::error::Error>> {
+            panic!("no generic fallback")
+        }
+        fn select_editor_draft_test(
+            &mut self,
+            _: &DownstreamAction,
+            draft: &super::super::EditorDraftSnapshot,
+        ) -> Result<Option<String>, String> {
+            assert!(draft.text.contains("draft"));
+            Ok(self.selected.then(|| format!("cursor-{}", draft.cursor)))
+        }
+        fn run_editor_draft_test(
+            &mut self,
+            _: &DownstreamAction,
+            test: &str,
+            context: &mut crate::analysis::AnalysisContext<'_>,
+            output: &mut dyn std::io::Write,
+        ) -> Result<(), String> {
+            self.calls.push((test.into(), context.draft().clone()));
+            writeln!(output, "test evidence").unwrap();
+            if self.fail {
+                Err("host test failure".into())
+            } else {
+                Ok(())
+            }
+        }
+    }
+    let root = TempWorkspace::new("draft-run-test");
+    let mut h = EditableWorkspace::new(&root, true);
+    h.sources.create("text", "committed");
+    h.ui.register_downstream_action(downstream_test_action())
+        .unwrap();
+    h.ui.set_downstream_run_test_action(Some("inspect".into()));
+    h.render();
+    h.event(Event::Paste("draft ".into()));
+    let baseline = h.sources.selected().unwrap().text().to_owned();
+    let mut host = Host {
+        selected: true,
+        ..Host::default()
+    };
+    let action = discovered_downstream(&h);
+    assert!(action.disabled_reason.is_none());
+    h.ui.invoke_action(
+        action.action.clone(),
+        &mut h.app,
+        &mut h.sources,
+        Some(&mut host),
+    )
+    .unwrap();
+    assert_eq!(host.calls.len(), 1);
+    assert_eq!(host.calls[0].1.text, "draft committed");
+    assert!(
+        h.ui.run_test_output(&h.app, &h.sources)
+            .unwrap()
+            .contains("[current;")
+    );
+    assert!(h.ui.run_test_evidence().is_some());
+    assert!(h.ui.check_evidence().is_none());
+    assert!(!h.ui.output_text().contains("test evidence"));
+    h.ui.output_area = Some(Rect::new(0, 10, 80, 4));
+    h.event(Event::Paste("x".into()));
+    h.ui.invoke_action(
+        WorkspaceAction::Focus("output".into()),
+        &mut h.app,
+        &mut h.sources,
+        None,
+    )
+    .unwrap();
+    let rendered = h.ui.rendered_output(&h.app, Some(&h.sources));
+    assert!(rendered.contains("stale / historical"));
+    assert_eq!(rendered.matches("test evidence").count(), 1);
+    assert!(!h.ui.output_text().contains("test evidence"));
+    assert!(
+        h.ui.rendered_output(&h.app, None)
+            .contains("stale / historical")
+    );
+    h.ui.invoke_action(
+        WorkspaceAction::Focus("editor".into()),
+        &mut h.app,
+        &mut h.sources,
+        None,
+    )
+    .unwrap();
+    assert!(
+        h.ui.run_test_output(&h.app, &h.sources)
+            .unwrap()
+            .contains("stale / historical")
+    );
+    assert!(
+        h.ui.run_test_output(&h.app, &h.sources)
+            .unwrap()
+            .contains("test evidence")
+    );
+    assert!(
+        h.ui.run_pinned_editor_draft_test(
+            &h.app,
+            &h.sources,
+            &host.calls[0].1.clone(),
+            "old",
+            &mut host
+        )
+        .is_err()
+    );
+    h.control('z');
+    assert_eq!(
+        h.ui.current_editor_draft(&h.app, Some(&h.sources))
+            .unwrap()
+            .text,
+        host.calls[0].1.text
+    );
+    assert!(
+        h.ui.run_test_output(&h.app, &h.sources)
+            .unwrap()
+            .contains("stale / historical")
+    );
+    host.selected = false;
+    h.ui.invoke_action(
+        action.action.clone(),
+        &mut h.app,
+        &mut h.sources,
+        Some(&mut host),
+    )
+    .unwrap();
+    assert!(h.ui.pending_prompt.is_some());
+    h.ui.submit_prompt("named test".into(), &h.app, &mut h.sources, Some(&mut host))
+        .unwrap();
+    assert_eq!(host.calls[1].0, "named test");
+    assert_eq!(
+        h.ui.rendered_output(&h.app, Some(&h.sources))
+            .matches("test evidence")
+            .count(),
+        1
+    );
+    assert!(!h.ui.output_text().contains("test evidence"));
+    h.ui.invoke_action(action.action, &mut h.app, &mut h.sources, Some(&mut host))
+        .unwrap();
+    let selected = h.sources.selected().unwrap().id();
+    h.sources.create("text", "other");
+    h.sources.select(selected).unwrap();
+    assert!(
+        h.ui.submit_prompt("stale".into(), &h.app, &mut h.sources, Some(&mut host))
+            .is_err()
+    );
+    assert_eq!(host.calls.len(), 2);
+    let pinned = h.ui.current_editor_draft(&h.app, Some(&h.sources)).unwrap();
+    host.fail = true;
+    assert!(
+        h.ui.run_pinned_editor_draft_test(&h.app, &h.sources, &pinned, "fails", &mut host)
+            .is_err()
+    );
+    let output = h.ui.run_test_output(&h.app, &h.sources).unwrap();
+    assert!(output.contains("stale / historical") && output.contains("test evidence"));
+    assert_eq!(h.sources.selected().unwrap().text(), baseline);
 }
 
 #[test]
@@ -4221,6 +4551,10 @@ mod d2b {
                 context.root().source_id,
                 context.draft().baseline.source.source_id
             );
+            let range = scope_language::LineIndex::new(&context.draft().text)
+                .range_for_span(0..1)
+                .unwrap();
+            context.set_navigation_range(range)?;
             let dependency = context.capture(&context.origin().unwrap(), "dep.txt")?;
             assert_eq!(dependency.text(), "dependency");
             writeln!(output, "diagnostic {:?}:0", context.root().source_id).unwrap();
@@ -4286,7 +4620,24 @@ mod d2b {
             std::fs::read_to_string(root.root().join("dir/root.txt")).unwrap(),
             "baseline"
         );
+        h.ui.invoke_action(
+            WorkspaceAction::NavigateResult,
+            &mut h.app,
+            &mut h.sources,
+            None,
+        )
+        .unwrap();
+        h.ui.current_check_evidence(&h.app, &h.sources).unwrap();
         root.write_file("dir/dep.txt", "changed after success");
+        assert!(
+            h.ui.invoke_action(
+                WorkspaceAction::NavigateResult,
+                &mut h.app,
+                &mut h.sources,
+                None
+            )
+            .is_err()
+        );
         assert!(h.ui.current_check_evidence(&h.app, &h.sources).is_err());
         assert_eq!(
             h.ui.check_evidence().unwrap().snapshots()[0].text(),
@@ -5111,5 +5462,127 @@ mod d2b {
             .pane
             .editor_draft(&pinned.baseline)
             .is_some_and(|draft| draft.text == pinned.text && draft.baseline == pinned.baseline));
+    }
+}
+
+#[test]
+fn navigate_result_preserves_currentness_but_rejects_undo_switch_and_failed_results() {
+    struct Host {
+        fail: bool,
+        location: bool,
+    }
+    impl crate::cli::ReadOnlyCommand for Host {
+        fn invoke(
+            &mut self,
+            _: &crate::document::Document,
+            _: crate::text::TextRange,
+            _: &str,
+            _: &mut dyn std::io::Write,
+        ) -> Result<(), Box<dyn std::error::Error>> {
+            panic!("navigation must not execute")
+        }
+        fn check_analysis(
+            &mut self,
+            _: &DownstreamAction,
+            context: &mut crate::analysis::AnalysisContext<'_>,
+            _: &mut dyn std::io::Write,
+        ) -> Result<(), String> {
+            if self.location {
+                let range = scope_language::LineIndex::new(&context.draft().text)
+                    .range_for_span(2..3)
+                    .unwrap();
+                context.set_navigation_range(range)?;
+            }
+            if self.fail {
+                Err("rejected".into())
+            } else {
+                Ok(())
+            }
+        }
+        fn run_editor_draft_test(
+            &mut self,
+            a: &DownstreamAction,
+            _: &str,
+            context: &mut crate::analysis::AnalysisContext<'_>,
+            output: &mut dyn std::io::Write,
+        ) -> Result<(), String> {
+            self.check_analysis(a, context, output)
+        }
+    }
+    for test in [false, true] {
+        let root = TempWorkspace::new("navigate-result");
+        let mut h = EditableWorkspace::new(&root, true);
+        h.sources.create("text", "éabc");
+        h.ui.register_downstream_action(downstream_test_action())
+            .unwrap();
+        h.ui.set_downstream_check_action(Some("inspect".into()));
+        h.ui.set_downstream_run_test_action(Some("inspect".into()));
+        h.render();
+        let mut host = Host {
+            fail: false,
+            location: true,
+        };
+        let run = |h: &mut EditableWorkspace, host: &mut Host| {
+            let draft = h.ui.current_editor_draft(&h.app, Some(&h.sources)).unwrap();
+            if test {
+                h.ui.run_pinned_editor_draft_test(&h.app, &h.sources, &draft, "entry", host)
+            } else {
+                h.ui.check_pinned_editor_draft(&h.app, &h.sources, &draft, host)
+            }
+        };
+        let navigate = |h: &mut EditableWorkspace| {
+            h.ui.invoke_action(
+                WorkspaceAction::NavigateResult,
+                &mut h.app,
+                &mut h.sources,
+                None,
+            )
+        };
+        run(&mut h, &mut host).unwrap();
+        let initial = h.ui.current_editor_draft(&h.app, Some(&h.sources)).unwrap();
+        h.ui.output_area = Some(Rect::new(0, 10, 80, 4));
+        for _ in 0..2 {
+            h.ui.focus_named("output").unwrap();
+            navigate(&mut h).unwrap();
+            let after = h.ui.current_editor_draft(&h.app, Some(&h.sources)).unwrap();
+            assert_eq!(after.cursor, 2);
+            assert_eq!(after.anchor, None);
+            assert_eq!(after.text, initial.text);
+            assert_eq!(after.edit_identity, initial.edit_identity);
+            assert_eq!(h.ui.focused(), Some("editor"));
+            if test {
+                assert!(
+                    h.ui.run_test_output(&h.app, &h.sources)
+                        .unwrap()
+                        .contains("[current;")
+                );
+            } else {
+                h.ui.current_check_evidence(&h.app, &h.sources).unwrap();
+            }
+        }
+        h.event(Event::Paste("x".into()));
+        assert!(navigate(&mut h).is_err());
+        h.control('z');
+        assert_eq!(
+            h.ui.current_editor_draft(&h.app, Some(&h.sources))
+                .unwrap()
+                .text,
+            initial.text
+        );
+        assert!(navigate(&mut h).is_err());
+        run(&mut h, &mut host).unwrap();
+        let selected = h.sources.selected().unwrap().id();
+        h.sources.create("text", "another");
+        h.sources.select(selected).unwrap();
+        assert!(navigate(&mut h).is_err());
+        run(&mut h, &mut host).unwrap();
+        host.fail = true;
+        assert!(run(&mut h, &mut host).is_err());
+        assert!(navigate(&mut h).is_err());
+        host.fail = false;
+        host.location = false;
+        run(&mut h, &mut host).unwrap();
+        assert!(navigate(&mut h).is_err());
+        assert_eq!(h.sources.selected().unwrap().text(), "éabc");
     }
 }

@@ -41,12 +41,22 @@ fn render_propagates_optional_source_owner() {
     assert_eq!(observed.get(), 1);
 }
 mod actions;
+mod draft_apply;
+#[cfg(test)]
+mod format_tests;
 #[cfg(feature = "agent")]
 mod progress;
+#[cfg(all(test, feature = "experimental-sprout-closure"))]
+mod registered_tests;
 #[cfg(test)]
 mod tests;
-use super::{Pane, TuiContext, TuiContextMut, session::TerminalSession};
-use crate::{app::App, cli::ReadOnlyCommand, language::InteractiveSession};
+use super::{
+    DefaultProvider, Pane, TrustedClosureProvider, TuiContext, TuiContextMut,
+    session::TerminalSession,
+};
+#[cfg(test)]
+use crate::app::App;
+use crate::{app::AppState, cli::ReadOnlyCommand, language::InteractiveSession};
 pub use actions::{
     ActionInfo, DownstreamAction, DownstreamPrompt, DownstreamPromptChoice, WorkspaceAction,
 };
@@ -99,9 +109,9 @@ impl View {
             children: children.into_iter().collect(),
         }
     }
-    fn validate(
+    fn validate<P: TrustedClosureProvider>(
         &self,
-        instances: &BTreeMap<String, Instance>,
+        instances: &BTreeMap<String, Instance<P>>,
         seen: &mut BTreeSet<String>,
         depth: usize,
     ) -> Result<(), String> {
@@ -179,9 +189,69 @@ impl PaneAction {
     }
 }
 
-struct Instance {
+// Legacy CLI dispatch still requires the default App. Keep that bridge explicit:
+// a typed workspace must never substitute an inert owner or copy its documents.
+#[cfg(feature = "agent")]
+type LegacySubmit<P> = fn(
+    &mut crate::cli::workspace_command::WorkspaceCommandOutput,
+    &str,
+    &mut AppState<P>,
+    &mut InteractiveSession,
+    Option<&mut dyn ReadOnlyCommand>,
+    &mut crate::scratch::ScratchBuffers,
+    &mut dyn FnMut(&crate::agent::AgentTurn),
+) -> Result<(), Box<dyn std::error::Error>>;
+#[cfg(not(feature = "agent"))]
+type LegacySubmit<P> = fn(
+    &mut crate::cli::workspace_command::WorkspaceCommandOutput,
+    &str,
+    &mut AppState<P>,
+    &mut InteractiveSession,
+    Option<&mut dyn ReadOnlyCommand>,
+    &mut crate::scratch::ScratchBuffers,
+) -> Result<(), Box<dyn std::error::Error>>;
+type LegacyShell<P> = fn(
+    &mut AppState<P>,
+    &mut InteractiveSession,
+    Option<&mut dyn ReadOnlyCommand>,
+    Option<&mut crate::scratch::ScratchBuffers>,
+) -> Result<(), Box<dyn std::error::Error>>;
+struct LegacyRuntime<P: TrustedClosureProvider> {
+    submit: LegacySubmit<P>,
+    shell: LegacyShell<P>,
+}
+impl Default for LegacyRuntime<DefaultProvider> {
+    fn default() -> Self {
+        Self {
+            submit: |output,
+                     line,
+                     app,
+                     session,
+                     host,
+                     sources,
+                     #[cfg(feature = "agent")] observer| {
+                #[cfg(feature = "agent")]
+                {
+                    output.submit_observed(line, app, session, host, sources, observer)
+                }
+                #[cfg(not(feature = "agent"))]
+                {
+                    output.submit(line, app, session, host, sources)
+                }
+            },
+            shell: |app, session, host, sources| match sources {
+                Some(sources) => {
+                    crate::cli::run_terminal_borrowed_with_sources(app, session, host, sources)
+                }
+                None => crate::cli::run_terminal_borrowed(app, session, host),
+            },
+        }
+    }
+}
+
+struct Instance<P: TrustedClosureProvider> {
     generation: u64,
-    pane: Box<dyn Pane>,
+    pane: Box<dyn Pane<P>>,
     scroll: u16,
     editable: bool,
 }
@@ -202,9 +272,8 @@ struct EditorAuthority {
     invalidated: bool,
 }
 
-#[derive(Default)]
-pub struct WorkspaceTui {
-    instances: BTreeMap<String, Instance>,
+pub struct WorkspaceTui<P: TrustedClosureProvider = DefaultProvider> {
+    instances: BTreeMap<String, Instance<P>>,
     layouts: Vec<(String, View)>,
     active: usize,
     focused: Option<String>,
@@ -220,25 +289,38 @@ pub struct WorkspaceTui {
     open_suggestions: super::quick_open::QuickOpen,
     app_editor: bool,
     owner_binding_generation: u64,
-    // Display hints only: invocation always rediscovers and captures from App.
+    // Display hints only: invocation always rediscovers and captures from AppState<P>.
     action_document_present: bool,
+    format_registry: crate::language::LanguageRegistry,
+    action_format_available: bool,
     action_candidate_available: bool,
+    action_registered_available: bool,
     pending_prompt: Option<actions::PendingPrompt>,
     output: crate::cli::workspace_command::WorkspaceCommandOutput,
     output_errors: String,
+    // Match the displayed text before attributing freshness to App diagnostics.
+    app_diagnostics: Option<(String, Option<super::EditorDraftSnapshot>)>,
     output_scroll: u16,
     output_area: Option<Rect>,
     visible: Vec<(String, Rect)>,
     picker: Option<actions::Picker>,
+    draft_review: Option<super::draft_review::DraftReview>,
     semantic_inspection: Option<super::semantic::SemanticInspection>,
     retained_inspection: Option<super::semantic::SemanticInspection>,
     downstream_actions: Vec<DownstreamAction>,
     downstream_check_action: Option<String>,
+    downstream_run_test_action: Option<String>,
+
+    latest_run_test: Option<(crate::analysis::CheckEvidence, bool, String)>,
+    navigation_is_test: bool,
     latest_check: Option<(crate::analysis::CheckEvidence, bool)>,
     scratch_run_available: bool,
     results: Vec<crate::cli::ScriptPresentation>,
     result_index: Option<usize>,
     show_result: bool,
+    legacy: Option<LegacyRuntime<P>>,
+    #[cfg(feature = "experimental-sprout-closure")]
+    registered_execution: Option<super::registered::RegisteredInspection<P::Output>>,
 }
 #[derive(Debug, PartialEq, Eq)]
 pub enum WorkspaceInput {
@@ -247,9 +329,144 @@ pub enum WorkspaceInput {
     Shell,
     Quit,
 }
+impl<P: TrustedClosureProvider> WorkspaceTui<P> {
+    fn empty() -> Self {
+        Self {
+            instances: Default::default(),
+            layouts: Default::default(),
+            active: Default::default(),
+            focused: Default::default(),
+            last_focused: Default::default(),
+            editor_selection: Default::default(),
+            next_generation: Default::default(),
+            command_line: Default::default(),
+            open_app_prompt: Default::default(),
+            open_copy_prompt: Default::default(),
+            open_targets: Default::default(),
+            open_targets_label: Default::default(),
+            opened_targets: Default::default(),
+            open_suggestions: Default::default(),
+            app_editor: Default::default(),
+            owner_binding_generation: Default::default(),
+            action_document_present: Default::default(),
+            format_registry: crate::language::LanguageRegistry::empty(),
+            action_format_available: false,
+            action_candidate_available: Default::default(),
+            action_registered_available: false,
+            pending_prompt: Default::default(),
+            output: Default::default(),
+            output_errors: Default::default(),
+            app_diagnostics: None,
+            output_scroll: Default::default(),
+            output_area: Default::default(),
+            visible: Default::default(),
+            picker: Default::default(),
+            draft_review: None,
+            semantic_inspection: Default::default(),
+            retained_inspection: Default::default(),
+            downstream_actions: Default::default(),
+            downstream_check_action: Default::default(),
+            downstream_run_test_action: Default::default(),
+
+            latest_run_test: Default::default(),
+            latest_check: Default::default(),
+            navigation_is_test: false,
+            scratch_run_available: Default::default(),
+            results: Default::default(),
+            result_index: Default::default(),
+            show_result: Default::default(),
+            legacy: None,
+            #[cfg(feature = "experimental-sprout-closure")]
+            registered_execution: None,
+        }
+    }
+}
+impl Default for WorkspaceTui {
+    fn default() -> Self {
+        let mut ui = Self::empty();
+        ui.legacy = Some(LegacyRuntime::default());
+        ui
+    }
+}
 impl WorkspaceTui {
+    fn document_shortcut(key: KeyEvent) -> Option<WorkspaceAction> {
+        if key.kind != KeyEventKind::Press {
+            return None;
+        }
+        match (key.code, key.modifiers) {
+            (KeyCode::Char('t'), event::KeyModifiers::CONTROL)
+            | (KeyCode::Enter, event::KeyModifiers::ALT) => {
+                Some(WorkspaceAction::CheckCurrentDocument)
+            }
+            (KeyCode::Char('r'), event::KeyModifiers::CONTROL) => {
+                Some(WorkspaceAction::RunCurrentDocument)
+            }
+            (KeyCode::Char('o'), event::KeyModifiers::CONTROL) => {
+                Some(WorkspaceAction::OpenAppDocument)
+            }
+            _ => None,
+        }
+    }
+
     pub fn new() -> Self {
         Self::default()
+    }
+}
+impl<P: TrustedClosureProvider> WorkspaceTui<P> {
+    /// Construct a workspace for an explicitly typed provider.
+    /// Legacy shell/command dispatch is unavailable; App documents remain in their owner.
+    pub fn for_provider() -> Self {
+        Self::empty()
+    }
+
+    /// Install an operation behind the existing Run/Check actions; never grants authority.
+    /// Replacing the configuration drops pending confirmation and retained UI evidence.
+    #[cfg(feature = "experimental-sprout-closure")]
+    pub fn set_registered_execution(
+        &mut self,
+        config: Option<super::RegisteredExecution<P::Output>>,
+    ) -> Result<(), String> {
+        if let Some(config) = &config {
+            config.validate()?;
+        }
+        self.registered_execution = config.map(super::registered::RegisteredInspection::new);
+        Ok(())
+    }
+
+    /// Passive original result, including snapshots and compiler source-index mapping.
+    /// A failed or cancelled later attempt does not discard this historical evidence.
+    #[cfg(feature = "experimental-sprout-closure")]
+    pub fn registered_result(
+        &self,
+    ) -> Option<&crate::registered_document_closure::RegisteredClosureResult<P::Output>> {
+        self.registered_execution.as_ref()?.result()
+    }
+
+    fn registered_execution_available(&self, app: &AppState<P>) -> bool {
+        #[cfg(feature = "experimental-sprout-closure")]
+        {
+            self.app_editor
+                && self.registered_execution.is_some()
+                && app.selected_registered_module().is_some()
+        }
+        #[cfg(not(feature = "experimental-sprout-closure"))]
+        {
+            let _ = app;
+            false
+        }
+    }
+
+    fn registered_modal_open(&self) -> bool {
+        #[cfg(feature = "experimental-sprout-closure")]
+        {
+            self.registered_execution
+                .as_ref()
+                .is_some_and(|inspection| inspection.is_open())
+        }
+        #[cfg(not(feature = "experimental-sprout-closure"))]
+        {
+            false
+        }
     }
 
     /// Register a bounded host-curated copy catalog. Targets are opaque, not paths.
@@ -280,7 +497,7 @@ impl WorkspaceTui {
 
     fn open_workspace_target(
         &mut self,
-        app: &App,
+        app: &AppState<P>,
         sources: &mut crate::scratch::ScratchBuffers,
         target: &str,
     ) -> Result<u64, String> {
@@ -324,14 +541,20 @@ impl WorkspaceTui {
     }
 
     /// Open a confined workspace file directly into App and edit that same document.
-    /// Refuses unpublished drafts and unsaved App changes; never copies into scratch.
-    pub fn open_app_document(&mut self, app: &mut App, path: &str) -> Result<(), String> {
+    /// Refuses unpublished drafts and replacement of unsaved unenrolled documents.
+    /// Enrolled documents stay in their owner, including unsaved changes.
+    pub fn open_app_document(&mut self, app: &mut AppState<P>, path: &str) -> Result<(), String> {
         if let Some(reason) = self.draft_blocker() {
             return Err(reason);
         }
-        if app
-            .open_document()
-            .is_some_and(|document| document.is_dirty())
+        #[cfg(feature = "experimental-sprout-closure")]
+        let retained = app.selected_registered_module().is_some();
+        #[cfg(not(feature = "experimental-sprout-closure"))]
+        let retained = false;
+        if !retained
+            && app
+                .open_document()
+                .is_some_and(|document| document.is_dirty())
         {
             return Err("cannot replace App document with unsaved changes".into());
         }
@@ -347,8 +570,23 @@ impl WorkspaceTui {
                     .is_some_and(|instance| instance.editable)
             })
             .ok_or("no visible editable pane")?;
+        #[cfg(feature = "experimental-sprout-closure")]
+        let enrolled = app.registered_documents().and_then(|documents| {
+            documents
+                .documents()
+                .find(|(_, document)| document.path().display().to_string() == path)
+                .map(|(module, _)| module.to_owned())
+        });
+        #[cfg(feature = "experimental-sprout-closure")]
+        if let Some(module) = enrolled {
+            app.select_registered_document(&module)
+                .map_err(|error| error.to_string())?;
+        } else {
+            app.open_path(path).map_err(|error| error.to_string())?;
+        }
+        #[cfg(not(feature = "experimental-sprout-closure"))]
         app.open_path(path).map_err(|error| error.to_string())?;
-        // Only the launcher's conventional default split opts into App's minimal view.
+        // Only the launcher's conventional default split opts into AppState<P>'s minimal view.
         // Keep custom layouts and the workspace layout itself available unchanged.
         if self.layouts.get(self.active).is_some_and(|(name, view)| {
             name == "workspace"
@@ -376,6 +614,32 @@ impl WorkspaceTui {
         Ok(())
     }
 
+    /// Select an enrolled App document without routing through scratch. Pane-local
+    /// drafts must first be committed to the authoritative Document or cancelled.
+    #[cfg(feature = "experimental-sprout-closure")]
+    pub fn select_registered_app_document(
+        &mut self,
+        app: &mut AppState<P>,
+        module: &str,
+    ) -> Result<(), String> {
+        if let Some(reason) = self.draft_blocker() {
+            return Err(reason);
+        }
+        if !self.visible_focus_ids().iter().any(|id| {
+            self.instances
+                .get(id)
+                .is_some_and(|instance| instance.editable)
+        }) {
+            return Err("no visible editable pane".into());
+        }
+        app.select_registered_document(module)
+            .map_err(|error| error.to_string())?;
+        self.set_app_editor(true);
+        self.focus_source_editor(app, None)?;
+        self.refresh_action_context(app);
+        Ok(())
+    }
+
     /// Latest complete semantic observation, retained across modal close/reopen.
     /// Consumers must check `InspectionResult::is_fresh_app` before presenting it as current.
     pub fn inspection_result(&self) -> Option<&crate::semantic_inspection::InspectionResult> {
@@ -387,7 +651,7 @@ impl WorkspaceTui {
     pub fn register(
         &mut self,
         id: impl Into<String>,
-        pane: impl Pane + 'static,
+        pane: impl Pane<P> + 'static,
     ) -> Result<(), String> {
         let id = id.into();
         if id.is_empty() || id == "output" || self.instances.contains_key(&id) {
@@ -410,7 +674,7 @@ impl WorkspaceTui {
     pub fn register_editable(
         &mut self,
         id: impl Into<String>,
-        pane: impl Pane + 'static,
+        pane: impl Pane<P> + 'static,
     ) -> Result<(), String> {
         let id = id.into();
         self.register(id.clone(), pane)?;
@@ -513,7 +777,7 @@ impl WorkspaceTui {
     pub fn select_editor(
         &mut self,
         name: &str,
-        app: &App,
+        app: &AppState<P>,
         sources: Option<&crate::scratch::ScratchBuffers>,
     ) -> Result<(), String> {
         self.focus_named(name)?;
@@ -561,7 +825,7 @@ impl WorkspaceTui {
 
     fn focus_source_editor(
         &mut self,
-        app: &App,
+        app: &AppState<P>,
         sources: Option<&crate::scratch::ScratchBuffers>,
     ) -> Result<(), String> {
         let source = if self.app_editor {
@@ -611,7 +875,7 @@ impl WorkspaceTui {
             self.focused = self.visible.first().map(|(id, _)| id.clone());
         }
     }
-    pub fn render(&mut self, frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
+    pub fn render(&mut self, frame: &mut ratatui::Frame<'_>, area: Rect, app: &AppState<P>) {
         self.render_optional_sources(frame, area, app, None);
     }
 
@@ -620,7 +884,7 @@ impl WorkspaceTui {
         &mut self,
         frame: &mut ratatui::Frame<'_>,
         area: Rect,
-        app: &App,
+        app: &AppState<P>,
         sources: &crate::scratch::ScratchBuffers,
     ) {
         self.render_optional_sources(frame, area, app, Some(sources));
@@ -630,7 +894,7 @@ impl WorkspaceTui {
         &mut self,
         frame: &mut ratatui::Frame<'_>,
         area: Rect,
-        app: &App,
+        app: &AppState<P>,
         sources: Option<&crate::scratch::ScratchBuffers>,
     ) {
         self.refresh_action_context(app);
@@ -661,16 +925,23 @@ impl WorkspaceTui {
                     .with_editor_drafts(editor_drafts)
                     .with_check_presentation(check.clone())
                     .with_draft_outcome(current_draft.clone())
-                    .with_app_editor(self.app_editor && instance.editable),
+                    .with_app_editor(self.app_editor),
             );
         }
         if let Some(inspection) = &self.semantic_inspection {
             inspection.render(frame, frame.area(), app);
         }
+        if let Some(review) = &self.draft_review {
+            review.render(frame, frame.area());
+        }
+        #[cfg(feature = "experimental-sprout-closure")]
+        if let Some(inspection) = &self.registered_execution {
+            inspection.render(frame, frame.area(), app, self.draft_blocker().is_some());
+        }
     }
     /// Host shortcuts: F4 command bar; Esc/F2 shell; F6/Shift-F6 focus; F7 next layout;
     /// Ctrl-Q exit. All other keys (including Tab and q) belong to the pane.
-    pub fn handle_key(&mut self, key: KeyEvent, app: &mut App) -> WorkspaceInput {
+    pub fn handle_key(&mut self, key: KeyEvent, app: &mut AppState<P>) -> WorkspaceInput {
         self.handle_event_optional_sources(Event::Key(key), app, None)
     }
 
@@ -679,7 +950,7 @@ impl WorkspaceTui {
     pub fn handle_event_with_sources(
         &mut self,
         event: Event,
-        app: &mut App,
+        app: &mut AppState<P>,
         sources: &mut crate::scratch::ScratchBuffers,
     ) -> WorkspaceInput {
         self.handle_event_optional_sources(event, app, Some(sources))
@@ -688,7 +959,7 @@ impl WorkspaceTui {
     fn handle_event_optional_sources(
         &mut self,
         input: Event,
-        app: &mut App,
+        app: &mut AppState<P>,
         mut sources: Option<&mut crate::scratch::ScratchBuffers>,
     ) -> WorkspaceInput {
         self.refresh_action_context(app);
@@ -699,6 +970,37 @@ impl WorkspaceTui {
         };
         if key.kind != KeyEventKind::Press {
             return WorkspaceInput::Ignored;
+        }
+        if let Some(mut review) = self.draft_review.take() {
+            if let Some(decision) = review.decision(key) {
+                let replacement = review.replacement.as_deref().unwrap_or(&review.pinned.text);
+                if let Err(error) = self.apply_reviewed_editor_draft(
+                    app,
+                    sources.as_deref(),
+                    &review.pinned,
+                    replacement,
+                    decision,
+                ) {
+                    review.fail(error);
+                    self.draft_review = Some(review);
+                }
+            } else {
+                self.draft_review = Some(review);
+            }
+            return WorkspaceInput::Handled;
+        }
+        #[cfg(feature = "experimental-sprout-closure")]
+        if self.registered_modal_open() {
+            let blocker = self.draft_blocker();
+            let completed = self
+                .registered_execution
+                .as_mut()
+                .unwrap()
+                .handle_key(key, app, blocker);
+            if completed {
+                let _ = self.focus_named("output");
+            }
+            return WorkspaceInput::Handled;
         }
         if let Some(inspection) = &mut self.semantic_inspection {
             if inspection.handle_key(key, app) {
@@ -760,6 +1062,10 @@ impl WorkspaceTui {
                 .output_area
                 .map_or(1, |area| area.height.saturating_sub(2).max(1));
             match key.code {
+                #[cfg(feature = "experimental-sprout-closure")]
+                KeyCode::Char('d') if self.registered_execution_available(app) => {
+                    self.registered_execution.as_mut().unwrap().inspect();
+                }
                 KeyCode::Up => self.output_scroll = self.output_scroll.saturating_sub(1),
                 KeyCode::Down => {
                     self.output_scroll = self.output_scroll.saturating_add(1).min(
@@ -803,7 +1109,7 @@ impl WorkspaceTui {
                     .with_check_presentation(check.clone())
                     .with_draft_outcome(current_draft.clone())
                     .with_editor_drafts(editor_drafts)
-                    .with_app_editor(self.app_editor && instance.editable),
+                    .with_app_editor(self.app_editor),
             ) {
                 self.show_result = false;
                 let result = sources
@@ -844,7 +1150,7 @@ impl WorkspaceTui {
                     .with_check_presentation(check.clone())
                     .with_draft_outcome(current_draft.clone())
                     .with_editor_drafts(editor_drafts)
-                    .with_app_editor(self.app_editor && instance.editable),
+                    .with_app_editor(self.app_editor),
             ) {
                 return WorkspaceInput::Handled;
             }
@@ -867,7 +1173,7 @@ impl WorkspaceTui {
         )
     }
 
-    fn open_document_event(&mut self, input: &Event, app: &App) -> Option<String> {
+    fn open_document_event(&mut self, input: &Event, app: &AppState<P>) -> Option<String> {
         self.open_suggestions
             .set_query(self.command_line.as_deref().unwrap_or_default());
         if let Event::Key(key) = input
@@ -986,7 +1292,7 @@ impl WorkspaceTui {
     fn render_document_pending(
         &mut self,
         frame: &mut ratatui::Frame<'_>,
-        app: &App,
+        app: &AppState<P>,
         sources: Option<&crate::scratch::ScratchBuffers>,
         status: &str,
     ) {
@@ -1009,7 +1315,7 @@ impl WorkspaceTui {
     fn submit_command(
         &mut self,
         line: &str,
-        app: &mut App,
+        app: &mut AppState<P>,
         session: &mut InteractiveSession,
         host: Option<&mut dyn ReadOnlyCommand>,
         sources: &mut crate::scratch::ScratchBuffers,
@@ -1028,7 +1334,7 @@ impl WorkspaceTui {
     fn submit_command_inner(
         &mut self,
         line: &str,
-        app: &mut App,
+        app: &mut AppState<P>,
         session: &mut InteractiveSession,
         host: Option<&mut dyn ReadOnlyCommand>,
         sources: &mut crate::scratch::ScratchBuffers,
@@ -1090,13 +1396,25 @@ impl WorkspaceTui {
                 if let Some(reason) = blocker {
                     Err(reason)
                 } else {
-                    #[cfg(feature = "agent")]
-                    let result = self
-                        .output
-                        .submit_observed(line, app, session, host, sources, observer);
-                    #[cfg(not(feature = "agent"))]
-                    let result = self.output.submit(line, app, session, host, sources);
-                    result.map_err(|e| e.to_string())
+                    self.legacy
+                        .as_ref()
+                        .ok_or_else(|| {
+                            "legacy :scope dispatch is unavailable for this typed workspace"
+                                .to_string()
+                        })
+                        .and_then(|legacy| {
+                            (legacy.submit)(
+                                &mut self.output,
+                                line,
+                                app,
+                                session,
+                                host,
+                                sources,
+                                #[cfg(feature = "agent")]
+                                observer,
+                            )
+                            .map_err(|error| error.to_string())
+                        })
                 }
             }
         };
@@ -1110,25 +1428,6 @@ impl WorkspaceTui {
         }
         if let Err(error) = result {
             self.output_errors.push_str(&format!("{error}\n"));
-        }
-    }
-
-    fn document_shortcut(key: KeyEvent) -> Option<WorkspaceAction> {
-        if key.kind != KeyEventKind::Press {
-            return None;
-        }
-        match (key.code, key.modifiers) {
-            (KeyCode::Char('t'), event::KeyModifiers::CONTROL)
-            | (KeyCode::Enter, event::KeyModifiers::ALT) => {
-                Some(WorkspaceAction::CheckCurrentDocument)
-            }
-            (KeyCode::Char('r'), event::KeyModifiers::CONTROL) => {
-                Some(WorkspaceAction::RunCurrentDocument)
-            }
-            (KeyCode::Char('o'), event::KeyModifiers::CONTROL) => {
-                Some(WorkspaceAction::OpenAppDocument)
-            }
-            _ => None,
         }
     }
 
@@ -1182,12 +1481,31 @@ impl WorkspaceTui {
 
     fn rendered_output(
         &self,
-        app: &App,
+        app: &AppState<P>,
         sources: Option<&crate::scratch::ScratchBuffers>,
     ) -> String {
         // A rejected latest action must not present an older Run as its outcome.
         if self.app_editor && !self.output_errors.is_empty() {
+            if let Some((diagnostics, pinned)) = &self.app_diagnostics
+                && diagnostics == &self.output_errors
+                && pinned
+                    .as_ref()
+                    .is_none_or(|pinned| self.validate_editor_draft(app, sources, pinned).is_err())
+            {
+                return format!(
+                    "STALE (historical App Check; editor draft changed or unavailable)\n{diagnostics}"
+                );
+            }
             return self.output_errors.clone();
+        }
+        #[cfg(feature = "experimental-sprout-closure")]
+        if self.registered_execution_available(app) {
+            return self
+                .registered_execution
+                .as_ref()
+                .unwrap()
+                .concise(app, self.draft_blocker().is_some())
+                .unwrap_or_else(|| "Registered closure: use Check or Run".into());
         }
         if self.app_editor
             && let Some(inspection) = &self.retained_inspection
@@ -1208,15 +1526,35 @@ impl WorkspaceTui {
                 summary,
             );
         }
-        self.result_text(sources)
-            .unwrap_or_else(|| self.output_text())
+        self.result_text(sources).unwrap_or_else(|| {
+            let mut output = self.output_text();
+            // Retained test output never enters the unvalidated shared transcript.
+            // Revalidate it whenever that transcript is presented, including after focus actions.
+            let test_output = if let Some(sources) = sources {
+                self.run_test_output(app, sources)
+            } else {
+                self.latest_run_test.as_ref().map(|(evidence, _, text)| {
+                    format!(
+                        "Run Test [stale / historical; invocation {:?}]\n{text}",
+                        evidence.invocation_id()
+                    )
+                })
+            };
+            if let Some(test_output) = test_output {
+                if !output.is_empty() && !output.ends_with('\n') {
+                    output.push('\n');
+                }
+                output.push_str(&test_output);
+            }
+            output
+        })
     }
 
     // Shared by the terminal loop and rendered composition regression tests.
     fn render_run_frame(
         &mut self,
         frame: &mut ratatui::Frame<'_>,
-        app: &App,
+        app: &AppState<P>,
         sources: Option<&crate::scratch::ScratchBuffers>,
         quit_pending: bool,
     ) {
@@ -1269,12 +1607,16 @@ impl WorkspaceTui {
             self.open_suggestions
                 .render_titled(frame, areas[1], app, &title);
         }
+        #[cfg(feature = "experimental-sprout-closure")]
+        if let Some(inspection) = &self.registered_execution {
+            inspection.render(frame, frame.area(), app, self.draft_blocker().is_some());
+        }
     }
 
     /// Owns the terminal and input loop; the caller retains app, session and host.
     pub fn run(
         &mut self,
-        app: &mut App,
+        app: &mut AppState<P>,
         session: &mut InteractiveSession,
         command: Option<&mut dyn ReadOnlyCommand>,
     ) -> Result<(), Box<dyn std::error::Error>> {
@@ -1284,7 +1626,7 @@ impl WorkspaceTui {
     /// Runs with caller-owned scratch buffers retained across shell handoffs.
     pub fn run_with_sources(
         &mut self,
-        app: &mut App,
+        app: &mut AppState<P>,
         session: &mut InteractiveSession,
         command: Option<&mut dyn ReadOnlyCommand>,
         sources: &mut crate::scratch::ScratchBuffers,
@@ -1294,7 +1636,7 @@ impl WorkspaceTui {
 
     fn run_optional_sources(
         &mut self,
-        app: &mut App,
+        app: &mut AppState<P>,
         session: &mut InteractiveSession,
         mut command: Option<&mut dyn ReadOnlyCommand>,
         mut sources: Option<&mut crate::scratch::ScratchBuffers>,
@@ -1323,6 +1665,9 @@ impl WorkspaceTui {
                 if let Some(inspection) = &self.semantic_inspection {
                     inspection.render(frame, frame.area(), app);
                 }
+                if let Some(review) = &self.draft_review {
+                    review.render(frame, frame.area());
+                }
             })?;
             if event::poll(std::time::Duration::from_millis(250))? {
                 let input = event::read()?;
@@ -1344,7 +1689,10 @@ impl WorkspaceTui {
                     }
                     continue;
                 }
-                if self.semantic_inspection.is_some() {
+                if self.draft_review.is_some()
+                    || self.semantic_inspection.is_some()
+                    || self.registered_modal_open()
+                {
                     self.handle_event_optional_sources(input, app, sources.as_deref_mut());
                     continue;
                 }
@@ -1362,8 +1710,8 @@ impl WorkspaceTui {
                 } else if self.command_line.is_none() {
                     match &input {
                         Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                            _ if Self::document_shortcut(*key).is_some() => {
-                                Self::document_shortcut(*key)
+                            _ if WorkspaceTui::document_shortcut(*key).is_some() => {
+                                WorkspaceTui::document_shortcut(*key)
                             }
                             KeyCode::F(5) => self.primary_f5_action(
                                 key.modifiers,
@@ -1407,6 +1755,7 @@ impl WorkspaceTui {
                         if self.pending_prompt.is_some() {
                             if let Err(error) = self.submit_prompt(
                                 line,
+                                app,
                                 sources.as_deref_mut().unwrap_or(&mut fallback_sources),
                                 command
                                     .as_mut()
@@ -1472,9 +1821,7 @@ impl WorkspaceTui {
                 match self.handle_event_optional_sources(input, app, sources.as_deref_mut()) {
                     WorkspaceInput::Quit => {
                         let unsaved = self.draft_blocker().is_some()
-                            || app
-                                .open_document()
-                                .is_some_and(|document| document.is_dirty())
+                            || app.has_unsaved_documents()
                             || sources.as_deref().is_some_and(|sources| {
                                 sources.list().any(|source| source.is_dirty())
                             });
@@ -1485,17 +1832,18 @@ impl WorkspaceTui {
                         }
                     }
                     WorkspaceInput::Shell => {
+                        let Some(legacy) = &self.legacy else {
+                            self.output_errors.push_str(
+                                "Shell handoff is unavailable for this typed workspace.\n",
+                            );
+                            self.show_result = false;
+                            continue;
+                        };
                         drop(terminal.take());
                         let command = command
                             .as_mut()
                             .map(|host| &mut **host as &mut dyn ReadOnlyCommand);
-                        let result = match sources.as_deref_mut() {
-                            Some(sources) => crate::cli::run_terminal_borrowed_with_sources(
-                                app, session, command, sources,
-                            ),
-                            None => crate::cli::run_terminal_borrowed(app, session, command),
-                        };
-                        result?;
+                        (legacy.shell)(app, session, command, sources.as_deref_mut())?;
                         terminal = Some(TerminalSession::enter()?);
                     }
                     _ => {}
@@ -1503,5 +1851,45 @@ impl WorkspaceTui {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod provider_runtime_tests {
+    use super::*;
+
+    #[test]
+    fn default_workspace_keeps_legacy_dispatch_but_typed_constructor_never_substitutes_an_owner() {
+        let root = crate::test_support::TempWorkspace::new("typed-workspace-legacy-boundary");
+        root.write_file("main.txt", "original");
+        let mut app = App::new(root.workspace()).unwrap();
+        app.open_path("main.txt").unwrap();
+        let identity = app.open_document().unwrap().evaluation_source_id().clone();
+        assert!(WorkspaceTui::new().legacy.is_some());
+        let mut ui = WorkspaceTui::<DefaultProvider>::for_provider();
+        assert!(ui.legacy.is_none());
+        let mut session = InteractiveSession::new();
+        let mut sources = crate::scratch::ScratchBuffers::default();
+        ui.submit_command(":scope files", &mut app, &mut session, None, &mut sources);
+        assert!(
+            ui.output_errors
+                .contains("legacy :scope dispatch is unavailable")
+        );
+        assert_eq!(
+            app.open_document().unwrap().evaluation_source_id(),
+            &identity
+        );
+        assert_eq!(app.open_document().unwrap().text(), "original");
+        assert!(ui.output.bytes().is_empty());
+    }
+
+    #[cfg(feature = "experimental-sprout-closure")]
+    #[test]
+    fn prepared_provider_needs_no_default_or_output_formatting_bounds() {
+        use crate::registered_document_closure::PreparedProvider;
+        struct Host;
+        struct Evidence;
+        let ui = WorkspaceTui::<PreparedProvider<Host, Evidence>>::for_provider();
+        assert!(ui.legacy.is_none());
     }
 }

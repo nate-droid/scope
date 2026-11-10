@@ -35,6 +35,124 @@ is historical; its review-before-Run description does not describe UX5 direct Ru
 The pure Script scratch path is unchanged: Ctrl-S publishes, F5 runs the committed
 Script revision. App Run never silently falls back to Script execution.
 
+## Reviewed local Format edits
+
+**Ctrl-G → Format — preview current editor draft** formats unpublished native
+editor text when the registered language advertises a whole-document `format`
+operation with `ProposeChanges` effect and no required arguments. This does not
+reclassify formatting as a read operation. The review overlay shows current and
+proposed source; **Enter** explicitly applies, **Esc / c** cancels, and arrows,
+PageUp/PageDown and Home/End navigate the bounded preview. Formatter errors and
+already-formatted source cannot be applied. No publication, disk save, Check,
+Run, execution approval or language-specific revision mechanism is involved.
+
+### Local Apply ownership contract
+
+`WorkspaceTui::apply_reviewed_editor_draft` accepts a pinned `EditorDraftSnapshot`,
+whole-document replacement and `DraftApplyDecision`. It validates the complete
+snapshot while holding exclusive workspace/editor ownership, then dispatches to
+the selected retained editor's `Pane::apply_editor_draft` implementation. Default
+panes decline; the built-in `EditableScratchPane` records one ordinary local undo
+transaction. There is no second history stack. `Draft::replace` alone is only a
+text primitive, `ScratchEditAccess::commit` publishes authoritative source, and
+committed-source proposal acceptance updates a source revision; none substitutes
+for this local edit boundary.
+
+Identity includes the authoritative document/baseline, local edit identity,
+editor instance/generation, source/editor selections, owner-binding generation,
+cursor and selection anchor. Typing, undo/redo, a source round trip, rebinding or
+editor replacement invalidates the old pin even after byte-identical restoration.
+Stale rejection changes neither draft nor history. Custom editor implementations
+remain trusted native host code and must honor the hook's local identity/history
+contract; this API is not a sandbox or an agent authorization mechanism.
+
+Apply clears redo, advances edit identity and separates subsequent typing. Cursor
+keeps its byte offset clamped backward to a replacement grapheme boundary;
+selection clears. Undo/redo restore exact text, cursor and selection. Cancel and
+exact no-op preserve identity and both history branches. The baseline and source
+revision remain unchanged. Providers or future reviewed agent edits can reuse
+this boundary, but agent review/authorization and multi-range proposals are not
+implemented here.
+
+Existing Check/Run results remain inspectable. Scratch Check uses its existing
+full-snapshot validator; retained App diagnostics are now also pinned and labeled
+historical after a draft identity change, including byte-identical Undo. Retained
+Run keeps its existing source-revision and unpublished-draft presentation rules.
+No execution approval is renewed. Changes to unrelated sources do not invalidate
+App diagnostic evidence.
+
+The UI accepts no edits or one whole-document replacement, caps each source at
+256 KiB, sanitizes terminal controls, and uses a cell-wrapped, usize-indexed
+viewport so proposed text remains reachable beyond 65,535 display rows. Provider
+resource limits and diagnostics still apply. Production syntax support is solely
+the language provider's responsibility; Sprout's production formatter does not
+accept its experimental module grammar.
+
+### S1 verification and remaining limits
+
+Commands below ran against this implementation, reusing existing Cargo targets
+(no clean/cold-build claim). Scope commands run from `scope`; Sprout commands
+from the sibling `sprout` checkout. No guest artifacts, dependency manifests,
+execution policies or language semantics changed.
+
+| Command | Result |
+| --- | --- |
+| `cargo test --locked -p scope-ide --features tui --lib` | Passed, including local Apply identity/history, Format review and retained diagnostics regressions. |
+| `cargo test --locked -p scope-ide --all-features --lib` | Passed, including registered-editor integration and policy rejection tests. |
+| `cargo test --locked -p scope-ide --features tui --test retained_workspace --test source_edit_controller --test source_evaluation` | Passed: 4 + 8 + 3 tests. |
+| `cargo test --locked -p scope-execution --all-features` | Passed: 14 real-Wasm execution + 13 policy tests. |
+| `cargo test -p scope-ide --locked --features tools` | Passed, complete package. |
+| `cargo test -p scope-ide --locked --no-default-features` | Passed, complete package. |
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` | Passed after correcting the new preview test-module ordering. |
+| `cargo clippy -p scope-ide --all-targets --features tui --locked -- -D warnings` | Passed. |
+| `cargo clippy -p scope-ide --all-targets --features tools --locked -- -D warnings` | Passed. |
+| `cargo clippy -p scope-ide --all-targets --no-default-features --locked -- -D warnings` | Passed. |
+| `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps --locked` | Passed after quoting the existing `AppState<P>` documentation in the changed pane file. |
+| `cargo test --locked --manifest-path examples/downstream/Cargo.toml` | Passed: 4 tests. |
+| `cargo test --locked --manifest-path examples/harness/Cargo.toml` | Passed: 7 tests. |
+| `cargo run --locked --manifest-path examples/harness/Cargo.toml` | Passed approved/denied fixture journeys. |
+| `cargo fmt --manifest-path examples/managed-transfer/Cargo.toml -- --check` | Passed. |
+| `cargo test --locked --manifest-path examples/managed-transfer/Cargo.toml` | Passed: 1 test. |
+| `cargo run --locked -p xtask -- check-downstream --offline` | Passed downstream/harness checks, generated-language tests and binary smoke runs. |
+| `cargo fmt --all -- --check` | Passed in both checkouts. |
+| `python3 -B -m unittest discover -s .github/scripts -p 'test_*.py' -v` | Passed: 5 tests. |
+| `python3 -B .github/scripts/check_markdown_links.py` | Passed. |
+| Sprout: `cargo test --locked --test scope_formatting` | Passed: 4 canonical adapter tests; also passed with `--features closure-discovery,bundle-check`. |
+| Sprout: `cargo build --locked --features closure-discovery,bundle-check --example scope` | Passed; no guest build. |
+| Sprout: `cargo test --locked --features closure-discovery,bundle-check --test interactive_workflow native_format_preview_apply_cancel_undo_redo_through_actual_launcher -- --exact --nocapture` | Passed actual native PTY: unsaved preview, Esc/c Cancel, Apply, one-step Undo/Redo, already-formatted no-op, unchanged disk, unsaved quit guard and terminal restoration. |
+
+**Full remains incomplete**, not replaced by the passing focused checks:
+
+- `cargo test --workspace --locked` timed out at 240 seconds in
+  `source_proposals_through_real_launcher`.
+- `cargo test --workspace --all-features --locked` timed out at 240 seconds during
+  `h4_shortcuts_through_real_launcher`.
+- `cargo test -p scope-ide --locked --features tui` timed out at 180 seconds in
+  `source_proposals_through_real_launcher`. These broad timed-out commands were
+  not repeated; their full PTY closure remains unverified.
+- `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`
+  failed. A narrowed diagnostic follow-up,
+  `cargo clippy -p scope-ide --lib --all-features --locked -- -D warnings`, reports
+  five errors in unchanged `app/mod.rs`, `registered_document_closure.rs` and
+  `tui/registered.rs` (large error/type-complexity and collapsible-if lints).
+- Sprout's `cargo test --locked --test scope_formatting --test formatting`
+  stopped at `maintained_production_examples_round_trip`: 10 formatter tests
+  passed, one failed with `expected fn`; the corpus includes experimental module
+  files. The adapter target was subsequently run independently and passed.
+- Sprout's `cargo test --locked --features closure-discovery,bundle-check --test scope_integration --test scope_formatting`
+  stopped in the execution consumer target (4 passed, 15 failed). A narrowed
+  `cargo test --locked --features closure-discovery,bundle-check --test scope_integration maintained_programs_and_entry_outcomes_through_app -- --exact --nocapture`
+  confirms an absent `execution.preview.text` expectation at `tests/scope_integration.rs:393`.
+  That execution-path failure was not repaired or worked around by rebuilding
+  guests; it does not establish a formatter regression or a passing execution suite.
+
+Automated native PTY evidence is not human usability testing or cross-platform
+terminal certification. Custom panes must populate the new `cursor`/`anchor`
+snapshot fields and explicitly implement the local Apply hook to support edits.
+Untitled scratches without a language path and general multi-range proposals are
+not supported by this Format UI. There is no agent auto-Apply or new execution
+authorization, and B1/B2/candidate boundaries are unchanged.
+
 ### Why the inspector could still show the scratch
 
 Investigation distinguished pane composition from source binding: the technical

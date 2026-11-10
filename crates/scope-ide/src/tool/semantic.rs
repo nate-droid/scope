@@ -63,6 +63,75 @@ pub struct SemanticAuthorization<'a> {
     pub arguments: &'a Value,
 }
 
+/// Explicit authority domain: a single target is never implicitly a closure grant.
+pub enum HostAuthorizationRequest<'a> {
+    /// Separate opt-in domain; ordinary closure approval cannot mint a service grant.
+    RecurringClosure {
+        grant_id: &'a str,
+        grant_version: u32,
+        binding: &'a crate::closure_inspection::ClosureInspectionBinding,
+        review: &'a crate::closure_inspection::ClosureReview,
+        request_ref: &'a str,
+        expires_at: std::time::Instant,
+    },
+    /// Per-request closure authorization, not implied by recurring approval.
+    ServiceClosure {
+        binding: &'a crate::closure_inspection::ClosureInspectionBinding,
+        review: &'a crate::closure_inspection::ClosureReview,
+        grant_id: &'a str,
+        grant_version: u32,
+        request_ref: &'a str,
+    },
+    Single(SemanticAuthorization<'a>),
+    Closure {
+        binding: &'a crate::closure_inspection::ClosureInspectionBinding,
+        review: &'a crate::closure_inspection::ClosureReview,
+    },
+}
+
+/// Host-owned policy shared by ordinary semantic tools and closure adapters.
+/// Closure policies must inspect the complete binding and its exact review.
+pub trait HostSemanticPolicy {
+    fn authorize(&mut self, request: HostAuthorizationRequest<'_>) -> bool;
+}
+
+/// Compatibility for existing single-source hosts. A legacy callback cannot
+/// authorize a closure by seeing only its root.
+impl<F: for<'a> FnMut(SemanticAuthorization<'a>) -> bool> HostSemanticPolicy for F {
+    fn authorize(&mut self, request: HostAuthorizationRequest<'_>) -> bool {
+        match request {
+            HostAuthorizationRequest::Single(single) => self(single),
+            HostAuthorizationRequest::Closure { .. }
+            | HostAuthorizationRequest::RecurringClosure { .. }
+            | HostAuthorizationRequest::ServiceClosure { .. } => false,
+        }
+    }
+}
+
+pub fn authorize_host_request(
+    policy: &mut impl HostSemanticPolicy,
+    request: HostAuthorizationRequest<'_>,
+) -> bool {
+    match &request {
+        HostAuthorizationRequest::Closure { binding, review }
+        | HostAuthorizationRequest::RecurringClosure {
+            binding, review, ..
+        }
+        | HostAuthorizationRequest::ServiceClosure {
+            binding, review, ..
+        } => {
+            if !binding
+                .review()
+                .is_ok_and(|exact| exact.as_str() == review.as_str())
+            {
+                return false;
+            }
+        }
+        HostAuthorizationRequest::Single(_) => {}
+    }
+    policy.authorize(request)
+}
+
 /// Bound to one previously resolved, host-owned target. No mutable source or App
 /// is supplied to the language. Dropping the session releases the review controller.
 /// Freshness is checked after authorization and execution, not atomically with
@@ -85,9 +154,7 @@ pub struct SemanticToolProvider<'a, T: SourceTarget, P> {
         usize,
     )>,
 }
-impl<'a, T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool>
-    SemanticToolProvider<'a, T, P>
-{
+impl<'a, T: SourceTarget, P: HostSemanticPolicy> SemanticToolProvider<'a, T, P> {
     /// Opt in only the listed language operation IDs (not fully qualified tool names).
     /// Every envelope is bounded by min(max_projection_bytes, 4096). If even
     /// the unavailable fallback cannot fit, returns a sanitized execution error.
@@ -177,7 +244,22 @@ impl<'a, T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool>
         })
     }
 
+    /// Compatibility constructor for existing single-source callbacks.
     pub fn new(
+        service: &'a dyn LanguageService,
+        target: &'a T,
+        controller: &'a mut SourceEditController,
+        scope: PermittedEditScope,
+        selection: Option<crate::text::TextRange>,
+        policy: P,
+    ) -> Result<Self, ToolError>
+    where
+        P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool,
+    {
+        Self::new_with_host_policy(service, target, controller, scope, selection, policy)
+    }
+
+    pub fn new_with_host_policy(
         service: &'a dyn LanguageService,
         target: &'a T,
         controller: &'a mut SourceEditController,
@@ -217,7 +299,8 @@ impl<'a, T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool>
                 ToolDefinition::new(name, &description)
                     .effect(match operation.effect {
                         SemanticOperationEffect::Read => ToolEffect::Read,
-                        SemanticOperationEffect::ProposeChanges => ToolEffect::Write,
+                        SemanticOperationEffect::ProposeChanges
+                        | SemanticOperationEffect::ProposeDomain => ToolEffect::Write,
                     })
                     .input(ToolInputDefinition::required(
                         "expected_version",
@@ -261,9 +344,7 @@ struct HostBoundArguments<'a, T: SourceTarget, P> {
     language: String,
 }
 
-impl<T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool> ToolProvider
-    for HostBoundArguments<'_, T, P>
-{
+impl<T: SourceTarget, P: HostSemanticPolicy> ToolProvider for HostBoundArguments<'_, T, P> {
     fn tools(&self) -> &[ToolDefinition] {
         &self.tools
     }
@@ -330,9 +411,7 @@ impl<T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool> ToolP
     }
 }
 
-impl<T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool> ToolProvider
-    for SemanticToolProvider<'_, T, P>
-{
+impl<T: SourceTarget, P: HostSemanticPolicy> ToolProvider for SemanticToolProvider<'_, T, P> {
     fn tools(&self) -> &[ToolDefinition] {
         &self.tools
     }
@@ -429,9 +508,7 @@ impl<T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool> ToolP
         Ok(result)
     }
 }
-impl<T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool>
-    SemanticToolProvider<'_, T, P>
-{
+impl<T: SourceTarget, P: HostSemanticPolicy> SemanticToolProvider<'_, T, P> {
     fn invoke_operation(&mut self, call: ToolCall) -> Result<ToolResult, ToolError> {
         let Some(index) = self.tools.iter().position(|t| t.name == call.name) else {
             return Err(ToolError::UnknownTool { name: call.name });
@@ -491,11 +568,14 @@ impl<T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool>
                 "target revision or source changed",
             ));
         }
-        if !(self.policy)(SemanticAuthorization {
-            operation,
-            source,
-            arguments: &arguments,
-        }) {
+        if !authorize_host_request(
+            &mut self.policy,
+            HostAuthorizationRequest::Single(SemanticAuthorization {
+                operation,
+                source,
+                arguments: &arguments,
+            }),
+        ) {
             return Ok(outcome("unauthorized", "host policy denied operation"));
         }
         let live = self.target.snapshot();
@@ -765,11 +845,14 @@ impl<T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool>
                             "target changed during validation",
                         ));
                     }
-                    if !(self.policy)(SemanticAuthorization {
-                        operation,
-                        source: live,
-                        arguments: &arguments,
-                    }) {
+                    if !authorize_host_request(
+                        &mut self.policy,
+                        HostAuthorizationRequest::Single(SemanticAuthorization {
+                            operation,
+                            source: live,
+                            arguments: &arguments,
+                        }),
+                    ) {
                         return Ok(outcome(
                             "unauthorized",
                             "host policy denied proposal registration",
@@ -911,11 +994,14 @@ impl<T: SourceTarget, P: for<'b> FnMut(SemanticAuthorization<'b>) -> bool>
                                 "target changed during contract validation",
                             ));
                         }
-                        if !(self.policy)(SemanticAuthorization {
-                            operation,
-                            source: live,
-                            arguments: &arguments,
-                        }) {
+                        if !authorize_host_request(
+                            &mut self.policy,
+                            HostAuthorizationRequest::Single(SemanticAuthorization {
+                                operation,
+                                source: live,
+                                arguments: &arguments,
+                            }),
+                        ) {
                             return Ok(outcome(
                                 "unauthorized",
                                 "host policy denied proposal registration",
@@ -1335,6 +1421,58 @@ mod tests {
                 .unwrap()
                 .push(request.candidate_source.into());
             Ok(self.validation.clone())
+        }
+    }
+
+    #[test]
+    fn custom_host_policy_is_used_by_real_dispatch_and_final_registration() {
+        use std::sync::{Arc, Mutex};
+        struct Policy {
+            seen: Arc<Mutex<Vec<String>>>,
+            allow: bool,
+        }
+        impl HostSemanticPolicy for Policy {
+            fn authorize(&mut self, request: HostAuthorizationRequest<'_>) -> bool {
+                let HostAuthorizationRequest::Single(single) = request else {
+                    panic!("unexpected closure")
+                };
+                assert_eq!(single.source.text, ORIGINAL);
+                assert_eq!(single.source.version, 7);
+                assert_eq!(single.arguments, &json!({}));
+                self.seen.lock().unwrap().push(single.operation.id.clone());
+                self.allow
+            }
+        }
+        for allow in [false, true] {
+            let service = ValidatingService::new(changes(edits()), ValidationStatus::Accepted);
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let mut controller = SourceEditController::default();
+            let target = Target;
+            let mut provider = SemanticToolProvider::new_with_host_policy(
+                &service,
+                &target,
+                &mut controller,
+                PermittedEditScope::Document(target.source_id()),
+                None,
+                Policy {
+                    seen: seen.clone(),
+                    allow,
+                },
+            )
+            .unwrap();
+            let result = provider
+                .invoke(
+                    ToolCall::new("language.fixture.rename")
+                        .with_argument("expected_version", "7".into())
+                        .with_argument("expected_source", ORIGINAL.into())
+                        .with_argument("arguments", ToolValue::Object(Default::default())),
+                )
+                .unwrap();
+            let result = to_json(result.value);
+            if !allow {
+                assert_eq!(result["status"], "unauthorized");
+            }
+            assert_eq!(seen.lock().unwrap().len(), if allow { 2 } else { 1 });
         }
     }
 

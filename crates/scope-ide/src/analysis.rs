@@ -195,6 +195,7 @@ pub struct AnalysisContext<'a> {
     snapshots: Vec<DependencySnapshot>,
     edges: Vec<DependencyEdge>,
     acquisitions: Vec<AcquisitionRecord>,
+    navigation: Option<std::ops::Range<usize>>,
     exhausted: bool,
 }
 
@@ -255,8 +256,19 @@ impl<'a> AnalysisContext<'a> {
             snapshots: Vec::new(),
             edges: Vec::new(),
             acquisitions: Vec::new(),
+            navigation: None,
             exhausted: false,
         })
+    }
+
+    /// Retain a canonical root-draft location, never a location parsed from output.
+    pub fn set_navigation_range(&mut self, range: scope_language::TextRange) -> Result<(), String> {
+        self.navigation = Some(
+            scope_language::LineIndex::new(&self.editor.text)
+                .span_for_range(range)
+                .ok_or("invalid root navigation range")?,
+        );
+        Ok(())
     }
 
     pub fn draft(&self) -> &EditorDraftSnapshot {
@@ -420,6 +432,7 @@ impl<'a> AnalysisContext<'a> {
             snapshots: self.snapshots,
             edges: self.edges,
             acquisitions: self.acquisitions,
+            navigation: self.navigation,
             exhausted: self.exhausted,
             attempts: self.attempts,
             read_bytes_charged: self.read_bytes_charged,
@@ -450,6 +463,7 @@ pub struct CheckEvidence {
     snapshots: Vec<DependencySnapshot>,
     edges: Vec<DependencyEdge>,
     acquisitions: Vec<AcquisitionRecord>,
+    navigation: Option<std::ops::Range<usize>>,
     exhausted: bool,
     attempts: usize,
     read_bytes_charged: usize,
@@ -468,6 +482,15 @@ impl scope_language::SourceResolver for CheckEvidence {
 }
 
 impl CheckEvidence {
+    pub(crate) fn navigation(&self) -> Option<usize> {
+        self.navigation.as_ref().map(|range| range.start)
+    }
+
+    pub(crate) fn navigated(&mut self, cursor: usize) {
+        self.editor.cursor = cursor;
+        self.editor.anchor = None;
+    }
+
     pub fn invocation_id(&self) -> CheckInvocationId {
         CheckInvocationId(self.invocation.clone())
     }
@@ -579,6 +602,8 @@ mod tests {
             },
             text: text.into(),
             edit_identity: 12,
+            cursor: 0,
+            anchor: None,
             editor: "test".into(),
             editor_generation: 3,
             selection_identity: 4,

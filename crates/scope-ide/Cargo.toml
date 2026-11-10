@@ -8,6 +8,7 @@ description = "A capability-oriented semantic development environment built on C
 [features]
 default = ["tools"]
 tools = []
+experimental-sprout-closure = ["tools"]
 logging = ["dep:cell-capability-log"]
 agent = ["tools", "dep:cell-capability-openai", "dep:serde"]
 agent-lmstudio = ["agent", "dep:cell-capability-lmstudio"]

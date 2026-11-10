@@ -382,11 +382,11 @@ impl WorkbenchPane {
     }
 }
 
-impl Pane for WorkbenchPane {
+impl<P: super::TrustedClosureProvider> Pane<P> for WorkbenchPane {
     fn id(&self) -> &'static str {
         "scope.workbench"
     }
-    fn render(&self, frame: &mut ratatui::Frame<'_>, area: Rect, ctx: &TuiContext<'_>) {
+    fn render(&self, frame: &mut ratatui::Frame<'_>, area: Rect, ctx: &TuiContext<'_, P>) {
         frame.render_widget(
             Paragraph::new(self.display())
                 .wrap(Wrap { trim: false })
@@ -395,7 +395,7 @@ impl Pane for WorkbenchPane {
             area,
         );
     }
-    fn handle_key(&mut self, key: KeyEvent, _ctx: &mut TuiContextMut<'_>) -> bool {
+    fn handle_key(&mut self, key: KeyEvent, _ctx: &mut TuiContextMut<'_, P>) -> bool {
         self.handle_input(key)
     }
 }

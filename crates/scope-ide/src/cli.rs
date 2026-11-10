@@ -566,6 +566,38 @@ pub trait ReadOnlyCommand {
         None
     }
 
+    /// Registered scratch action to route through the unpublished-draft Run Test path.
+    /// Execution policy and authorization remain host-owned; Check never uses this hook.
+    #[cfg(feature = "tui")]
+    fn downstream_run_test_action(&self) -> Option<String> {
+        None
+    }
+
+    /// Select one deterministic test from the exact draft (typically at `draft.cursor`).
+    /// None requests Scope's minimal test-name prompt; errors never fall back.
+    #[cfg(feature = "tui")]
+    fn select_editor_draft_test(
+        &mut self,
+        _action: &crate::tui::DownstreamAction,
+        _draft: &crate::tui::EditorDraftSnapshot,
+    ) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+
+    /// Run only the named test against `context.draft()`, without publishing it.
+    /// Host-owned execution policy still applies. Read dependencies through context
+    /// to retain freshness evidence. Output is retained even on error.
+    #[cfg(feature = "tui")]
+    fn run_editor_draft_test(
+        &mut self,
+        _action: &crate::tui::DownstreamAction,
+        _test: &str,
+        _context: &mut crate::analysis::AnalysisContext<'_>,
+        _output: &mut dyn std::io::Write,
+    ) -> Result<(), String> {
+        Err("draft test execution is unsupported by this host".into())
+    }
+
     /// Check immutable current editor text only. No publication, proposal controller,
     /// execution capability, or generic command fallback is supplied.
     #[cfg(feature = "tui")]

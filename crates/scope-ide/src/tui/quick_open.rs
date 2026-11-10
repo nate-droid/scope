@@ -4,17 +4,27 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
-use crate::app::App;
+use super::TrustedClosureProvider;
+use crate::app::AppState;
 
 #[derive(Default)]
 pub(super) struct QuickOpen {
     targets: Option<Vec<(String, String)>>,
+    app_documents: bool,
     query: String,
     selected: usize,
     error: Option<String>,
 }
 
 impl QuickOpen {
+    /// App-owned destinations, including enrolled documents no longer present on disk.
+    pub(super) fn app_documents() -> Self {
+        Self {
+            app_documents: true,
+            ..Self::default()
+        }
+    }
+
     pub(super) fn supplied(targets: Vec<(String, String)>) -> Self {
         Self {
             targets: Some(targets),
@@ -22,16 +32,42 @@ impl QuickOpen {
         }
     }
 
-    fn entries(&self, app: &App) -> Vec<(String, String)> {
-        self.targets.clone().unwrap_or_else(|| {
-            app.files()
-                .iter()
-                .map(|entry| {
-                    let path = entry.path.display().to_string();
-                    (path.clone(), path)
-                })
-                .collect()
-        })
+    fn entries<P: TrustedClosureProvider>(&self, app: &AppState<P>) -> Vec<(String, String)> {
+        if let Some(targets) = &self.targets {
+            return targets.clone();
+        }
+        let entries: Vec<_> = app
+            .files()
+            .iter()
+            .map(|entry| {
+                let path = entry.path.display().to_string();
+                (path.clone(), path)
+            })
+            .collect();
+        #[cfg(not(feature = "experimental-sprout-closure"))]
+        let _ = self.app_documents;
+        #[cfg(feature = "experimental-sprout-closure")]
+        if self.app_documents {
+            let mut entries: std::collections::BTreeMap<_, _> = entries.into_iter().collect();
+            if let Some(documents) = app.registered_documents() {
+                for (module, document) in documents.documents() {
+                    let path = document.path().display().to_string();
+                    entries.insert(
+                        path.clone(),
+                        format!(
+                            "{path} — registered {module}{}",
+                            if document.is_dirty() {
+                                " (unsaved)"
+                            } else {
+                                ""
+                            }
+                        ),
+                    );
+                }
+            }
+            return entries.into_iter().collect();
+        }
+        entries
     }
 
     pub(super) fn set_query(&mut self, query: &str) {
@@ -42,14 +78,21 @@ impl QuickOpen {
         }
     }
 
-    pub(super) fn selected_path(&self, app: &App) -> Option<String> {
+    pub(super) fn selected_path<P: TrustedClosureProvider>(
+        &self,
+        app: &AppState<P>,
+    ) -> Option<String> {
         let matches = self.matches(app);
         matches
             .get(self.selected.min(matches.len().saturating_sub(1)))
             .map(|&index| self.entries(app)[index].0.clone())
     }
 
-    pub(super) fn navigate(&mut self, code: KeyCode, app: &App) -> bool {
+    pub(super) fn navigate<P: TrustedClosureProvider>(
+        &mut self,
+        code: KeyCode,
+        app: &AppState<P>,
+    ) -> bool {
         let last = self.matches(app).len().saturating_sub(1);
         self.selected = self.selected.min(last);
         match code {
@@ -62,19 +105,44 @@ impl QuickOpen {
         true
     }
 
-    fn matches(&self, app: &App) -> Vec<usize> {
+    fn matches<P: TrustedClosureProvider>(&self, app: &AppState<P>) -> Vec<usize> {
         let query = self.query.to_lowercase();
-        self.entries(app)
+        let entries = self.entries(app);
+        let mut matches: Vec<_> = entries
             .iter()
             .enumerate()
             .filter(|(_, (target, label))| {
                 target.to_lowercase().contains(&query) || label.to_lowercase().contains(&query)
             })
             .map(|(index, _)| index)
-            .collect()
+            .collect();
+        // A basename like main.sprout is also a suffix of domain.sprout. Exact
+        // path/name/stem selections must win over incidental substring matches.
+        if !query.is_empty() {
+            matches.sort_by_key(|&index| {
+                let target = entries[index].0.to_lowercase();
+                let name = target.rsplit(['/', '\\']).next().unwrap_or(&target);
+                let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+                let rank = if target == query {
+                    0
+                } else if name == query {
+                    1
+                } else if stem == query {
+                    2
+                } else {
+                    3
+                };
+                (rank, index)
+            });
+        }
+        matches
     }
 
-    pub(super) fn handle_key(&mut self, key: KeyEvent, app: &mut App) -> bool {
+    pub(super) fn handle_key<P: TrustedClosureProvider>(
+        &mut self,
+        key: KeyEvent,
+        app: &mut AppState<P>,
+    ) -> bool {
         if self.navigate(key.code, app) {
             return false;
         }
@@ -122,7 +190,12 @@ impl QuickOpen {
         false
     }
 
-    pub(super) fn render(&self, frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
+    pub(super) fn render<P: TrustedClosureProvider>(
+        &self,
+        frame: &mut ratatui::Frame<'_>,
+        area: Rect,
+        app: &AppState<P>,
+    ) {
         self.render_titled(
             frame,
             area,
@@ -131,11 +204,11 @@ impl QuickOpen {
         );
     }
 
-    pub(super) fn render_titled(
+    pub(super) fn render_titled<P: TrustedClosureProvider>(
         &self,
         frame: &mut ratatui::Frame<'_>,
         area: Rect,
-        app: &App,
+        app: &AppState<P>,
         title: &str,
     ) {
         let width = area.width.min(80);
@@ -203,6 +276,7 @@ impl QuickOpen {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::App;
     use crate::test_support::TempWorkspace;
     use crate::text::{Position, TextEdit};
     use ratatui::{Terminal, backend::TestBackend};
@@ -373,5 +447,35 @@ mod tests {
                 .draw(|frame| picker.render(frame, Rect::new(2, 2, size, size), &app))
                 .unwrap();
         }
+    }
+    #[test]
+    fn exact_name_and_stem_outrank_substrings_in_other_filenames() {
+        let root = TempWorkspace::new("quick_open_exact_names");
+        root.write_file("workflow/domain.sprout", "domain");
+        root.write_file("workflow/main.sprout", "main");
+        let app = App::new(root.workspace()).unwrap();
+        let mut picker = QuickOpen::app_documents();
+        for query in ["main.sprout", "main", "MAIN", "workflow/main.sprout"] {
+            picker.set_query(query);
+            assert_eq!(
+                picker.selected_path(&app).as_deref(),
+                Some("workflow/main.sprout")
+            );
+        }
+        picker.set_query("domain");
+        assert_eq!(
+            picker.selected_path(&app).as_deref(),
+            Some("workflow/domain.sprout")
+        );
+        picker.set_query("main.sprout");
+        assert_eq!(
+            picker.selected_path(&app).as_deref(),
+            Some("workflow/main.sprout")
+        );
+        assert_eq!(
+            picker.matches(&app).len(),
+            2,
+            "substring matches remain selectable"
+        );
     }
 }

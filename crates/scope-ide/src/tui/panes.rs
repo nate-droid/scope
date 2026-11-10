@@ -4,17 +4,18 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
+use super::TrustedClosureProvider;
 use super::pane::{Pane, TuiContext, TuiContextMut};
-use crate::app::App;
+use crate::app::AppState;
 
 pub struct FilesPane;
 
-impl Pane for FilesPane {
+impl<P: super::TrustedClosureProvider> Pane<P> for FilesPane {
     fn id(&self) -> &'static str {
         "scope.files"
     }
 
-    fn render(&self, frame: &mut ratatui::Frame<'_>, area: Rect, ctx: &TuiContext<'_>) {
+    fn render(&self, frame: &mut ratatui::Frame<'_>, area: Rect, ctx: &TuiContext<'_, P>) {
         let height = area.height.saturating_sub(2).max(1) as usize;
         let offset = ctx
             .app()
@@ -28,7 +29,7 @@ impl Pane for FilesPane {
         );
     }
 
-    fn handle_key(&mut self, key: KeyEvent, ctx: &mut TuiContextMut<'_>) -> bool {
+    fn handle_key(&mut self, key: KeyEvent, ctx: &mut TuiContextMut<'_, P>) -> bool {
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => {
                 ctx.app_mut().move_selection_up();
@@ -53,19 +54,19 @@ impl Pane for FilesPane {
 
 pub struct DocumentPane;
 
-impl Pane for DocumentPane {
+impl<P: super::TrustedClosureProvider> Pane<P> for DocumentPane {
     fn id(&self) -> &'static str {
         "scope.document"
     }
 
-    fn render(&self, frame: &mut ratatui::Frame<'_>, area: Rect, ctx: &TuiContext<'_>) {
+    fn render(&self, frame: &mut ratatui::Frame<'_>, area: Rect, ctx: &TuiContext<'_, P>) {
         frame.render_widget(
             document_view(ctx.app(), focus_style(ctx)).scroll((ctx.scroll(), 0)),
             area,
         );
     }
 
-    fn handle_key(&mut self, key: KeyEvent, ctx: &mut TuiContextMut<'_>) -> bool {
+    fn handle_key(&mut self, key: KeyEvent, ctx: &mut TuiContextMut<'_, P>) -> bool {
         let max = max_scroll(document_view(ctx.app(), Style::default()), ctx.viewport());
         scroll_key(key, ctx, max)
     }
@@ -73,25 +74,25 @@ impl Pane for DocumentPane {
 
 pub struct LanguagePane;
 
-impl Pane for LanguagePane {
+impl<P: super::TrustedClosureProvider> Pane<P> for LanguagePane {
     fn id(&self) -> &'static str {
         "scope.language"
     }
 
-    fn render(&self, frame: &mut ratatui::Frame<'_>, area: Rect, ctx: &TuiContext<'_>) {
+    fn render(&self, frame: &mut ratatui::Frame<'_>, area: Rect, ctx: &TuiContext<'_, P>) {
         frame.render_widget(
             language_pane(ctx.app(), focus_style(ctx)).scroll((ctx.scroll(), 0)),
             area,
         );
     }
 
-    fn handle_key(&mut self, key: KeyEvent, ctx: &mut TuiContextMut<'_>) -> bool {
+    fn handle_key(&mut self, key: KeyEvent, ctx: &mut TuiContextMut<'_, P>) -> bool {
         let max = max_scroll(language_pane(ctx.app(), Style::default()), ctx.viewport());
         scroll_key(key, ctx, max)
     }
 }
 
-fn focus_style(ctx: &TuiContext<'_>) -> Style {
+fn focus_style<P: TrustedClosureProvider>(ctx: &TuiContext<'_, P>) -> Style {
     if ctx.is_focused() {
         Style::default().fg(Color::Cyan)
     } else {
@@ -106,7 +107,11 @@ fn max_scroll(paragraph: Paragraph<'_>, area: Rect) -> u16 {
         .min(u16::MAX as usize) as u16
 }
 
-fn scroll_key(key: KeyEvent, ctx: &mut TuiContextMut<'_>, max: u16) -> bool {
+fn scroll_key<P: TrustedClosureProvider>(
+    key: KeyEvent,
+    ctx: &mut TuiContextMut<'_, P>,
+    max: u16,
+) -> bool {
     let current = ctx.scroll().min(max);
     let page = ctx.viewport().height.saturating_sub(2).max(1);
     let next = match key.code {
@@ -122,7 +127,7 @@ fn scroll_key(key: KeyEvent, ctx: &mut TuiContextMut<'_>, max: u16) -> bool {
     true
 }
 
-fn file_list(app: &App, border: Style) -> Paragraph<'_> {
+fn file_list<P: TrustedClosureProvider>(app: &AppState<P>, border: Style) -> Paragraph<'_> {
     let selected = app.selected_index();
     let lines = app
         .files()
@@ -152,7 +157,7 @@ fn file_list(app: &App, border: Style) -> Paragraph<'_> {
     )
 }
 
-fn language_pane(app: &App, border: Style) -> Paragraph<'_> {
+fn language_pane<P: TrustedClosureProvider>(app: &AppState<P>, border: Style) -> Paragraph<'_> {
     let Some(document) = app.open_document() else {
         return Paragraph::new("No document open.")
             .block(
@@ -246,7 +251,7 @@ fn language_pane(app: &App, border: Style) -> Paragraph<'_> {
         .wrap(Wrap { trim: false })
 }
 
-fn document_view(app: &App, border: Style) -> Paragraph<'_> {
+fn document_view<P: TrustedClosureProvider>(app: &AppState<P>, border: Style) -> Paragraph<'_> {
     match app.open_document() {
         Some(document) => {
             let dirty = if document.is_dirty() {
@@ -278,6 +283,7 @@ fn document_view(app: &App, border: Style) -> Paragraph<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::App;
     use crate::language::{
         Diagnostic, LanguageAnalysis, LanguageDocument, LanguagePath, LanguageService, Position,
         Symbol, SymbolKind, TextRange,

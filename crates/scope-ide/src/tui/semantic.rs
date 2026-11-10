@@ -1,6 +1,7 @@
 //! Generic, synchronous read inspection. Opening this modal never executes a provider.
+use super::TrustedClosureProvider;
 use crate::{
-    app::App,
+    app::AppState,
     semantic_inspection::{self, InspectionBinding, InspectionResult},
     tool::ToolValue,
 };
@@ -31,12 +32,12 @@ impl SemanticInspection {
         self
     }
 
-    pub(super) fn candidate_available(app: &App) -> bool {
+    pub(super) fn candidate_available<P: TrustedClosureProvider>(app: &AppState<P>) -> bool {
         Self::candidate_operation(app).is_ok()
     }
 
-    fn candidate_operation(
-        app: &App,
+    fn candidate_operation<P: TrustedClosureProvider>(
+        app: &AppState<P>,
     ) -> Result<scope_language::SemanticOperationDescription, String> {
         let operations = semantic_inspection::discover_app(app).map_err(|e| e.to_string())?;
         let candidates: Vec<_> = operations
@@ -51,7 +52,7 @@ impl SemanticInspection {
         Ok((*operation).clone())
     }
 
-    pub(super) fn candidate(app: &App) -> Result<Self, String> {
+    pub(super) fn candidate<P: TrustedClosureProvider>(app: &AppState<P>) -> Result<Self, String> {
         let operation = Self::candidate_operation(app)?;
         Ok(Self {
             pending: Some(
@@ -62,9 +63,9 @@ impl SemanticInspection {
         })
     }
 
-    fn operations(
+    fn operations<P: TrustedClosureProvider>(
         &self,
-        app: &App,
+        app: &AppState<P>,
     ) -> Result<
         Vec<scope_language::SemanticOperationDescription>,
         semantic_inspection::InspectionError,
@@ -84,7 +85,7 @@ impl SemanticInspection {
     }
 
     /// Consume only the captured request; repeated calls never capture or execute again.
-    pub(super) fn run(&mut self, app: &mut App) {
+    pub(super) fn run<P: TrustedClosureProvider>(&mut self, app: &mut AppState<P>) {
         let Some(binding) = self.pending.take() else {
             return;
         };
@@ -107,14 +108,17 @@ impl SemanticInspection {
         }
     }
 
-    pub(super) fn is_stale(&self, app: &App) -> bool {
+    pub(super) fn is_stale<P: TrustedClosureProvider>(&self, app: &AppState<P>) -> bool {
         self.result
             .as_ref()
             .is_some_and(|result| !result.is_fresh_app(app))
     }
 
     /// Ordinary output never interprets opaque provider JSON; Details retains it.
-    pub(super) fn concise_output(&self, app: &App) -> Option<String> {
+    pub(super) fn concise_output<P: TrustedClosureProvider>(
+        &self,
+        app: &AppState<P>,
+    ) -> Option<String> {
         if let Some(error) = &self.error {
             let short: String = error
                 .lines()
@@ -174,7 +178,11 @@ impl SemanticInspection {
     }
 
     /// Returns true when the modal should close.
-    pub fn handle_key(&mut self, key: KeyEvent, app: &mut App) -> bool {
+    pub fn handle_key<P: TrustedClosureProvider>(
+        &mut self,
+        key: KeyEvent,
+        app: &mut AppState<P>,
+    ) -> bool {
         match key.code {
             KeyCode::Esc => {
                 if self.pending.take().is_none() {
@@ -227,7 +235,12 @@ impl SemanticInspection {
         false
     }
 
-    pub fn render(&self, frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
+    pub fn render<P: TrustedClosureProvider>(
+        &self,
+        frame: &mut ratatui::Frame<'_>,
+        area: Rect,
+        app: &AppState<P>,
+    ) {
         let area = Rect::new(
             area.x + 1,
             area.y + 1,
@@ -407,6 +420,7 @@ fn tool_json(value: &ToolValue) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::App;
     use scope_language::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 

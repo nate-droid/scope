@@ -28,21 +28,34 @@ steps for every change.
 ### Ordinary development workflow
 
 1. Identify the smallest coherent implementation and its changed boundaries.
-2. Select direct and adjacent tests before editing; prefer a focused red/green
-   loop where appropriate. Select package and target before filtering names;
-   confirm a nonzero test count.
-3. Reuse existing root Cargo artifacts; batch compatible targets where useful.
-4. Run system checks when the changed boundaries or escalation rules justify them.
-   Documentation-only edits normally need Python checks, not a Rust build.
-5. After a timeout, diagnose the specific remaining question before another broad
-   run. A timeout leaves that run incomplete; it does not invalidate earlier
-   passing targeted checks.
-6. Report exact commands, features, results, selected scope and remaining gaps.
+2. **During implementation:** run the narrowest direct compilation/regression
+   target. Select package and target before filtering names; confirm a nonzero
+   test count. A passing test command already compiles its target; a separate
+   check/build/list/no-run is not a mandatory preflight.
+3. **At feature completion:** add targeted adjacent regressions and one meaningful
+   end-to-end acceptance journey for the changed user workflow (reuse applicable
+   current-source evidence). Library-only or prose changes need the corresponding
+   consumer or documentation checks, not an invented interactive journey.
+4. **System verification:** run wider compatibility, feature-matrix and artifact
+   checks only for a genuinely changed boundary under the escalation rules, or
+   an explicit system/release request. Reuse root Cargo artifacts and batch
+   compatible targets. Documentation-only edits normally need Python checks.
+5. Bound every command. Use 120 seconds as the ordinary initial command budget;
+   choose a documented longer bound for a known slow required journey. If a broad
+   run is unexpectedly expensive, stop and record completed targets. After a
+   timeout, require a new diagnostic hypothesis before retrying or launching an
+   overlapping broad run. Earlier targeted passes remain valid within their scope.
+6. Report exact commands, features, results, selected scope and omissions with
+   reasons. A known unrelated failure is a blocker, not a pass or an obligation
+   to repair unrelated code.
 
 Do not run the whole workspace after every small edit, repeat equivalent Cargo
 commands without a new reason, or require all downstream PTYs for isolated UI
 changes. Do not add profiling scripts or large benchmark campaigns without a
 concrete performance question, or expand a narrow change into unrelated cleanup.
+Do not automatically run workspace Clippy, Rustdoc, all-feature tests or multiple
+interactive launcher suites after an isolated UI edit. Clippy target scope should
+match the changed Rust target unless broader lint coverage is justified.
 These limits never excuse omitting tests necessary for the changed behavior.
 
 | Change | Smallest useful starting point | Completion / escalation |
@@ -173,6 +186,13 @@ all-features run cannot establish that feature absence works. Preserve isolated
 feature checks when changing feature boundaries.
 
 ### Escalation is mandatory
+
+Escalate for a **change to the contract**, not merely a call to an unchanged
+boundary. For example, changing public local-Apply/history or stale-source
+acceptance requires Full; changing Format preview wording using those existing
+contracts does not. Preserve relevant stale/denial regressions in either case.
+Historical incomplete Full obligations must be reported separately, not silently
+inherited as the implementation checklist for every subsequent UI edit.
 
 - **Kernel/mathematical correctness, graph validation, type identity, capability
   propagation, serialization/versioning:** include affected consumers, positive

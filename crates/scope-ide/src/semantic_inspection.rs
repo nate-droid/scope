@@ -1,8 +1,12 @@
 //! Revision-bound, explicitly authorized semantic inspection for interactive hosts.
 //! Discovery is not authorization. Bindings/results are owned display state, not
 //! editable documents. Identity is local to one App/document owner (as in SourceId).
+#[cfg(not(feature = "experimental-sprout-closure"))]
+use crate::app::TrustedClosureProvider;
+#[cfg(feature = "experimental-sprout-closure")]
+use crate::registered_document_closure::TrustedClosureProvider;
 use crate::{
-    app::App,
+    app::AppState,
     document::Document,
     source_edit::{DocumentSource, PermittedEditScope, SourceEditController, SourceId},
     tool::{
@@ -62,7 +66,9 @@ pub fn discover(
 ) -> Result<Vec<SemanticOperationDescription>, InspectionError> {
     Ok(catalog(service)?.into_iter().filter(inspectable).collect())
 }
-pub fn discover_app(app: &App) -> Result<Vec<SemanticOperationDescription>, InspectionError> {
+pub fn discover_app<P: TrustedClosureProvider>(
+    app: &AppState<P>,
+) -> Result<Vec<SemanticOperationDescription>, InspectionError> {
     let document = app.open_document().ok_or(InspectionError::NoDocument)?;
     discover(app.semantic_service_for_document(document))
 }
@@ -98,7 +104,10 @@ impl InspectionBinding {
             operation,
         })
     }
-    pub fn capture_app(app: &App, operation_id: &str) -> Result<Self, InspectionError> {
+    pub fn capture_app<P: TrustedClosureProvider>(
+        app: &AppState<P>,
+        operation_id: &str,
+    ) -> Result<Self, InspectionError> {
         let document = app.open_document().ok_or(InspectionError::NoDocument)?;
         Self::capture(
             document,
@@ -128,7 +137,7 @@ impl InspectionBinding {
             && self.version == document.version()
             && self.language == service.language_id()
     }
-    pub fn is_fresh_app(&self, app: &App) -> bool {
+    pub fn is_fresh_app<P: TrustedClosureProvider>(&self, app: &AppState<P>) -> bool {
         app.open_document().is_some_and(|document| {
             self.is_fresh(document, app.semantic_service_for_document(document))
         })
@@ -182,9 +191,9 @@ impl InspectionBinding {
             result,
         })
     }
-    pub fn invoke_app(
+    pub fn invoke_app<P: TrustedClosureProvider>(
         &self,
-        app: &mut App,
+        app: &mut AppState<P>,
         authorize: impl for<'a> FnMut(SemanticAuthorization<'a>) -> bool,
     ) -> Result<InspectionResult, InspectionError> {
         let document = app.open_document().ok_or(InspectionError::NoDocument)?;
@@ -210,7 +219,7 @@ pub struct InspectionResult {
     pub native_result: Option<scope_language::SemanticOperationResult>,
 }
 impl InspectionResult {
-    pub fn is_fresh_app(&self, app: &App) -> bool {
+    pub fn is_fresh_app<P: TrustedClosureProvider>(&self, app: &AppState<P>) -> bool {
         self.binding.is_fresh_app(app)
     }
 }

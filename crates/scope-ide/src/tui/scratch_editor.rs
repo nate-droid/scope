@@ -253,6 +253,25 @@ impl<'a> ScratchEditAccess<'a> {
     }
 }
 
+/// Explicit review decision; proposals never imply permission to apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DraftApplyDecision {
+    Apply,
+    Cancel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DraftApplyOutcome {
+    Applied,
+    Unchanged,
+    Cancelled,
+}
+
+fn next_edit_identity() -> u64 {
+    static NEXT_EDIT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT_EDIT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 struct Draft {
     edit_identity: u64,
     app_document: bool,
@@ -279,7 +298,31 @@ struct LocalEditing {
     typing: bool,
 }
 
+// Clamp to a grapheme boundary, matching retained editor navigation.
+fn baseline_cursor(cursor: usize, text: &str) -> usize {
+    text.grapheme_indices(true)
+        .map(|(i, _)| i)
+        .chain(std::iter::once(text.len()))
+        .take_while(|i| *i <= cursor)
+        .last()
+        .unwrap_or(0)
+}
+
 impl Draft {
+    fn replace_reviewed(&mut self, replacement: &str) {
+        self.editing.undo.push(self.state());
+        if self.editing.undo.len() > 256 {
+            self.editing.undo.remove(0);
+        }
+        self.editing.redo.clear();
+        self.editing.typing = false;
+        self.text = TextBuffer::new(replacement);
+        self.cursor = baseline_cursor(self.cursor, replacement);
+        self.editing.anchor = None;
+        self.preferred = None;
+        self.edit_identity = next_edit_identity();
+    }
+
     fn state(&self) -> LocalState {
         LocalState {
             text: self.text.as_str().into(),
@@ -595,8 +638,7 @@ impl EditableScratchPane {
         let before = draft.text.as_str().to_owned();
         let result = draft.event(event);
         if before != draft.text.as_str() {
-            static NEXT_EDIT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-            draft.edit_identity = NEXT_EDIT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            draft.edit_identity = next_edit_identity();
         }
         match result {
             Ok(Some(false)) => {
@@ -629,8 +671,8 @@ impl EditableScratchPane {
         true
     }
 }
-impl Pane for EditableScratchPane {
-    fn editor_draft(
+impl EditableScratchPane {
+    pub fn editor_draft(
         &self,
         baseline: &super::ScratchEditSnapshot,
     ) -> Option<super::EditorDraftSnapshot> {
@@ -660,6 +702,20 @@ impl Pane for EditableScratchPane {
                 },
                 |draft| draft.edit_identity,
             ),
+            cursor: draft.map_or(0, |draft| {
+                // Preserve the exact local cursor. Only a clean working draft
+                // following a different baseline needs the ordinary refresh clamp.
+                if &draft.baseline == baseline {
+                    draft.cursor
+                } else {
+                    baseline_cursor(draft.cursor, baseline.source.text.as_ref())
+                }
+            }),
+            anchor: draft.and_then(|draft| {
+                (&draft.baseline == baseline)
+                    .then_some(draft.editing.anchor)
+                    .flatten()
+            }),
             editor: String::new(),
             editor_generation: 0,
             selection_identity: 0,
@@ -668,20 +724,20 @@ impl Pane for EditableScratchPane {
         })
     }
 
-    fn has_dirty_draft(&self) -> bool {
+    pub fn has_dirty_draft(&self) -> bool {
         self.draft
             .iter()
             .chain(self.parked.iter())
             .any(|draft| draft.text.as_str() != draft.baseline.source.text.as_ref())
     }
 
-    fn has_dirty_app_draft(&self) -> bool {
+    pub fn has_dirty_app_draft(&self) -> bool {
         self.draft.iter().chain(self.parked.iter()).any(|draft| {
             draft.app_document && draft.text.as_str() != draft.baseline.source.text.as_ref()
         })
     }
 
-    fn dirty_draft_sources(&self) -> Vec<(u64, String)> {
+    pub fn dirty_draft_sources(&self) -> Vec<(u64, String)> {
         self.draft
             .iter()
             .chain(self.parked.iter())
@@ -699,14 +755,138 @@ impl Pane for EditableScratchPane {
             })
             .collect()
     }
-
+}
+impl<P: super::TrustedClosureProvider> Pane<P> for EditableScratchPane {
+    fn editor_draft(
+        &self,
+        baseline: &super::ScratchEditSnapshot,
+    ) -> Option<super::EditorDraftSnapshot> {
+        EditableScratchPane::editor_draft(self, baseline)
+    }
+    fn place_editor_cursor(
+        &mut self,
+        pinned: &super::EditorDraftSnapshot,
+        cursor: usize,
+    ) -> Result<(), String> {
+        let current = self
+            .editor_draft(&pinned.baseline)
+            .ok_or("stale navigation draft")?;
+        if current.text != pinned.text
+            || current.edit_identity != pinned.edit_identity
+            || current.cursor != pinned.cursor
+            || current.anchor != pinned.anchor
+            || !pinned.text.is_char_boundary(cursor)
+        {
+            return Err("stale or invalid navigation target".into());
+        }
+        if !self
+            .draft
+            .iter()
+            .chain(self.parked.iter())
+            .any(|d| d.baseline.source.source_id == pinned.baseline.source.source_id)
+        {
+            if let Some(draft) = self.draft.take() {
+                self.parked.push(draft);
+            }
+            self.draft = Some(Draft {
+                baseline: pinned.baseline.clone(),
+                text: TextBuffer::new(&pinned.text),
+                edit_identity: pinned.edit_identity,
+                app_document: false,
+                cursor: pinned.cursor,
+                preferred: None,
+                editing: LocalEditing::default(),
+                viewport_top: Cell::new(0),
+            });
+        }
+        let draft = self
+            .draft
+            .iter_mut()
+            .chain(self.parked.iter_mut())
+            .find(|d| d.baseline.source.source_id == pinned.baseline.source.source_id)
+            .unwrap();
+        if draft.baseline != pinned.baseline {
+            draft.baseline = pinned.baseline.clone();
+            draft.text = TextBuffer::new(&pinned.text);
+            draft.editing = LocalEditing::default();
+        }
+        draft.cursor = cursor;
+        draft.editing.anchor = None;
+        draft.editing.typing = false;
+        draft.preferred = None;
+        Ok(())
+    }
+    fn apply_editor_draft(
+        &mut self,
+        pinned: &super::EditorDraftSnapshot,
+        replacement: &str,
+        app_document: bool,
+    ) -> Result<DraftApplyOutcome, String> {
+        let current = self
+            .editor_draft(&pinned.baseline)
+            .ok_or("Stale local draft")?;
+        if current.text != pinned.text
+            || current.edit_identity != pinned.edit_identity
+            || current.cursor != pinned.cursor
+            || current.anchor != pinned.anchor
+        {
+            return Err("Stale local draft; preview again".into());
+        }
+        if replacement == pinned.text {
+            return Ok(DraftApplyOutcome::Unchanged);
+        }
+        // A previously clean editor may not yet have allocated working state.
+        // Reuse retained state when possible, but never carry history across a
+        // different authoritative baseline (same rule as ordinary source input).
+        let existing = self
+            .draft
+            .iter_mut()
+            .chain(self.parked.iter_mut())
+            .find(|draft| draft.baseline.source.source_id == pinned.baseline.source.source_id);
+        if let Some(draft) = existing {
+            if draft.baseline != pinned.baseline {
+                draft.text = TextBuffer::new(pinned.text.as_str());
+                draft.baseline = pinned.baseline.clone();
+                draft.cursor = pinned.cursor;
+                draft.editing = LocalEditing::default();
+            }
+            draft.replace_reviewed(replacement);
+        } else {
+            if let Some(draft) = self.draft.take() {
+                self.parked.push(draft);
+            }
+            let mut draft = Draft {
+                edit_identity: pinned.edit_identity,
+                app_document,
+                baseline: pinned.baseline.clone(),
+                text: TextBuffer::new(pinned.text.as_str()),
+                cursor: pinned.cursor,
+                preferred: None,
+                editing: LocalEditing::default(),
+                viewport_top: Cell::new(0),
+            };
+            draft.replace_reviewed(replacement);
+            self.draft = Some(draft);
+        }
+        self.status = None;
+        Ok(DraftApplyOutcome::Applied)
+    }
+    fn has_dirty_draft(&self) -> bool {
+        EditableScratchPane::has_dirty_draft(self)
+    }
+    fn has_dirty_app_draft(&self) -> bool {
+        EditableScratchPane::has_dirty_app_draft(self)
+    }
+    fn dirty_draft_sources(&self) -> Vec<(u64, String)> {
+        EditableScratchPane::dirty_draft_sources(self)
+    }
     fn id(&self) -> &'static str {
         "scratch-editor"
     }
     fn handle_source_event(&mut self, event: Event, access: &mut ScratchEditAccess<'_>) -> bool {
         EditableScratchPane::handle_source_event(self, event, access)
     }
-    fn render(&self, frame: &mut ratatui::Frame<'_>, area: Rect, ctx: &TuiContext<'_>) {
+    fn render(&self, frame: &mut ratatui::Frame<'_>, area: Rect, ctx: &TuiContext<'_, P>) {
         let selected = ctx.editor_source();
         let draft = selected.as_ref().and_then(|selected| {
             self.draft
@@ -1011,6 +1191,69 @@ mod tests {
         assert!(pane.draft.as_ref().unwrap().editing.undo.is_empty());
         assert!(!pane.has_dirty_draft());
     }
+    #[test]
+    fn navigation_external_refresh_drops_obsolete_undo_and_redo() {
+        let mut sources = sources();
+        let mut pane = EditableScratchPane::new();
+        local_key(
+            &mut pane,
+            &mut sources,
+            KeyCode::Char('a'),
+            KeyModifiers::NONE,
+        );
+        local_key(
+            &mut pane,
+            &mut sources,
+            KeyCode::Char('s'),
+            KeyModifiers::CONTROL,
+        );
+        local_key(
+            &mut pane,
+            &mut sources,
+            KeyCode::Char('b'),
+            KeyModifiers::NONE,
+        );
+        local_key(
+            &mut pane,
+            &mut sources,
+            KeyCode::Char('z'),
+            KeyModifiers::CONTROL,
+        );
+        let draft = pane.draft.as_ref().unwrap();
+        assert!(!draft.editing.undo.is_empty());
+        assert!(!draft.editing.redo.is_empty());
+        assert!(!pane.has_dirty_draft());
+        let baseline = ScratchEditAccess::new(&mut sources).snapshot().unwrap();
+        ScratchEditAccess::new(&mut sources)
+            .commit(&baseline, "new 👩‍💻")
+            .unwrap();
+        let baseline = ScratchEditAccess::new(&mut sources).snapshot().unwrap();
+        let pinned = pane.editor_draft(&baseline).unwrap();
+        let identity = pinned.edit_identity;
+        <EditableScratchPane as Pane>::place_editor_cursor(&mut pane, &pinned, 4).unwrap();
+        let draft = pane.draft.as_ref().unwrap();
+        assert_eq!(draft.baseline, baseline);
+        assert_eq!(draft.text.as_str(), "new 👩‍💻");
+        assert_eq!(draft.cursor, 4);
+        assert_eq!(draft.edit_identity, identity);
+        assert!(draft.editing.undo.is_empty());
+        assert!(draft.editing.redo.is_empty());
+        for key in ['z', 'y'] {
+            local_key(
+                &mut pane,
+                &mut sources,
+                KeyCode::Char(key),
+                KeyModifiers::CONTROL,
+            );
+            assert_eq!(pane.draft.as_ref().unwrap().text.as_str(), "new 👩‍💻");
+            assert!(!pane.has_dirty_draft());
+        }
+        assert_eq!(
+            ScratchEditAccess::new(&mut sources).snapshot().unwrap(),
+            baseline
+        );
+    }
+
     #[test]
     fn lexical_pairs_cover_nesting_adjacency_unicode_and_unmatched_input() {
         let text = "猫({[é]}) ";

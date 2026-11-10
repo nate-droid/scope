@@ -8,6 +8,63 @@ measurement procedure. The DX3 observations below are retained historical
 evidence, not additional completion requirements. No new runner or permanent
 profiling infrastructure is needed.
 
+## Scope × Sprout follow-up (2026-11-18)
+
+The [S1 Format record](ux/quiet-workspace.md) includes three incomplete broad
+commands bounded at 240, 240 and 180 seconds (660 seconds combined), alongside
+passing direct/adjacent tests and a real native Format acceptance journey.
+Workspace/default and all-feature tests, a complete TUI package, lint, Rustdoc,
+standalone and scaffold checks expanded the task beyond the changed UI. S1 also
+introduced a public local-Apply/history contract, so Full was a real obligation,
+not entirely unnecessary verification. Later UI-only edits using that unchanged
+contract must not inherit the whole matrix. The three overlapping broad attempts
+are especially poor ordinary iteration: after a timeout, diagnose before choosing
+another broad configuration. Known unrelated Clippy, formatter-corpus and
+execution-preview failures in that record remain blockers, not newly passing tests.
+No retained telemetry attributes the entire reported hour to individual phases.
+
+### Bounded cached test-edit measurements
+
+From each repository root, using existing artifacts and default test profiles:
+
+```sh
+# Scope
+/usr/bin/time -p cargo test --locked -p scope-ide --features tui --lib format_tests
+# Sprout
+/usr/bin/time -p cargo test --locked --test scope_formatting
+```
+
+A temporary assertion-message edit in each selected test target was compiled,
+tested, rerun warm, then restored; no production behavior or guest changed.
+The two repositories were measured concurrently, so these are observations, not
+isolated CPU benchmarks or a statistical speedup claim.
+
+| Target | Incremental test edit, total wall | Warm rerun, total wall | Test execution on edited / warm source |
+| --- | ---: | ---: | --- |
+| Scope Format library filter, 12 passed | 3.54 s | 0.22 s | 0.03 / 0.02 s |
+| Sprout Format adapter, 4 passed | 1.83 s | 0.26 s | 0.00 / 0.00 s (rounded) |
+
+Before editing, `--no-run` took 0.67 s wall / 0.57 s Cargo preparation in
+Scope and 5.33 s wall / 5.29 s Cargo preparation in Sprout. Sprout's first target
+needed preparation; this is not a cold build. Its incremental test edit reported
+0.82 s Cargo compilation/link preparation. Compilation versus linking was not
+isolated. No separate `cargo check` was needed: tests compiled the selected targets.
+No new compiler/profile optimization was demonstrated or implemented.
+
+These targets do not prepare Wasm, launch a PTY or execute authorized guests;
+the Scope fixture exercises editor identity/history but does not isolate its
+cost. Hashing, authorization and evidence handling were not separately timed.
+Historical [terminal measurements](terminal-verification-performance.md) show
+391–455 second broad runs, including 455.17 seconds with only 0.71 seconds Cargo
+preparation. [Source-proposal measurements](source-proposal-pty-performance.md)
+identify collection waits as material. Sprout's existing
+[invocation census](../../sprout/docs/architecture/closure-integration.md)
+records roughly 1.55 seconds component preparation, 1.51 ms checked invocation
+and a 0.327 ms auxiliary component-hash probe; these are different historical
+workloads, not current per-phase measurements. Neither those observations nor a
+rough three-second preparation estimate explains an hour-long agent task.
+The demonstrated low-cost path is scope selection, not weakening trust checks.
+
 ## Diagnosis
 
 - **Scope selection dominates avoidable work.** Bare `cargo test` selects

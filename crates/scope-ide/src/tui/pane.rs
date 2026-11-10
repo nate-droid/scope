@@ -1,7 +1,8 @@
 use crossterm::event::KeyEvent;
 use ratatui::layout::Rect;
 
-use crate::app::App;
+use super::{DefaultProvider, TrustedClosureProvider};
+use crate::app::AppState;
 
 /// Immutable editor evidence, not a committed source or execution capability.
 /// Equality includes an edit identity: even undoing to identical text invalidates old evidence.
@@ -10,6 +11,9 @@ pub struct EditorDraftSnapshot {
     pub baseline: super::ScratchEditSnapshot,
     pub text: String,
     pub edit_identity: u64,
+    /// UTF-8 byte cursor and selection anchor in this exact local draft.
+    pub cursor: usize,
+    pub anchor: Option<usize>,
     pub editor: String,
     pub editor_generation: u64,
     pub selection_identity: u64,
@@ -64,8 +68,8 @@ impl CheckPresentation {
 }
 
 /// Read-only context exposed to TUI panes while rendering.
-pub struct TuiContext<'a> {
-    app: &'a App,
+pub struct TuiContext<'a, P: TrustedClosureProvider = DefaultProvider> {
+    app: &'a AppState<P>,
     sources: Option<&'a crate::scratch::ScratchBuffers>,
     focused: bool,
     scroll: u16,
@@ -75,8 +79,8 @@ pub struct TuiContext<'a> {
     check: CheckPresentation,
 }
 
-impl<'a> TuiContext<'a> {
-    pub fn new(app: &'a App) -> Self {
+impl<'a, P: TrustedClosureProvider> TuiContext<'a, P> {
+    pub fn new(app: &'a AppState<P>) -> Self {
         Self {
             app,
             check: CheckPresentation {
@@ -92,12 +96,12 @@ impl<'a> TuiContext<'a> {
         }
     }
 
-    pub(super) fn with_view(app: &'a App, focused: bool, scroll: u16) -> Self {
+    pub(super) fn with_view(app: &'a AppState<P>, focused: bool, scroll: u16) -> Self {
         Self::with_view_sources(app, focused, scroll, None)
     }
 
     pub(super) fn with_view_sources(
-        app: &'a App,
+        app: &'a AppState<P>,
         focused: bool,
         scroll: u16,
         sources: Option<&'a crate::scratch::ScratchBuffers>,
@@ -180,6 +184,12 @@ impl<'a> TuiContext<'a> {
         self
     }
 
+    /// Whether the workspace editor targets the App document rather than scratch.
+    /// This is presentation state only; editable-pane opt-in still controls input.
+    pub fn is_app_editor(&self) -> bool {
+        self.app_editor
+    }
+
     /// Current editor target, without granting publication authority.
     /// `selected_source` remains the independent scratch selection.
     pub(super) fn editor_source(&self) -> Option<super::ScratchEditSnapshot> {
@@ -222,20 +232,20 @@ impl<'a> TuiContext<'a> {
         self.scroll
     }
 
-    pub fn app(&self) -> &'a App {
+    pub fn app(&self) -> &'a AppState<P> {
         self.app
     }
 }
 
 /// Mutable context exposed to TUI panes while handling input.
-pub struct TuiContextMut<'a> {
-    app: &'a mut App,
+pub struct TuiContextMut<'a, P: TrustedClosureProvider = DefaultProvider> {
+    app: &'a mut AppState<P>,
     scroll: Option<&'a mut u16>,
     viewport: Rect,
 }
 
-impl<'a> TuiContextMut<'a> {
-    pub fn new(app: &'a mut App) -> Self {
+impl<'a, P: TrustedClosureProvider> TuiContextMut<'a, P> {
+    pub fn new(app: &'a mut AppState<P>) -> Self {
         Self {
             app,
             scroll: None,
@@ -243,7 +253,11 @@ impl<'a> TuiContextMut<'a> {
         }
     }
 
-    pub(super) fn with_scroll(app: &'a mut App, scroll: &'a mut u16, viewport: Rect) -> Self {
+    pub(super) fn with_scroll(
+        app: &'a mut AppState<P>,
+        scroll: &'a mut u16,
+        viewport: Rect,
+    ) -> Self {
         Self {
             app,
             scroll: Some(scroll),
@@ -265,11 +279,11 @@ impl<'a> TuiContextMut<'a> {
         }
     }
 
-    pub fn app(&self) -> &App {
+    pub fn app(&self) -> &AppState<P> {
         self.app
     }
 
-    pub fn app_mut(&mut self) -> &mut App {
+    pub fn app_mut(&mut self) -> &mut AppState<P> {
         self.app
     }
 }
@@ -278,10 +292,32 @@ impl<'a> TuiContextMut<'a> {
 ///
 /// Downstream consumers can implement this trait to add project-specific views
 /// while reusing Scope's terminal runtime, application state, and default panes.
-pub trait Pane {
+pub trait Pane<P: TrustedClosureProvider = DefaultProvider> {
     /// Read-only local editor snapshot for an exact baseline; no publication authority.
     fn editor_draft(&self, _baseline: &super::ScratchEditSnapshot) -> Option<EditorDraftSnapshot> {
         None
+    }
+
+    /// Owner-dispatched local replacement. Implementations must recheck local
+    /// identity, record one ordinary undo transaction, and never publish source.
+    /// Callers should use `WorkspaceTui::apply_reviewed_editor_draft`, which also
+    /// validates editor generation, source selection and owner binding.
+    fn apply_editor_draft(
+        &mut self,
+        _pinned: &EditorDraftSnapshot,
+        _replacement: &str,
+        _app_document: bool,
+    ) -> Result<super::DraftApplyOutcome, String> {
+        Err("selected editor does not support reviewed local edits".into())
+    }
+
+    /// Owner-validated cursor-only placement. Unsupported panes deny by default.
+    fn place_editor_cursor(
+        &mut self,
+        _pinned: &EditorDraftSnapshot,
+        _cursor: usize,
+    ) -> Result<(), String> {
+        Err("selected editor does not support source navigation".into())
     }
 
     /// Whether execution would overlook an uncommitted local source draft.
@@ -289,7 +325,7 @@ pub trait Pane {
         false
     }
 
-    /// Whether a retained unpublished draft belongs to an App document.
+    /// Whether a retained unpublished draft belongs to an `AppState<P>` document.
     fn has_dirty_app_draft(&self) -> bool {
         false
     }
@@ -303,7 +339,7 @@ pub trait Pane {
 
     fn id(&self) -> &'static str;
 
-    fn render(&self, frame: &mut ratatui::Frame<'_>, area: Rect, ctx: &TuiContext<'_>);
+    fn render(&self, frame: &mut ratatui::Frame<'_>, area: Rect, ctx: &TuiContext<'_, P>);
 
     /// Requests that the host open a literal workspace-relative document path.
     /// Called only while focused, after global shortcuts and before pane input.
@@ -312,7 +348,7 @@ pub trait Pane {
     fn workspace_document_request(
         &mut self,
         _event: &crossterm::event::Event,
-        _ctx: &TuiContext<'_>,
+        _ctx: &TuiContext<'_, P>,
     ) -> Option<String> {
         None
     }
@@ -334,13 +370,13 @@ pub trait Pane {
     fn handle_view_event(
         &mut self,
         _event: crossterm::event::Event,
-        _ctx: &TuiContext<'_>,
+        _ctx: &TuiContext<'_, P>,
     ) -> bool {
         false
     }
 
     /// Handle a pressed key while focused. Return `true` when consumed.
-    fn handle_key(&mut self, _key: KeyEvent, _ctx: &mut TuiContextMut<'_>) -> bool {
+    fn handle_key(&mut self, _key: KeyEvent, _ctx: &mut TuiContextMut<'_, P>) -> bool {
         false
     }
 }

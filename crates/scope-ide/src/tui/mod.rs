@@ -6,7 +6,19 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::app::App;
 
+#[cfg(feature = "experimental-sprout-closure")]
+#[doc(hidden)]
+pub type DefaultProvider = crate::registered_document_closure::InertProvider;
+#[cfg(not(feature = "experimental-sprout-closure"))]
+#[doc(hidden)]
+pub type DefaultProvider = ();
+#[cfg(not(feature = "experimental-sprout-closure"))]
+pub(crate) use crate::app::TrustedClosureProvider;
+#[cfg(feature = "experimental-sprout-closure")]
+pub(crate) use crate::registered_document_closure::TrustedClosureProvider;
+
 mod composition;
+mod draft_review;
 pub use composition::{
     ActionInfo, DownstreamAction, DownstreamPrompt, DownstreamPromptChoice, View, WorkspaceAction,
     WorkspaceInput, WorkspaceTui,
@@ -16,8 +28,13 @@ mod panes;
 mod quick_open;
 pub mod scratch_editor;
 pub use scratch_editor::{
-    EditableScratchPane, ScratchEditAccess, ScratchEditError, ScratchEditSnapshot,
+    DraftApplyDecision, DraftApplyOutcome, EditableScratchPane, ScratchEditAccess,
+    ScratchEditError, ScratchEditSnapshot,
 };
+#[cfg(feature = "experimental-sprout-closure")]
+mod registered;
+#[cfg(feature = "experimental-sprout-closure")]
+pub use registered::{RegisteredExecution, RegisteredOutput};
 mod semantic;
 mod session;
 #[cfg(feature = "tools")]
