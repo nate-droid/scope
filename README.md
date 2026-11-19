@@ -1,128 +1,39 @@
 # Scope
 
-Scope is a developer workbench for editing small programs, running scripts, and
-exploring language-specific tools in one place. You can start with an in-memory
-scratch program—no model server or project setup required—and add a language's
-own analysis and execution services through Rust integrations.
-
-Scope supplies the workspace, editor, operation discovery, and review controls.
-Languages supply the meaning of their programs. Cell supplies capability-oriented
-execution and filesystem boundaries where those capabilities are installed.
-
-The goal is to let people and tools ask useful questions about programs without
-forcing every language into one runtime or treating every interaction as a text
-edit. Agents can discover operations and propose changes, while the host retains
-authority over invocation, approval, and persistence.
-
-Today you can edit and run Scope Script in memory, inspect registered language
-services, embed semantic operations in a Rust host, and review revision-aware
-proposals. Scope is experimental: these are usable building blocks, not a complete
-autonomous development environment.
+Scope is a lightweight development workbench with terminal and graphical editors. Use it to edit and run a scratch script, or open a project in a launcher that understands its language. Registered language services can add contextual actions such as Check, Format, Run, and Inspect. Where a language returns structured results, Scope can display details and compare checked returns.
 
 ## Start here
 
-From the repository root, in an interactive terminal:
+### Try the terminal workbench
+
+From this checkout, with Rust installed, run this in an interactive terminal:
 
 ```sh
-cargo run
+cargo run --locked
 ```
 
-This launches **Scope**, the retained workbench editor, using the pinned Rust
-toolchain and default features. No package selection, feature flags, model server,
-API key, or Wasm target is required. The first build downloads dependencies,
-including published Cell `v0.0.4`; the application does not contact a model on
-startup. See [dependency setup](docs/development.md#toolchain-and-cell) for the
-pinned revision and remote dependency workflow.
+1. Press **F1**, choose **New Script**, and type `print(2 + 3)`.
+2. Press **Ctrl-S** to publish the draft in memory, then **F5** to run it. The output pane shows `5`.
+3. Press **F3** to return to the editor or **Ctrl-Q** to quit.
 
-1. Press **F1**, search **New Script**, then Enter to create and select a scratch.
-2. Type `print(2 + 3)` in the editor.
-3. Press **Ctrl-S** to publish the draft to the authoritative in-memory scratch.
-4. Press **F5** to run that committed revision. Output and source/revision evidence
-   remain in the output pane; use F1 → **Focus output** to inspect it.
-5. Press **F3** to return to editing the same source. **Ctrl-Q** exits Scope.
+No model server, API key, or sibling checkout is needed. The first build fetches dependencies, including Cell. See the [terminal guide](docs/quickstart.md) for project files, explicit disk saves, and advanced actions.
 
-For an App document, **Ctrl-O** opens a path and **Ctrl-R** publishes the exact
-editor draft in memory, then directly invokes the unique eligible candidate
-evaluation. This trusted native-host Run gesture authorizes that exact request
-once; no extra Enter is required. Run is unavailable when there is no unique
-eligible operation. **Ctrl-T** (Alt-Enter / Shift-F5 aliases) publishes and checks diagnostics
-without moving editor focus. These require the corresponding language services;
-they do not turn the pure Script runner into a downstream runtime. Use **Ctrl-G**
-for actions/help (**F1** is an alias), including explicit **Save** to disk.
+### Open a desktop workspace
 
-F4 accepts workbench commands, and F2 temporarily opens the advanced shell. Shell
-`quit` returns to the same workspace. Esc stays in the App editor workspace;
-scratch/legacy Esc still opens the shell. Modal Esc cancels pending confirmation,
-then closes the modal on a subsequent Esc. Ctrl-Q warns about dirty editor drafts,
-the App document or selected scratch; press Ctrl-Q again to discard and exit, or
-Esc to cancel quitting. Source text in the editor is Script, not a workbench command.
-Ctrl-S is **not a disk save**; it still publishes in memory. Startup filesystem
-access is read-only; pure Script runs with no host providers or native authority.
-Agent compilation, discovery, and proposal acceptance do not grant authorization.
-
-Opening an App document in the conventional default layout selects the quiet
-editor-only view with a small output strip. **Ctrl-G** exposes advanced actions;
-**F7** still cycles layouts. Advanced **Evaluate / inspect** retains confirmation.
-`Read` describes an operation's declared effect, not a sandbox; native providers
-are trusted host code. Agent invocation still requires its separate allowlist.
-
-The [UX5 quiet workspace status](docs/ux/quiet-workspace.md) records current
-controls, authorization boundaries and incomplete verification/usability evidence.
-The [canonical quickstart](docs/quickstart.md) explains the contexts, draft/run
-boundaries, shell transitions, and saved-file execution. `cargo run -- --help`
-shows the supported CLI; `cargo run -- --version` reports the binary version.
-The single recommended application binary is `scope` (`scope-workbench`).
-
-## How it fits together
-
-```text
-Human / agent / Scope Script
-             |
-Scope host: discovery, authorization, buffers, proposals
-             |
-Registered language services: domain semantics and operations
-             |
-Cell: capability-oriented execution and filesystem boundaries
+```sh
+cargo run --locked -p scope-workbench --features desktop --bin scope-desktop -- . --open README.md
 ```
 
-- **Scope's interfaces** describe languages, source snapshots, semantic operations,
-  and tools. Hosts register implementations and decide what may run.
-- **Scope Script** is lightweight automation and composition. Its standalone CLI
-  has no host providers; embedded hosts explicitly install and authorize them.
-- **Languages** own their semantics. The stock shell includes Scope Simple analysis
-  and a language-neutral fallback, not a general collection of language runtimes.
-- **Agents** discover and propose through host-owned workflows. Evaluation evidence
-  is not approval; accepting a proposal is not the same as saving it.
-- **Cell** provides capability and sandbox boundaries for Cell execution. Native
-  Rust extensions remain trusted host code, not automatically sandboxed components.
+This opens the current directory in the graphical preview. Add `--writable` to permit disk saves. Stock Scope is not a bundle of language runtimes; language-enabled launchers supply their own services. For example, with the Desktop-enabled Sprout binary installed, run `sprout ide .` from a Sprout project to edit, format, check, and run supported entries without registering modules by hand.
 
-The default binary is `scope`, in `scope-workbench`; it composes `scope-ide` and
-`scope-script`. The [architecture guide](docs/architecture.md) maps all crates and
-explains state ownership, revision safety, and extension points.
+## Learn more
 
-## Extend Scope
+- [Desktop guide](docs/desktop.md): project navigation, editing, execution, and result inspection and comparison.
+- [Scope Script](docs/scope-script.md): scratch programs and host automation.
+- [Language integration](docs/integration.md) and the [downstream example](examples/downstream/README.md): compose a launcher with your own semantic and execution services.
+- [Architecture](docs/architecture.md) and [security](SECURITY.md): Scope owns workspace state and authorization; Cell enforces containment on Cell-backed execution paths. Native extensions are trusted host code. Discovering an action or accepting a proposal does not authorize execution or save source.
+- [Contributing](CONTRIBUTING.md): development setup and verification.
 
-Language integration is compile-time Rust composition, not dynamic plugin loading.
-Start with the [downstream example](examples/downstream/README.md) and
-[Integration guide](docs/integration.md) to register language-specific semantic
-operations and compose a launcher. The [example catalog](examples/README.md)
-distinguishes runnable demonstrations from explicit fixture hosts.
+Scope is a preview. Available actions depend on the launcher and the language; agent integration and the graphical editor are not complete IDE workflows.
 
-For tool authorization and proposal workflows, see the
-[Agents guide](docs/agents.md) and [interactive sessions](docs/integration.md#interactive-language-sessions).
-
-## Status and development
-
-Public interfaces are developing. Agent/model integration, the browsing TUI, and
-research fixture hosts are optional. The default retained workbench and the
-legacy developer browsing TUI are separate interfaces; neither is a full IDE. Discovery and
-type compatibility do not establish semantic correctness or grant authority.
-There is no complete autonomous compile/test/review loop.
-
-- [Development](docs/development.md): prerequisites, features, builds, and tests.
-- [Scope Script](docs/scope-script.md): language, output, and explicit host adapters.
-- [Contributing](CONTRIBUTING.md) and [Security](SECURITY.md).
-
-## License
-
-[MIT](LICENSE). Dependencies, including Cell, have their own licenses.
+[MIT license](LICENSE). Dependencies, including Cell, have their own licenses.

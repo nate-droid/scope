@@ -288,6 +288,8 @@ pub struct WorkspaceTui<P: TrustedClosureProvider = DefaultProvider> {
     opened_targets: BTreeMap<(String, String), u64>,
     open_suggestions: super::quick_open::QuickOpen,
     app_editor: bool,
+    #[cfg(feature = "desktop")]
+    desktop_tabs: Option<Vec<String>>,
     owner_binding_generation: u64,
     // Display hints only: invocation always rediscovers and captures from AppState<P>.
     action_document_present: bool,
@@ -299,7 +301,7 @@ pub struct WorkspaceTui<P: TrustedClosureProvider = DefaultProvider> {
     output: crate::cli::workspace_command::WorkspaceCommandOutput,
     output_errors: String,
     // Match the displayed text before attributing freshness to App diagnostics.
-    app_diagnostics: Option<(String, Option<super::EditorDraftSnapshot>)>,
+    app_diagnostics: Option<AppDiagnostics>,
     output_scroll: u16,
     output_area: Option<Rect>,
     visible: Vec<(String, Rect)>,
@@ -347,6 +349,8 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
             opened_targets: Default::default(),
             open_suggestions: Default::default(),
             app_editor: Default::default(),
+            #[cfg(feature = "desktop")]
+            desktop_tabs: None,
             owner_binding_generation: Default::default(),
             action_document_present: Default::default(),
             format_registry: crate::language::LanguageRegistry::empty(),
@@ -381,6 +385,12 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
         }
     }
 }
+struct AppDiagnostics {
+    text: String,
+    pinned: Option<super::EditorDraftSnapshot>,
+    first_offset: Option<usize>,
+}
+
 impl Default for WorkspaceTui {
     fn default() -> Self {
         let mut ui = Self::empty();
@@ -454,6 +464,18 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
             let _ = app;
             false
         }
+    }
+
+    #[cfg(feature = "experimental-sprout-closure")]
+    fn finish_registered_run(&mut self) {
+        if let Some(observation) = self
+            .registered_execution
+            .as_mut()
+            .and_then(|inspection| inspection.take_completed_observation())
+        {
+            self.retain_completed_observation(observation);
+        }
+        let _ = self.focus_named("output");
     }
 
     fn registered_modal_open(&self) -> bool {
@@ -540,23 +562,88 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
         Ok(id)
     }
 
+    #[cfg(feature = "desktop")]
+    pub(super) fn enable_desktop_tabs(&mut self, app: &AppState<P>) {
+        self.desktop_tabs = Some(
+            app.open_document()
+                .filter(|_| self.app_editor)
+                .map(|doc| doc.path().to_string())
+                .into_iter()
+                .collect(),
+        );
+    }
+
+    #[cfg(feature = "desktop")]
+    fn tab_dirty(&self, doc: &crate::document::Document) -> bool {
+        doc.is_dirty()
+            || self
+                .instances
+                .values()
+                .any(|instance| instance.pane.has_dirty_source(doc.evaluation_source_id()))
+    }
+
+    #[cfg(feature = "desktop")]
+    fn close_desktop_tab(&mut self, app: &mut AppState<P>, path: &str) -> Result<(), String> {
+        let Some(tabs) = &self.desktop_tabs else {
+            return Ok(());
+        };
+        let Some(index) = tabs.iter().position(|tab| tab == path) else {
+            return Ok(());
+        };
+        let doc = app
+            .desktop_document(path)
+            .ok_or("tab document unavailable")?;
+        if self.tab_dirty(doc) {
+            return Err("Save or cancel changes before closing this tab".into());
+        }
+        let source = doc.evaluation_source_id().clone();
+        let was_active = app
+            .open_document()
+            .is_some_and(|doc| doc.path().as_str() == path);
+        let tabs = self.desktop_tabs.as_mut().unwrap();
+        tabs.remove(index);
+        let next = tabs.get(index.min(tabs.len().saturating_sub(1))).cloned();
+        app.close_desktop_document(path);
+        for instance in self.instances.values_mut() {
+            instance.pane.forget_closed_source(&source);
+        }
+        self.editor_selection
+            .borrow_mut()
+            .retained
+            .retain(|entry| entry.source != source);
+        if was_active
+            && self.app_editor
+            && let Some(next) = next
+        {
+            self.open_app_document(app, &next)?;
+        }
+        self.refresh_action_context(app);
+        Ok(())
+    }
+
     /// Open a confined workspace file directly into App and edit that same document.
     /// Refuses unpublished drafts and replacement of unsaved unenrolled documents.
     /// Enrolled documents stay in their owner, including unsaved changes.
     pub fn open_app_document(&mut self, app: &mut AppState<P>, path: &str) -> Result<(), String> {
-        if let Some(reason) = self.draft_blocker() {
-            return Err(reason);
-        }
-        #[cfg(feature = "experimental-sprout-closure")]
-        let retained = app.selected_registered_module().is_some();
-        #[cfg(not(feature = "experimental-sprout-closure"))]
-        let retained = false;
-        if !retained
-            && app
-                .open_document()
-                .is_some_and(|document| document.is_dirty())
-        {
-            return Err("cannot replace App document with unsaved changes".into());
+        #[cfg(feature = "desktop")]
+        let tabs_enabled = self.desktop_tabs.is_some();
+        #[cfg(not(feature = "desktop"))]
+        let tabs_enabled = false;
+        if !tabs_enabled {
+            if let Some(reason) = self.draft_blocker() {
+                return Err(reason);
+            }
+            #[cfg(feature = "experimental-sprout-closure")]
+            let retained = app.selected_registered_module().is_some();
+            #[cfg(not(feature = "experimental-sprout-closure"))]
+            let retained = false;
+            if !retained
+                && app
+                    .open_document()
+                    .is_some_and(|document| document.is_dirty())
+            {
+                return Err("cannot replace App document with unsaved changes".into());
+            }
         }
         if path.is_empty() || path.contains(['\n', '\r']) {
             return Err("enter one workspace-relative App file path".into());
@@ -570,22 +657,30 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
                     .is_some_and(|instance| instance.editable)
             })
             .ok_or("no visible editable pane")?;
-        #[cfg(feature = "experimental-sprout-closure")]
-        let enrolled = app.registered_documents().and_then(|documents| {
-            documents
-                .documents()
-                .find(|(_, document)| document.path().display().to_string() == path)
-                .map(|(module, _)| module.to_owned())
-        });
-        #[cfg(feature = "experimental-sprout-closure")]
-        if let Some(module) = enrolled {
-            app.select_registered_document(&module)
-                .map_err(|error| error.to_string())?;
+        if tabs_enabled {
+            #[cfg(feature = "desktop")]
+            {
+                app.open_desktop_document(path)
+                    .map_err(|error| error.to_string())?;
+            }
         } else {
+            #[cfg(feature = "experimental-sprout-closure")]
+            let enrolled = app.registered_documents().and_then(|documents| {
+                documents
+                    .documents()
+                    .find(|(_, document)| document.path().display().to_string() == path)
+                    .map(|(module, _)| module.to_owned())
+            });
+            #[cfg(feature = "experimental-sprout-closure")]
+            if let Some(module) = enrolled {
+                app.select_registered_document(&module)
+                    .map_err(|error| error.to_string())?;
+            } else {
+                app.open_path(path).map_err(|error| error.to_string())?;
+            }
+            #[cfg(not(feature = "experimental-sprout-closure"))]
             app.open_path(path).map_err(|error| error.to_string())?;
         }
-        #[cfg(not(feature = "experimental-sprout-closure"))]
-        app.open_path(path).map_err(|error| error.to_string())?;
         // Only the launcher's conventional default split opts into AppState<P>'s minimal view.
         // Keep custom layouts and the workspace layout itself available unchanged.
         if self.layouts.get(self.active).is_some_and(|(name, view)| {
@@ -648,6 +743,21 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
             .or(self.retained_inspection.as_ref())?
             .result()
     }
+    /// Publish completed feedback into the ordinary two-result lifecycle.
+    /// This is passive retention, not evidence validation or execution authority.
+    pub fn retain_completed_observation(
+        &mut self,
+        result: crate::semantic_inspection::InspectionResult,
+    ) {
+        let mut inspection = self
+            .semantic_inspection
+            .take()
+            .or_else(|| self.retained_inspection.take())
+            .unwrap_or_default();
+        inspection.retain_completed(result);
+        self.retained_inspection = Some(inspection);
+    }
+
     pub fn register(
         &mut self,
         id: impl Into<String>,
@@ -929,7 +1039,14 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
             );
         }
         if let Some(inspection) = &self.semantic_inspection {
-            inspection.render(frame, frame.area(), app);
+            inspection.render(
+                frame,
+                frame.area(),
+                app,
+                self.instances
+                    .values()
+                    .any(|instance| instance.pane.has_dirty_app_draft()),
+            );
         }
         if let Some(review) = &self.draft_review {
             review.render(frame, frame.area());
@@ -998,7 +1115,7 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
                 .unwrap()
                 .handle_key(key, app, blocker);
             if completed {
-                let _ = self.focus_named("output");
+                self.finish_registered_run();
             }
             return WorkspaceInput::Handled;
         }
@@ -1486,14 +1603,16 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
     ) -> String {
         // A rejected latest action must not present an older Run as its outcome.
         if self.app_editor && !self.output_errors.is_empty() {
-            if let Some((diagnostics, pinned)) = &self.app_diagnostics
-                && diagnostics == &self.output_errors
-                && pinned
+            if let Some(diagnostics) = &self.app_diagnostics
+                && diagnostics.text == self.output_errors
+                && diagnostics
+                    .pinned
                     .as_ref()
                     .is_none_or(|pinned| self.validate_editor_draft(app, sources, pinned).is_err())
             {
                 return format!(
-                    "STALE (historical App Check; editor draft changed or unavailable)\n{diagnostics}"
+                    "STALE (historical App Check; editor draft changed or unavailable)\n{}",
+                    diagnostics.text
                 );
             }
             return self.output_errors.clone();
@@ -1620,7 +1739,7 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
         session: &mut InteractiveSession,
         command: Option<&mut dyn ReadOnlyCommand>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        self.run_optional_sources(app, session, command, None)
+        self.run_optional_sources(app, session, command, None, None)
     }
 
     /// Runs with caller-owned scratch buffers retained across shell handoffs.
@@ -1631,7 +1750,24 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
         command: Option<&mut dyn ReadOnlyCommand>,
         sources: &mut crate::scratch::ScratchBuffers,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        self.run_optional_sources(app, session, command, Some(sources))
+        self.run_optional_sources(app, session, command, Some(sources), None)
+    }
+
+    #[cfg(feature = "desktop")]
+    pub(super) fn run_desktop(
+        &mut self,
+        app: &mut AppState<P>,
+        command: Option<&mut dyn ReadOnlyCommand>,
+        sources: &mut crate::scratch::ScratchBuffers,
+        desktop: super::desktop::DesktopIo,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.run_optional_sources(
+            app,
+            &mut InteractiveSession::new(),
+            command,
+            Some(sources),
+            Some(WorkspaceSurface::Desktop(Box::new(desktop))),
+        )
     }
 
     fn run_optional_sources(
@@ -1640,12 +1776,16 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
         session: &mut InteractiveSession,
         mut command: Option<&mut dyn ReadOnlyCommand>,
         mut sources: Option<&mut crate::scratch::ScratchBuffers>,
+        surface: Option<WorkspaceSurface>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if self.layouts.is_empty() {
             return Err("register at least one layout".into());
         }
         let mut fallback_sources = crate::scratch::ScratchBuffers::default();
-        let mut terminal = Some(TerminalSession::enter()?);
+        let mut terminal = Some(match surface {
+            Some(surface) => surface,
+            None => WorkspaceSurface::terminal()?,
+        });
         let mut quit_pending = false;
         loop {
             self.scratch_run_available =
@@ -1655,6 +1795,37 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
                         .unwrap_or(&fallback_sources)
                         .selected()
                         .is_ok_and(|source| source.language_id() == "scope-script");
+            #[cfg(feature = "desktop")]
+            if let Some(WorkspaceSurface::Desktop(io)) = terminal.as_mut() {
+                if let Some(tabs) = &mut self.desktop_tabs
+                    && let Some(doc) = app.open_document().filter(|_| self.app_editor)
+                    && !tabs.iter().any(|path| path == doc.path().as_str())
+                {
+                    tabs.push(doc.path().to_string());
+                }
+                io.set_tabs(
+                    self.desktop_tabs
+                        .iter()
+                        .flatten()
+                        .filter_map(|path| {
+                            let doc = app.desktop_document(path)?;
+                            Some(super::desktop::DesktopTab {
+                                path: path.clone(),
+                                dirty: self.tab_dirty(doc),
+                            })
+                        })
+                        .collect(),
+                );
+                io.set_status(
+                    app.open_document()
+                        .filter(|_| self.app_editor)
+                        .map(|doc| doc.path().to_string()),
+                    self.has_unsaved_work(app, sources.as_deref()),
+                    self.draft_blocker().is_some(),
+                    self.app_editor && app.open_document().is_some_and(|doc| doc.is_dirty()),
+                    quit_pending,
+                );
+            }
             terminal.as_mut().unwrap().draw(|frame| {
                 self.render_run_frame(frame, app, sources.as_deref(), quit_pending);
                 self.render_picker(
@@ -1663,14 +1834,113 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
                     command.as_ref().is_some_and(|h| h.supports_direct_script()),
                 );
                 if let Some(inspection) = &self.semantic_inspection {
-                    inspection.render(frame, frame.area(), app);
+                    inspection.render(
+                        frame,
+                        frame.area(),
+                        app,
+                        self.instances
+                            .values()
+                            .any(|instance| instance.pane.has_dirty_app_draft()),
+                    );
                 }
                 if let Some(review) = &self.draft_review {
                     review.render(frame, frame.area());
                 }
             })?;
-            if event::poll(std::time::Duration::from_millis(250))? {
-                let input = event::read()?;
+            if let Some(input) = match terminal.as_mut().unwrap().read()? {
+                SurfaceInput::Idle => None,
+                #[cfg(feature = "desktop")]
+                SurfaceInput::Closed => break,
+                #[cfg(feature = "desktop")]
+                SurfaceInput::Desktop(input) => {
+                    use super::desktop::DesktopInput;
+                    if matches!(input, DesktopInput::Close) {
+                        if !self.has_unsaved_work(app, sources.as_deref()) {
+                            break;
+                        }
+                        quit_pending = true;
+                        continue;
+                    }
+                    if matches!(input, DesktopInput::ConfirmClose) && quit_pending {
+                        break;
+                    }
+                    if quit_pending
+                        || self.command_line.is_some()
+                        || self.picker.is_some()
+                        || self.draft_review.is_some()
+                        || self.semantic_inspection.is_some()
+                        || self.registered_modal_open()
+                    {
+                        continue;
+                    }
+                    match input {
+                        DesktopInput::Open(path) => {
+                            if let Err(error) = self.open_app_document(app, &path) {
+                                self.show_result = false;
+                                self.output_errors.push_str(&format!("{error}\n"));
+                            }
+                        }
+                        DesktopInput::CloseDocument(path) => {
+                            if let Err(error) = self.close_desktop_tab(app, &path) {
+                                self.show_result = false;
+                                self.output_errors.push_str(&format!("{error}\n"));
+                            }
+                        }
+                        DesktopInput::CycleDocument { backwards } => {
+                            if let Some(tabs) = &self.desktop_tabs
+                                && !tabs.is_empty()
+                            {
+                                let active = app
+                                    .open_document()
+                                    .filter(|_| self.app_editor)
+                                    .and_then(|doc| {
+                                        tabs.iter().position(|path| path == doc.path().as_str())
+                                    });
+                                let next = match active {
+                                    Some(index) if backwards => {
+                                        (index + tabs.len() - 1) % tabs.len()
+                                    }
+                                    Some(index) => (index + 1) % tabs.len(),
+                                    None if backwards => tabs.len() - 1,
+                                    None => 0,
+                                };
+                                let path = tabs[next].clone();
+                                if let Err(error) = self.open_app_document(app, &path) {
+                                    self.output_errors.push_str(&format!("{error}\n"));
+                                }
+                            }
+                        }
+                        DesktopInput::Copy { cut } => {
+                            if let Some(draft) = self.current_editor_draft(app, sources.as_deref())
+                                && self.focused() == Some(draft.editor.as_str())
+                                && let Some(anchor) =
+                                    draft.anchor.filter(|anchor| *anchor != draft.cursor)
+                                && let Some(text) = draft
+                                    .text
+                                    .get(anchor.min(draft.cursor)..anchor.max(draft.cursor))
+                            {
+                                if let Some(WorkspaceSurface::Desktop(io)) = terminal.as_mut() {
+                                    io.copy(text.to_owned());
+                                }
+                                if cut {
+                                    self.handle_event_optional_sources(
+                                        Event::Key(KeyEvent::new(
+                                            KeyCode::Delete,
+                                            event::KeyModifiers::NONE,
+                                        )),
+                                        app,
+                                        sources.as_deref_mut(),
+                                    );
+                                }
+                            }
+                        }
+                        DesktopInput::ConfirmClose => {}
+                        _ => unreachable!("surface handles transport input"),
+                    }
+                    continue;
+                }
+                SurfaceInput::Event(input) => Some(input),
+            } {
                 if quit_pending {
                     if let Event::Key(key) = &input
                         && key.kind == KeyEventKind::Press
@@ -1694,6 +1964,28 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
                     || self.registered_modal_open()
                 {
                     self.handle_event_optional_sources(input, app, sources.as_deref_mut());
+                    continue;
+                }
+                #[cfg(feature = "desktop")]
+                if matches!(terminal.as_ref(), Some(WorkspaceSurface::Desktop(_)))
+                    && self.picker.is_none()
+                    && self.command_line.is_none()
+                    && self.app_editor
+                    && app.workspace().allows_saves()
+                    && matches!(&input, Event::Key(key) if key.kind == KeyEventKind::Press
+                        && key.code == KeyCode::Char('s') && key.modifiers == event::KeyModifiers::CONTROL)
+                {
+                    let result = self.publish_focused_app_document(app).and_then(|()| {
+                        if app.open_document().is_some_and(|doc| doc.is_dirty()) {
+                            app.save_open_document()
+                                .map_err(|error| error.to_string())?;
+                        }
+                        Ok(())
+                    });
+                    if let Err(error) = result {
+                        self.show_result = false;
+                        self.output_errors.push_str(&format!("Save: {error}\n"));
+                    }
                     continue;
                 }
                 let supported = command.as_ref().is_some_and(|h| h.supports_direct_script());
@@ -1820,18 +2112,16 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
                 }
                 match self.handle_event_optional_sources(input, app, sources.as_deref_mut()) {
                     WorkspaceInput::Quit => {
-                        let unsaved = self.draft_blocker().is_some()
-                            || app.has_unsaved_documents()
-                            || sources.as_deref().is_some_and(|sources| {
-                                sources.list().any(|source| source.is_dirty())
-                            });
-                        if unsaved {
+                        if self.has_unsaved_work(app, sources.as_deref()) {
                             quit_pending = true;
                         } else {
                             break;
                         }
                     }
                     WorkspaceInput::Shell => {
+                        if !matches!(terminal.as_ref(), Some(WorkspaceSurface::Terminal(_))) {
+                            continue;
+                        }
                         let Some(legacy) = &self.legacy else {
                             self.output_errors.push_str(
                                 "Shell handoff is unavailable for this typed workspace.\n",
@@ -1844,13 +2134,74 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
                             .as_mut()
                             .map(|host| &mut **host as &mut dyn ReadOnlyCommand);
                         (legacy.shell)(app, session, command, sources.as_deref_mut())?;
-                        terminal = Some(TerminalSession::enter()?);
+                        terminal = Some(WorkspaceSurface::terminal()?);
                     }
                     _ => {}
                 }
             }
         }
         Ok(())
+    }
+
+    fn has_unsaved_work(
+        &self,
+        app: &AppState<P>,
+        sources: Option<&crate::scratch::ScratchBuffers>,
+    ) -> bool {
+        self.draft_blocker().is_some()
+            || app.has_unsaved_documents()
+            || sources.is_some_and(|sources| sources.list().any(|source| source.is_dirty()))
+    }
+}
+
+enum WorkspaceSurface {
+    Terminal(TerminalSession),
+    #[cfg(feature = "desktop")]
+    Desktop(Box<super::desktop::DesktopIo>),
+}
+
+enum SurfaceInput {
+    Idle,
+    #[cfg(feature = "desktop")]
+    Closed,
+    Event(Event),
+    #[cfg(feature = "desktop")]
+    Desktop(super::desktop::DesktopInput),
+}
+
+impl WorkspaceSurface {
+    fn terminal() -> Result<Self, Box<dyn std::error::Error>> {
+        Ok(Self::Terminal(TerminalSession::enter()?))
+    }
+
+    fn draw(&mut self, render: impl FnOnce(&mut ratatui::Frame<'_>)) -> std::io::Result<()> {
+        match self {
+            Self::Terminal(terminal) => terminal.draw(render),
+            #[cfg(feature = "desktop")]
+            Self::Desktop(desktop) => desktop.draw(render),
+        }
+    }
+
+    fn read(&mut self) -> std::io::Result<SurfaceInput> {
+        match self {
+            Self::Terminal(_) if event::poll(std::time::Duration::from_millis(250))? => {
+                Ok(SurfaceInput::Event(event::read()?))
+            }
+            Self::Terminal(_) => Ok(SurfaceInput::Idle),
+            #[cfg(feature = "desktop")]
+            Self::Desktop(desktop) => {
+                use super::desktop::DesktopInput;
+                match desktop.recv() {
+                    Err(_) => Ok(SurfaceInput::Closed),
+                    Ok(DesktopInput::Resize(width, height)) => {
+                        desktop.resize(width, height);
+                        Ok(SurfaceInput::Idle)
+                    }
+                    Ok(DesktopInput::Event(event)) => Ok(SurfaceInput::Event(event)),
+                    Ok(input) => Ok(SurfaceInput::Desktop(input)),
+                }
+            }
+        }
     }
 }
 

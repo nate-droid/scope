@@ -26,9 +26,7 @@ cargo fmt --all -- --check
 
 Use the contract's [scope-selection table](docs/verification.md#choose-your-next-check)
 and [target discovery/reuse guidance](docs/verification.md#discover-targets-and-reuse-builds)
-when choosing the smallest meaningful check. Historical measurements are indexed
-in the [DX3 loop audit](docs/development-loop.md); they are not additional workflow
-requirements.
+when choosing the smallest meaningful check.
 Reuse build artifacts; do not routinely run `cargo clean`. Ordinary changes need
 neither profiling nor a new performance report.
 

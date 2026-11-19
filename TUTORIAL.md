@@ -290,7 +290,16 @@ requires explicit capture/review and confirmation before invocation.
 when clean, or diagnostic locations and messages without the technical header.
 Neither Run nor Check saves to disk. **Ctrl-S remains Publish**, not disk Save;
 use **Ctrl-G** → **Save** for explicit persistence. Ctrl-G opens actions/help;
-**F1** remains an alias. The primary catalog still exposes advanced actions.
+**F1** remains an alias. Type a purpose such as `check`, `format`, `run`,
+`inspect` or `details` to search the whole action catalog, case-insensitively.
+Names match before identifiers and explanations; ties retain catalog order.
+**↑/↓** select the `>`-marked action, **Home/End** select the first/last match,
+and **Enter** invokes an enabled action. **Backspace** edits, **Ctrl-U** clears,
+and **Esc** cancels without changing your draft or originating pane focus.
+Each entry explains its intent and shows an existing shortcut where applicable;
+disabled entries explain known blockers. No matches produces a recovery hint.
+An empty search keeps the compact contextual menu; **More actions** browses all.
+Format remains a preview requiring explicit acceptance, not an immediate rewrite.
 
 Opening an App document from the launcher's conventional default split selects
 the editor-only layout, with a small output strip and a short Open / Run / Quit /
@@ -298,9 +307,83 @@ More footer. Custom layouts are preserved; **F7** still cycles layouts. Direct R
 leaves editing in place and shows the provider's evaluation summary, or a generic
 completion message for other result types. Source changes and unpublished drafts
 mark retained output stale. Summaries are not truncated, so a verbose provider can
-still fill the strip; focus output to scroll. Use **Ctrl-G** → **Evaluate / inspect**
-for retained evidence and **d** for Details in the modal. Scope does not parse
-provider prose or opaque JSON to infer success or certification.
+still fill the strip; focus output to scroll. Use **Ctrl-G** → **Inspect Result**
+to open the read-only **Result Explorer**, or search `details` for **View Details**.
+These entries appear in the compact menu when inspection evidence is retained,
+and are preferred when the output pane has focus. Without retained inspection
+evidence, search still finds them disabled with a reason. Direct Script output
+remains the separate **Show retained Script result** action; it is not presented
+as typed inspection evidence. **Evaluate / inspect document** remains a separate,
+confirmed operation-review workflow, not an alias for passive result inspection.
+In the result modal, **d** toggles Details and **x** opens the explorer—no new Run
+or confirmation.
+Use **↑/↓** to select fields or array indices, **→** to expand, **←** to collapse
+or select the parent, and **Enter** to toggle a container. **Home/End** select the
+first/last visible node; **PgUp/PgDn** move ten nodes. The selected path uses JSON
+Pointer escaping (`~0` for `~`, `~1` for `/`), prefixed with `$` for the root.
+**Esc** returns to the ordinary result modal; **d** returns directly to Details.
+Another Esc closes inspection and restores the workspace.
+
+The explorer displays native result JSON: null, booleans, numbers, strings,
+arrays and named-field objects, including nested combinations. It does not infer
+language types, parse provider prose, or turn JSON-looking strings into objects.
+Opaque/unsupported results have an explicit fallback to Details. Containers start
+collapsed; traversal is limited to the first 1,024 visible nodes and 32 levels,
+with escaped string previews of 120 characters. Full retained raw evidence remains
+in Details. The header keeps the original language, operation, source identity,
+revision and available evaluation outcome; source changes or unpublished App
+drafts mark it stale. Navigation does not save, execute, authorize, or alter that
+evidence.
+
+### Compare two App computations
+
+Run twice with **Ctrl-R / F5**, editing and publishing the App draft through the
+existing Run path between runs (or explicitly confirm two **Evaluate / inspect**
+operations). Open **Ctrl-G / F1**, search `compare`, `diff` or `results`, and choose
+**Compare Results**. The previous completed observation is the baseline; the
+latest is the target. Each new completion advances this two-result window and
+evicts the older baseline. Script history is separate and is not compared.
+
+Comparison uses exact native JSON structure, with object fields in stable key
+order and **arrays compared by index**, not by semantic identity. Rows say
+`added`, `removed`, `changed`, `unchanged`, or `unknown` when incomplete. The
+selected structural path and **Old / New** previews appear above the rows.
+**↑/↓**, **Home/End**, and **PgUp/PgDn** navigate context; **n/p** jump between
+established differences. **1 / 2** open the baseline/latest in the existing
+explorer; **d** opens that side's Details. **Esc** returns to comparison, then
+the inspection modal, then the workspace. Enter in comparison or a side's
+Details is passive, never confirmation.
+
+Both original source identities, revisions, languages, operations, outcomes and
+captured read-authorization context remain visible, with independent freshness
+status. Native document results and registered-closure observations share this
+same two-result window without substituting a document binding for a closure.
+Closure `CURRENT` requires passive validation of the complete retained evidence
+against the live registry (including dependencies, policy, and artifact identity),
+not just the root document. Changed evidence is `STALE`; without that registry,
+freshness is `UNKNOWN`. Freshness does not grant execution authority.
+Different origins do not imply semantic compatibility. Browsing
+never executes, refreshes evidence, publishes, saves, or grants authority.
+Comparison requires two supported native results; unsupported/opaque results
+retain Details and a disabled reason. It is bounded to 1,024 nodes, depth 32,
+and 65,536 comparison bytes, with bounded path/value previews. `incomplete` means
+unvisited structure may differ—not that the results are identical.
+
+For a real downstream example, Sprout's maintained
+`examples/programs/nested_values.sprout` can be opened and Run in its ordinary Scope
+launcher. Explore `/execution/preview/text` in the native result JSON to see `"42"`,
+or inspect `/execution/metadata` for the retained execution evidence. This is the
+structure of Sprout's result **evidence**, not a typed Sprout record tree: its
+`sprout-preview-1` text is passive, opaque display text. Sprout needs its configured
+Wasm component; the explorer neither supplies one nor bypasses its execution policy.
+Scope does not infer success or certification from provider values.
+For a two-run experiment, change `width(make(3, 45))` to `width(make(3, 50))`
+in that example and Run again. Compare shows `$/execution/preview/text` changing
+from `"42"` to `"47"`: these are opaque preview strings inside structured
+execution evidence, not typed Sprout values. The repeatable downstream PTY journey
+is `crates/scope-ide/tests/pty_sprout_compare.py --sprout /path/to/sprout`; build
+Sprout's `scope` example against this Scope checkout into Scope's root `target`
+first. It requires Sprout's existing configured Wasm component, not credentials.
 Esc cancels pending modal confirmation first, then closes the modal on a subsequent
 Esc. Outside a modal, Esc stays in the App editor workspace; **F2** opens the
 advanced shell. Scratch/legacy Esc still hands off to the shell.
@@ -309,6 +392,68 @@ advanced shell. Scratch/legacy Esc still hands off to the shell.
 dirty. A second Ctrl-Q discards and exits; **Esc** cancels quitting. This is not an
 automatic save. See the [UX5 quiet workspace status and evidence limits](docs/ux/quiet-workspace.md)
 for what has and has not been verified.
+
+### Imported checked values: integration boundary
+
+Registered closure retention connects Sprout's imported checked returns to Result
+Explorer and Compare Results. Sprout's `approved_bundle_call::call_bundle_checked`
+invokes its prepared registry; `checked_value(&result)` borrows the canonical checked
+`call::Primitive`. The private Sprout dispatch checks the captured closure and
+invocation contract before calling the retained Host, which verifies the response
+against the prepared compilation. That owned producer path establishes the
+association by construction; a matching record shape does not.
+
+Do not treat `checked_value` as an association verifier for arbitrary results:
+`InvocationResult` is a generic Scope result alias, Sprout's `Evidence` fields are
+public, and the accessor does not compare that payload's request or artifact with
+the enclosing Scope binding. Likewise, `InspectionResult::from_closure_observation`
+accepts its observation and native payload separately; it does not authenticate
+their relationship. Preserve the trusted producer boundary before projecting the
+canonical checked value with Sprout's existing serialization and nominal identities.
+
+With `experimental-sprout-closure`, `App::try_with_registered_documents` consumes
+the populated registry returned by Sprout's `prepare_bundle_call` intact, including
+its private dispatch and prepared state. It requires an App without an open document
+or registered session and returns both owners on rejection. The existing
+`enable_registered_session` remains empty-only. Registry paths are capability-relative;
+the attaching host must choose the corresponding workspace (the registry does not
+expose workspace provenance).
+
+The local consumer in `examples/imported-producer` uses Sprout's maintained
+`bundle_application` sources and an explicitly pinned candidate, then captures the
+real invocation contract and invokes through App's existing authorization flow.
+It requires the sibling Sprout checkout and does not admit a default artifact:
+
+```sh
+cargo run --locked --manifest-path examples/imported-producer/Cargo.toml -- ../sprout/target/b1-candidate.component.wasm
+```
+
+The Bridge 1B.2 completion boundary is the typed result returned by
+`App::invoke_registered_execution`: `RegisteredClosureResult<Result<sprout::approved_bundle_call::Evidence, ProviderFailure>>`.
+At that point this owner has the completed invocation and review, its retained
+closure observation, pinned artifact, and the checked `CallResult` inside the
+producer's `Evidence::outcome`. `InspectionResult::from_registered_completion`
+borrows this common input for the consumer's canonical projection and retained
+observation. `RegisteredExecution::with_native_feedback` calls that adapter once
+at completion, publishing into the existing baseline/current slots. Projection
+failure retains closure provenance and error feedback without invented native
+values. Generic public result aliases alone do not prove producer provenance.
+
+The consumer serializes Sprout's checked `Primitive` canonically, preserving numeric
+and Boolean values, nested field tags, and source-bound nominal identities. It
+applies Sprout's encoding bounds first; no display preview is parsed as data.
+`with_invocation_contract` binds the producer's explicit contract to UI Run/Check;
+the default registered and single-document paths are unchanged.
+
+Add `--tui` to the command above to inspect two independently authorized imported
+orders: totals are 4100 and 4750 cents. Each immutable prepared producer has its
+own closure evidence. Startup observations enter the same two-result window as
+ordinary UI completions; a third completion evicts the oldest normally. The live
+second registry validates its result as Current; the first owner's evidence is
+Stale relative to that registry. No registry/validator means Unknown, never an
+inferred Current based on the host workspace. Explorer, Compare, and Details are
+passive. See the [consumer instructions](examples/imported-producer/README.md)
+for the real PTY acceptance journey and exact field values.
 
 ### Edit, run, inspect, correct (Script scratch)
 

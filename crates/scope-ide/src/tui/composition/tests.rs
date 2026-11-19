@@ -1366,9 +1366,22 @@ fn primary_menu_discloses_only_contextual_actions_and_keeps_advanced_searchable(
         assert_eq!(labels(&ui, &sources), ["Open", "More actions"]);
         ui.open_app_document(&mut app, "program.fixture").unwrap();
         let expected = if runnable {
-            vec!["Run", "Check", "Open", "Save", "Inspect", "More actions"]
+            vec![
+                "Run",
+                "Check",
+                "Open",
+                "Save",
+                "Evaluate / inspect document",
+                "More actions",
+            ]
         } else {
-            vec!["Check", "Open", "Save", "Inspect", "More actions"]
+            vec![
+                "Check",
+                "Open",
+                "Save",
+                "Evaluate / inspect document",
+                "More actions",
+            ]
         };
         assert_eq!(labels(&ui, &sources), expected);
         assert_eq!(
@@ -1442,6 +1455,111 @@ fn primary_menu_discloses_only_contextual_actions_and_keeps_advanced_searchable(
         assert_eq!(sources.selected().unwrap().text(), "1");
         assert_eq!(root.read_file("program.fixture"), "program");
     }
+}
+
+#[test]
+fn palette_search_editing_order_and_unavailable_results() {
+    let root = TempWorkspace::new("palette-search");
+    let (mut h, _) = view_event_workspace(&root);
+    let before = h.sources.bound_source();
+    h.control('g');
+    let input =
+        |ui: &mut WorkspaceTui, sources: &crate::scratch::ScratchBuffers, code, modifiers| {
+            ui.picker_event(&Event::Key(KeyEvent::new(code, modifiers)), sources, true)
+        };
+    for ch in "InSpEcT".chars() {
+        input(
+            &mut h.ui,
+            &h.sources,
+            KeyCode::Char(ch),
+            event::KeyModifiers::NONE,
+        );
+    }
+    let ids = || {
+        h.ui.picker_items(&h.sources, true)
+            .into_iter()
+            .map(|i| i.id)
+            .collect::<Vec<_>>()
+    };
+    let first = ids();
+    assert_eq!(first, ids());
+    assert!(first.contains(&"result.inspect".into()));
+    input(
+        &mut h.ui,
+        &h.sources,
+        KeyCode::Char('u'),
+        event::KeyModifiers::CONTROL,
+    );
+    for ch in "result.inspect".chars() {
+        input(
+            &mut h.ui,
+            &h.sources,
+            KeyCode::Char(ch),
+            event::KeyModifiers::NONE,
+        );
+    }
+    let items = h.ui.picker_items(&h.sources, true);
+    assert_eq!(items.len(), 1);
+    assert!(items[0].disabled_reason.is_some());
+    assert!(
+        input(
+            &mut h.ui,
+            &h.sources,
+            KeyCode::Enter,
+            event::KeyModifiers::NONE
+        )
+        .is_none()
+    );
+    assert!(h.ui.picker.is_some());
+    input(
+        &mut h.ui,
+        &h.sources,
+        KeyCode::Char('!'),
+        event::KeyModifiers::NONE,
+    );
+    assert!(h.ui.picker_items(&h.sources, true).is_empty());
+    h.terminal
+        .draw(|frame| h.ui.render_picker(frame, &h.sources, true))
+        .unwrap();
+    let screen = h
+        .terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(screen.contains("No matching actions"));
+    input(
+        &mut h.ui,
+        &h.sources,
+        KeyCode::Backspace,
+        event::KeyModifiers::NONE,
+    );
+    assert_eq!(h.ui.picker_items(&h.sources, true).len(), 1);
+    input(
+        &mut h.ui,
+        &h.sources,
+        KeyCode::Char('u'),
+        event::KeyModifiers::CONTROL,
+    );
+    input(
+        &mut h.ui,
+        &h.sources,
+        KeyCode::End,
+        event::KeyModifiers::NONE,
+    );
+    assert_eq!(
+        input(
+            &mut h.ui,
+            &h.sources,
+            KeyCode::Enter,
+            event::KeyModifiers::NONE
+        ),
+        Some(WorkspaceAction::MoreActions)
+    );
+    assert_eq!(h.sources.bound_source(), before);
+    assert_eq!(h.ui.focused(), Some("editor"));
 }
 
 #[test]

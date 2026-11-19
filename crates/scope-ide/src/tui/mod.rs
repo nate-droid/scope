@@ -18,6 +18,8 @@ pub(crate) use crate::app::TrustedClosureProvider;
 pub(crate) use crate::registered_document_closure::TrustedClosureProvider;
 
 mod composition;
+#[cfg(feature = "desktop")]
+pub mod desktop;
 mod draft_review;
 pub use composition::{
     ActionInfo, DownstreamAction, DownstreamPrompt, DownstreamPromptChoice, View, WorkspaceAction,
@@ -35,6 +37,8 @@ pub use scratch_editor::{
 mod registered;
 #[cfg(feature = "experimental-sprout-closure")]
 pub use registered::{RegisteredExecution, RegisteredOutput};
+mod result_comparison;
+mod result_explorer;
 mod semantic;
 mod session;
 #[cfg(feature = "tools")]
@@ -148,7 +152,12 @@ impl Tui {
             picker.render(frame, frame.area(), app);
         }
         if let Some(inspection) = &self.semantic_inspection {
-            inspection.render(frame, frame.area(), app);
+            inspection.render(
+                frame,
+                frame.area(),
+                app,
+                self.panes.iter().any(|pane| pane.has_dirty_app_draft()),
+            );
         }
     }
 

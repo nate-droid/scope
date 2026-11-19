@@ -37,6 +37,90 @@ fn display_graphemes(line: &str) -> Vec<(usize, String, usize)> {
         .collect()
 }
 
+fn is_sprout_path(path: &crate::path::ScopePath) -> bool {
+    path.as_str().ends_with(".sprout")
+}
+
+// Sprout's validating lexer is downstream and fail-fast. This presentation-only
+// scanner follows its ASCII token boundaries, recovering at each source line.
+// No compiler token or source budget applies to drawing the visible viewport.
+fn sprout_colors(line: &str) -> Vec<(Range<usize>, Color)> {
+    let bytes = line.as_bytes();
+    let mut spans = Vec::new();
+    let mut i = 0;
+    let mut function_name = false;
+    while i < bytes.len() {
+        let start = i;
+        let color = match bytes[i] {
+            b if b.is_ascii_whitespace() => {
+                i += 1;
+                continue;
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'/') => {
+                i = bytes.len();
+                Some(Color::Rgb(137, 149, 167))
+            }
+            b'"' => {
+                i += 1;
+                while i < bytes.len() {
+                    let byte = bytes[i];
+                    i += 1;
+                    match byte {
+                        b'"' => break,
+                        b'\\' if i < bytes.len() => i += 1,
+                        _ => {}
+                    }
+                }
+                Some(Color::Rgb(161, 200, 153))
+            }
+            b if b.is_ascii_digit() => {
+                i += 1;
+                while bytes.get(i).is_some_and(u8::is_ascii_digit) {
+                    i += 1;
+                }
+                Some(Color::Rgb(223, 182, 134))
+            }
+            b if b.is_ascii_alphabetic() || b == b'_' => {
+                i += 1;
+                while bytes
+                    .get(i)
+                    .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
+                {
+                    i += 1;
+                }
+                let word = &line[start..i];
+                let declaration = function_name;
+                function_name = word == "fn";
+                match word {
+                    "import" | "pub" | "record" | "enum" | "match" | "fn" | "let" | "var"
+                    | "while" | "for" | "in" | "break" | "continue" | "return" | "if" | "else" => {
+                        Some(Color::Rgb(199, 166, 228))
+                    }
+                    "true" | "false" => Some(Color::Rgb(223, 182, 134)),
+                    _ if declaration => Some(Color::Rgb(140, 188, 232)),
+                    // Built-in types and nominal names conventionally start uppercase.
+                    _ if b.is_ascii_uppercase() => Some(Color::Rgb(131, 197, 194)),
+                    _ => None,
+                }
+            }
+            b if b"(){}:.,;+-*/<>=!&|".contains(&b) => {
+                i += 1;
+                function_name = false;
+                Some(Color::Rgb(167, 180, 200))
+            }
+            _ => {
+                i += line[i..].chars().next().unwrap().len_utf8();
+                function_name = false;
+                None
+            }
+        };
+        if let Some(color) = color {
+            spans.push((start..i, color));
+        }
+    }
+    spans
+}
+
 // Retain the viewport until the cursor enters its context margin. Do not clamp
 // to document length: blank rows below EOF provide the same breathing room.
 fn contextual_top(top: usize, row: usize, height: usize) -> usize {
@@ -345,7 +429,7 @@ impl Draft {
             .map(|anchor| anchor.min(self.cursor)..anchor.max(self.cursor))
     }
 
-    fn event(&mut self, event: Event) -> io::Result<Option<bool>> {
+    fn event(&mut self, event: Event, auto_indent: bool) -> io::Result<Option<bool>> {
         if matches!(&event, Event::Key(key) if key.kind == crossterm::event::KeyEventKind::Release)
         {
             return Ok(None);
@@ -494,6 +578,20 @@ impl Draft {
             }
             preferred = None;
             Ok(None)
+        } else if auto_indent && plain && key.is_some_and(|key| key.code == KeyCode::Enter) {
+            let prefix = self.text.as_str()[..self.cursor]
+                .rsplit('\n')
+                .next()
+                .unwrap_or("");
+            let indent = prefix
+                .bytes()
+                .take_while(|byte| matches!(byte, b' ' | b'\t'))
+                .count();
+            let newline = format!("\n{}", &prefix[..indent]);
+            self.replace(self.cursor..self.cursor, &newline)?;
+            self.cursor += newline.len();
+            preferred = None;
+            Ok(None)
         } else if deleting && had_selection {
             Ok(None)
         } else {
@@ -543,10 +641,16 @@ pub struct EditableScratchPane {
     parked: Vec<Draft>,
     cancelled: Vec<(scope_language::SourceId, u64)>,
     status: Option<String>,
+    line_numbers: bool,
 }
 impl EditableScratchPane {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn with_line_numbers(mut self, enabled: bool) -> Self {
+        self.line_numbers = enabled;
+        self
     }
 
     pub fn handle_source_event(
@@ -636,7 +740,11 @@ impl EditableScratchPane {
             self.status = None;
         }
         let before = draft.text.as_str().to_owned();
-        let result = draft.event(event);
+        let auto_indent = access
+            .app_document
+            .as_ref()
+            .is_some_and(|doc| is_sprout_path(doc.path()));
+        let result = draft.event(event, auto_indent);
         if before != draft.text.as_str() {
             draft.edit_identity = next_edit_identity();
         }
@@ -877,6 +985,27 @@ impl<P: super::TrustedClosureProvider> Pane<P> for EditableScratchPane {
     fn has_dirty_app_draft(&self) -> bool {
         EditableScratchPane::has_dirty_app_draft(self)
     }
+    #[cfg(feature = "desktop")]
+    fn has_dirty_source(&self, source: &scope_language::SourceId) -> bool {
+        self.draft.iter().chain(&self.parked).any(|draft| {
+            &draft.baseline.source.source_id == source
+                && draft.text.as_str() != draft.baseline.source.text.as_ref()
+        })
+    }
+    #[cfg(feature = "desktop")]
+    fn forget_closed_source(&mut self, source: &scope_language::SourceId) {
+        self.parked
+            .retain(|draft| &draft.baseline.source.source_id != source);
+        if self
+            .draft
+            .as_ref()
+            .is_some_and(|draft| &draft.baseline.source.source_id == source)
+        {
+            self.draft = None;
+            self.status = None;
+        }
+        self.cancelled.retain(|(id, _)| id != source);
+    }
     fn dirty_draft_sources(&self) -> Vec<(u64, String)> {
         EditableScratchPane::dirty_draft_sources(self)
     }
@@ -920,6 +1049,9 @@ impl<P: super::TrustedClosureProvider> Pane<P> for EditableScratchPane {
                 "UNAVAILABLE — bound scratch target is closed"
             }
             (_, Some(BoundSource::Unbound)) => "UNBOUND — no editor source target bound",
+            (_, None) if self.line_numbers => {
+                "Open a project file or choose New Script in Actions."
+            }
             (_, None) => "UNAVAILABLE — no scratch owner supplied",
         };
         let status = conflict.or(self.status.as_deref()).or_else(|| {
@@ -927,7 +1059,27 @@ impl<P: super::TrustedClosureProvider> Pane<P> for EditableScratchPane {
                 .is_some_and(|draft| draft.text.as_str() != draft.baseline.source.text.as_ref())
                 .then_some("Local draft")
         });
-        let inner = if let Some(status) = status {
+        let cursor = draft.map(|draft| {
+            let prefix = &text[..draft.cursor];
+            (
+                prefix.bytes().filter(|byte| *byte == b'\n').count(),
+                display_graphemes(prefix.rsplit('\n').next().unwrap_or(""))
+                    .iter()
+                    .map(|(_, _, width)| width)
+                    .sum::<usize>(),
+            )
+        });
+        let numbered = self.line_numbers && area.width >= 10 && area.height >= 2;
+        let position = numbered.then(|| {
+            let (row, column) = cursor.unwrap_or_default();
+            format!(
+                "Ln {}, Col {}{}",
+                row + 1,
+                column + 1,
+                status.map_or(String::new(), |status| format!("  ·  {status}"))
+            )
+        });
+        let inner = if let Some(status) = position.as_deref().or(status) {
             let [source_area, status_area] =
                 Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
             frame.render_widget(
@@ -945,16 +1097,13 @@ impl<P: super::TrustedClosureProvider> Pane<P> for EditableScratchPane {
         if inner.width == 0 || inner.height == 0 {
             return;
         }
-        let cursor = draft.map(|draft| {
-            let prefix = &text[..draft.cursor];
-            (
-                prefix.bytes().filter(|byte| *byte == b'\n').count(),
-                display_graphemes(prefix.rsplit('\n').next().unwrap_or(""))
-                    .iter()
-                    .map(|(_, _, width)| width)
-                    .sum::<usize>(),
-            )
-        });
+        let (gutter, inner) = if numbered {
+            let [gutter, source] =
+                Layout::horizontal([Constraint::Length(7), Constraint::Min(1)]).areas(inner);
+            (Some(gutter), source)
+        } else {
+            (None, inner)
+        };
         let (top, left) = cursor
             .map(|(row, column)| {
                 (
@@ -971,6 +1120,11 @@ impl<P: super::TrustedClosureProvider> Pane<P> for EditableScratchPane {
                 )
             })
             .unwrap_or((usize::from(ctx.scroll()), 0));
+        let sprout = ctx.is_app_editor()
+            && ctx
+                .app()
+                .open_document()
+                .is_some_and(|doc| is_sprout_path(doc.path()));
         let matching = draft.and_then(|draft| matching_delimiters(text, draft.cursor));
         // Slice before rendering rather than narrowing large source offsets to u16.
         let lines: Vec<Line<'_>> = text
@@ -981,6 +1135,12 @@ impl<P: super::TrustedClosureProvider> Pane<P> for EditableScratchPane {
                 let mut column = 0;
                 let line_offset = line.as_ptr() as usize - text.as_ptr() as usize;
                 let selection = draft.and_then(Draft::selection);
+                let colors = if sprout {
+                    sprout_colors(line)
+                } else {
+                    Vec::new()
+                };
+                let mut colors = colors.iter().peekable();
                 let mut spans = Vec::new();
                 spans.extend(display_graphemes(line).into_iter().filter_map(
                     |(offset, grapheme, width)| {
@@ -997,29 +1157,39 @@ impl<P: super::TrustedClosureProvider> Pane<P> for EditableScratchPane {
                         } else {
                             grapheme
                         };
+                        while colors.peek().is_some_and(|(range, _)| range.end <= offset) {
+                            colors.next();
+                        }
+                        let mut style = Style::default();
+                        if let Some((range, color)) = colors.peek()
+                            && range.contains(&offset)
+                        {
+                            style = style.fg(*color);
+                        }
                         let byte = line_offset + offset;
                         if selection
                             .as_ref()
                             .is_some_and(|range| range.contains(&byte))
                         {
-                            Some(RenderSpan::styled(
-                                grapheme,
-                                Style::default().add_modifier(Modifier::REVERSED),
-                            ))
+                            style = style.add_modifier(Modifier::REVERSED);
                         } else if matching.is_some_and(|pair| pair.contains(&byte)) {
-                            Some(RenderSpan::styled(
-                                grapheme,
-                                Style::default()
-                                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-                            ))
-                        } else {
-                            Some(RenderSpan::raw(grapheme))
+                            style = style.add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
                         }
+                        Some(RenderSpan::styled(grapheme, style))
                     },
                 ));
                 Line::from(spans)
             })
             .collect();
+        if let Some(gutter) = gutter {
+            let numbers = (top + 1..=top + lines.len())
+                .map(|number| Line::from(format!("{number:>5}  ")))
+                .collect::<Vec<_>>();
+            frame.render_widget(
+                Paragraph::new(numbers).style(Style::default().fg(Color::DarkGray)),
+                gutter,
+            );
+        }
         frame.render_widget(Paragraph::new(lines), inner);
         if ctx.is_focused()
             && let Some((row, column)) = cursor
@@ -1035,6 +1205,30 @@ impl<P: super::TrustedClosureProvider> Pane<P> for EditableScratchPane {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sprout_colors_recover_from_incomplete_source() {
+        let line = "§ pub fn plan(x: Int32) -> Bool { x > 42 && true // \"ignored";
+        let spans = sprout_colors(line);
+        let color = |token: &str| {
+            spans
+                .iter()
+                .find(|(range, _)| &line[range.clone()] == token)
+                .map(|(_, color)| *color)
+        };
+        assert!(color("pub").is_some());
+        assert_ne!(color("fn"), color("plan"));
+        assert_ne!(color("Int32"), color("fn"));
+        assert_eq!(color("42"), color("true"));
+        assert!(color("x").is_none());
+        assert!(color("// \"ignored").is_some());
+        let incomplete = "let text = \"é\\";
+        assert_eq!(
+            sprout_colors(incomplete).last().unwrap().0.end,
+            incomplete.len()
+        );
+        assert!(!sprout_colors("fn next() {}").is_empty());
+    }
 
     #[test]
     fn dedent_clears_collapsed_selection_anchor() {

@@ -86,11 +86,14 @@ def scenario(binary, denied=False, rejected=False, unavailable=False):
             workspace.expect('Read-onlyinspector', workspace.send(b':scope quit\r'))
 
             def command(text, expected=None):
-                workspace.send(b'\x1bOS')
+                # The fresh empty command-bar prefix establishes input focus,
+                # not command completion or a complete frame. Keep collection
+                # and all assertions after submission unchanged.
+                workspace.send_until(b'\x1bOS', '>')
                 workspace.send(text.encode() + b'\r')
                 if expected is None:
                     return
-                workspace.send(b'\x1bOS')
+                workspace.send_until(b'\x1bOS', '>')
                 workspace.send(b'pane output\r')
                 workspace.send(b'\x1b[6~' * 12 + b'\x1b[A' * 5)
                 workspace.expect('scope> ', workspace.send(b'\x1bOQ'))

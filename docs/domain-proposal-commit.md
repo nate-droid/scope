@@ -109,8 +109,8 @@ transaction, and two proposals competing for one authoritative revision.
 `scope-language` additionally tests `domain_proposal_effect_cannot_return_source_edits`
 and includes the new effect in purpose/serialization round trips.
 
-No Tavern integration, HTTP mutation endpoint, persistent repository, or guest
-capability was added. Consumers must explicitly register and approve the new
+This example does not provide an HTTP mutation endpoint, persistent repository,
+or guest capability. Consumers must explicitly register and approve the new
 effect and implement the checked-output and host transaction boundaries above.
 
 ## Compatibility and validation

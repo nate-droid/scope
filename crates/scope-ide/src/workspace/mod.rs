@@ -46,7 +46,7 @@ impl SourceReadGrant {
     }
 
     /// Bounds retained content; Cell may read one additional overflow-probe byte.
-    #[cfg(feature = "tui")]
+    #[cfg(any(feature = "tui", feature = "experimental-sprout-closure"))]
     pub(crate) fn read_document_source_bounded(
         &self,
         path: &ScopePath,
@@ -120,6 +120,11 @@ impl Workspace {
             fs,
             cell: std::sync::Arc::new(cell),
         })
+    }
+
+    #[cfg(feature = "tui")]
+    pub(crate) fn allows_saves(&self) -> bool {
+        self.writable
     }
 
     /// Installed Cell interface names, not mount policies or semantic tools.

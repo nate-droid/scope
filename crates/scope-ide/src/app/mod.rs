@@ -32,6 +32,8 @@ pub struct AppState<P> {
     selected: usize,
     open_document: Option<Document>,
     next_document_id: u64,
+    #[cfg(feature = "desktop")]
+    parked_documents: Vec<Document>,
     #[cfg(feature = "experimental-sprout-closure")]
     registered_session: Option<RegisteredSession<P>>,
 }
@@ -71,8 +73,12 @@ impl<P: TrustedClosureProvider> AppState<P> {
         crate::workspace::Proposal::new(&self.workspace, paths, limits)
     }
 
-    /// Whether any active or parked enrolled document has unsaved edits.
+    /// Whether any App-owned document has unsaved edits.
     pub fn has_unsaved_documents(&self) -> bool {
+        #[cfg(feature = "desktop")]
+        if self.parked_documents.iter().any(Document::is_dirty) {
+            return true;
+        }
         if self.open_document.as_ref().is_some_and(Document::is_dirty) {
             return true;
         }
@@ -170,6 +176,39 @@ impl<P: TrustedClosureProvider> AppState<P> {
             .map(|session| &session.documents)
     }
 
+    /// Enable flat Sprout module acquisition before opening any documents.
+    #[cfg(feature = "experimental-sprout-closure")]
+    pub fn enable_workspace_module_acquisition(
+        &mut self,
+        directory: impl ToScopePath,
+    ) -> Result<(), AppError> {
+        if self.open_document.is_some()
+            || self
+                .registered_documents()
+                .is_some_and(|documents| !documents.is_empty())
+        {
+            return Err(AppError::RegisteredSession(
+                "configure acquisition before opening documents",
+            ));
+        }
+        #[cfg(feature = "desktop")]
+        if !self.parked_documents.is_empty() {
+            return Err(AppError::RegisteredSession(
+                "configure acquisition before opening documents",
+            ));
+        }
+        let directory = directory
+            .to_scope_path()
+            .map_err(|error| WorkspaceError::InvalidPath {
+                message: error.to_string(),
+            })?;
+        let grant = self.workspace.source_read_grant();
+        self.registered_documents_mut()
+            .ok_or(AppError::RegisteredSession("session is disabled"))?
+            .configure_workspace_sources(grant, directory)
+            .map_err(AppError::Registration)
+    }
+
     /// Capture against the authoritative session. `None` means it is disabled.
     #[cfg(feature = "experimental-sprout-closure")]
     pub fn capture_registered_execution(
@@ -202,6 +241,31 @@ impl<P: TrustedClosureProvider> AppState<P> {
     > {
         self.registered_documents()
             .map(|documents| documents.capture_invocation(root, operation, arguments, contract))
+    }
+
+    /// Discover and seal a call, acquiring reachable workspace sources when configured.
+    /// This does not publish pane drafts, authorize execution, or dispatch.
+    #[cfg(feature = "experimental-sprout-closure")]
+    pub fn prepare_registered_call(
+        &mut self,
+        root: &str,
+        operation: &str,
+        arguments: serde_json::Value,
+        contract: Option<crate::registered_document_closure::InvocationContract>,
+    ) -> Option<
+        Result<
+            crate::registered_document_closure::RegisteredClosureBinding,
+            crate::registered_document_closure::RegisteredCaptureRejection,
+        >,
+    > {
+        let session = self.registered_session.as_mut()?;
+        Some(session.documents.capture_workspace_call(
+            root,
+            operation,
+            arguments,
+            contract,
+            &mut self.next_document_id,
+        ))
     }
 
     /// Consume a selection using the registry's freshness and policy checks.
@@ -305,8 +369,27 @@ impl<P: TrustedClosureProvider> AppState<P> {
             ));
         }
         self.open_document = None;
+        session.documents.pin_document(module);
         session.selected = Some(module.to_owned());
         Ok(self.open_document().expect("selected enrolled document"))
+    }
+
+    #[cfg(feature = "experimental-sprout-closure")]
+    fn register_workspace_editor(
+        &mut self,
+        module: String,
+        document: Document,
+    ) -> Result<(), AppError> {
+        let session = self
+            .registered_session
+            .as_mut()
+            .expect("workspace modules need a session");
+        session
+            .documents
+            .try_register_with_language(module.clone(), document, "sprout".into())
+            .map_err(|error| AppError::Registration(error.0))?;
+        session.selected = Some(module);
+        Ok(())
     }
 
     /// Transfers ownership, including unsaved edits, to the caller.
@@ -403,6 +486,98 @@ impl<P: TrustedClosureProvider> AppState<P> {
         self.selected = (self.selected + 1).min(self.files.len() - 1);
     }
 
+    #[cfg(feature = "desktop")]
+    pub(crate) fn desktop_document(&self, path: &str) -> Option<&Document> {
+        #[cfg(feature = "experimental-sprout-closure")]
+        if let Some(document) = self.registered_documents().and_then(|owner| {
+            owner
+                .documents()
+                .map(|(_, doc)| doc)
+                .find(|doc| doc.path().as_str() == path)
+        }) {
+            return Some(document);
+        }
+        self.open_document
+            .iter()
+            .chain(&self.parked_documents)
+            .find(|doc| doc.path().as_str() == path)
+    }
+
+    #[cfg(feature = "desktop")]
+    pub(crate) fn open_desktop_document(&mut self, path: &str) -> Result<(), AppError> {
+        let path = path.to_scope_path().map_err(|error| {
+            AppError::Workspace(WorkspaceError::InvalidPath {
+                message: error.to_string(),
+            })
+        })?;
+        if self.open_document().is_some_and(|doc| doc.path() == &path) {
+            return Ok(());
+        }
+        #[cfg(feature = "experimental-sprout-closure")]
+        if let Some(module) = self.registered_documents().and_then(|owner| {
+            owner
+                .documents()
+                .find(|(_, doc)| doc.path() == &path)
+                .map(|(module, _)| module.to_owned())
+        }) {
+            if let Some(doc) = self.open_document.take() {
+                self.parked_documents.push(doc);
+            }
+            self.select_registered_document(&module)?;
+            return Ok(());
+        }
+        #[cfg(feature = "experimental-sprout-closure")]
+        let module = self
+            .registered_documents()
+            .and_then(|documents| documents.workspace_module(&path));
+        let doc = if let Some(index) = self
+            .parked_documents
+            .iter()
+            .position(|doc| doc.path() == &path)
+        {
+            self.parked_documents.remove(index)
+        } else {
+            let file = self
+                .workspace
+                .load_file_revision(path)
+                .map_err(AppError::Workspace)?;
+            Document::from_revisioned_workspace_file(self.allocate_document_id(), file)
+        };
+        #[cfg(feature = "experimental-sprout-closure")]
+        if let Some(module) = module {
+            self.register_workspace_editor(module, doc)?;
+            if let Some(previous) = self.open_document.take() {
+                self.parked_documents.push(previous);
+            }
+            return Ok(());
+        }
+        if let Some(previous) = self.open_document.replace(doc) {
+            self.parked_documents.push(previous);
+        }
+        #[cfg(feature = "experimental-sprout-closure")]
+        if let Some(session) = &mut self.registered_session {
+            session.selected = None;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "desktop")]
+    pub(crate) fn close_desktop_document(&mut self, path: &str) {
+        // Closing a tab does not remove a dependency from a configured execution session.
+        if self
+            .open_document()
+            .is_some_and(|doc| doc.path().as_str() == path)
+        {
+            self.open_document = None;
+            #[cfg(feature = "experimental-sprout-closure")]
+            if let Some(session) = &mut self.registered_session {
+                session.selected = None;
+            }
+        }
+        self.parked_documents
+            .retain(|doc| doc.path().as_str() != path);
+    }
+
     pub fn open_selected(&mut self) -> Result<&Document, AppError> {
         let path = self.selected_file().ok_or(AppError::NoFiles)?.path.clone();
 
@@ -410,16 +585,30 @@ impl<P: TrustedClosureProvider> AppState<P> {
     }
 
     pub fn open_path(&mut self, path: impl ToScopePath) -> Result<&Document, AppError> {
-        let file = self
-            .workspace
-            .load_file_revision(path)
-            .map_err(AppError::Workspace)?;
+        let path = path
+            .to_scope_path()
+            .map_err(|error| WorkspaceError::InvalidPath {
+                message: error.to_string(),
+            })?;
+        #[cfg(feature = "experimental-sprout-closure")]
+        let module = self
+            .registered_documents()
+            .and_then(|documents| documents.workspace_module(&path));
         #[cfg(feature = "experimental-sprout-closure")]
         if let Some(session) = &self.registered_session {
+            if let Some(module) = &module {
+                if session
+                    .documents
+                    .document(module)
+                    .is_some_and(|doc| doc.path() == &path)
+                {
+                    return self.select_registered_document(module);
+                }
+            }
             if session
                 .documents
                 .documents()
-                .any(|(_, document)| document.path() == &file.path)
+                .any(|(_, document)| document.path() == &path)
             {
                 return Err(AppError::RegisteredSession("path is already enrolled"));
             }
@@ -429,12 +618,23 @@ impl<P: TrustedClosureProvider> AppState<P> {
                 ));
             }
         }
+        let file = self.workspace.load_file_revision(path)?;
         let document_id = self.allocate_document_id();
+        let document = Document::from_revisioned_workspace_file(document_id, file);
         #[cfg(feature = "experimental-sprout-closure")]
-        if let Some(session) = &mut self.registered_session {
-            session.selected = None;
+        {
+            if let Some(module) = module {
+                self.register_workspace_editor(module, document)?;
+                self.open_document = None;
+                return Ok(self
+                    .open_document()
+                    .expect("registered document was just opened"));
+            }
+            if let Some(session) = &mut self.registered_session {
+                session.selected = None;
+            }
         }
-        self.open_document = Some(Document::from_revisioned_workspace_file(document_id, file));
+        self.open_document = Some(document);
         Ok(self.open_document().expect("document was just opened"))
     }
 
@@ -474,6 +674,53 @@ impl<P: TrustedClosureProvider> AppState<P> {
 
 #[cfg(feature = "experimental-sprout-closure")]
 impl App {
+    /// Attach a populated prepared registry without rebuilding its opaque state.
+    /// The App must have neither a registered session nor an open document.
+    /// No module is selected automatically. Failure returns both unchanged owners.
+    ///
+    /// The caller must ensure workspace compatibility: registry documents expose
+    /// capability-relative paths, but no workspace provenance to compare here.
+    pub fn try_with_registered_documents<T: Send + Sync + 'static, O>(
+        self,
+        documents: RegisteredDocuments<crate::registered_document_closure::PreparedProvider<T, O>>,
+    ) -> Result<
+        App<crate::registered_document_closure::PreparedProvider<T, O>>,
+        Box<(
+            AppError,
+            Self,
+            RegisteredDocuments<crate::registered_document_closure::PreparedProvider<T, O>>,
+        )>,
+    > {
+        let error = if self.registered_session.is_some() || self.open_document.is_some() {
+            Some("attachment requires an App without a session or open document")
+        } else if documents.is_empty() {
+            Some("attachment requires a populated registry")
+        } else {
+            None
+        };
+        if let Some(message) = error {
+            return Err(Box::new((
+                AppError::RegisteredSession(message),
+                self,
+                documents,
+            )));
+        }
+        Ok(AppState {
+            workspace: self.workspace,
+            languages: self.languages,
+            files: self.files,
+            selected: self.selected,
+            open_document: None,
+            #[cfg(feature = "desktop")]
+            parked_documents: self.parked_documents,
+            next_document_id: self.next_document_id,
+            registered_session: Some(RegisteredSession {
+                documents,
+                selected: None,
+            }),
+        })
+    }
+
     /// Attach a prepared implementation while preserving the existing editing
     /// session. Failure returns the original App; `None` means no session exists.
     pub fn try_with_prepared_provider<T: Send + Sync + 'static, O>(
@@ -497,6 +744,8 @@ impl App {
             files,
             selected,
             open_document,
+            #[cfg(feature = "desktop")]
+            parked_documents,
             next_document_id,
             registered_session,
         } = self;
@@ -509,6 +758,8 @@ impl App {
                     files,
                     selected,
                     open_document,
+                    #[cfg(feature = "desktop")]
+                    parked_documents,
                     next_document_id,
                     registered_session: None,
                 },
@@ -526,6 +777,8 @@ impl App {
                 files,
                 selected,
                 open_document,
+                #[cfg(feature = "desktop")]
+                parked_documents,
                 next_document_id,
                 registered_session: Some(RegisteredSession {
                     documents,
@@ -540,6 +793,8 @@ impl App {
                     files,
                     selected,
                     open_document,
+                    #[cfg(feature = "desktop")]
+                    parked_documents,
                     next_document_id,
                     registered_session: Some(RegisteredSession {
                         documents,
@@ -594,6 +849,8 @@ impl AppBuilder {
             files,
             selected: 0,
             open_document: None,
+            #[cfg(feature = "desktop")]
+            parked_documents: Vec::new(),
             next_document_id: 1,
             #[cfg(feature = "experimental-sprout-closure")]
             registered_session: None,
@@ -651,6 +908,195 @@ mod tests {
     use super::*;
     use crate::path::ScopePath;
     use crate::test_support::TempWorkspace;
+
+    #[cfg(feature = "experimental-sprout-closure")]
+    mod attachment {
+        use super::*;
+        use crate::registered_document_closure::*;
+        use crate::tool::semantic::{HostAuthorizationRequest, HostSemanticPolicy};
+        use scope_language::{
+            SemanticOperationDescription, SemanticOperationEffect, SemanticTargetRequirement,
+        };
+
+        struct SingleSource;
+        impl Discovery for SingleSource {
+            fn capture(
+                &self,
+                root: &str,
+                sources: Vec<RegisteredSource>,
+                limits: Limits,
+            ) -> Result<DiscoveredClosure, DiscoveryError> {
+                let compiler_sources = sources.iter().map(|s| s.identity.clone()).collect();
+                DiscoveredClosure::new(DiscoveryEvidence {
+                    root: root.into(),
+                    sources,
+                    graph: vec![(root.into(), vec![])],
+                    exports: vec![(root.into(), vec![])],
+                    compiler_sources,
+                    compiler_identity: "attachment-unit-fixture".into(),
+                    identity_version: 1,
+                    portable_identity: vec![1],
+                    limits,
+                })
+            }
+        }
+
+        fn registry(populated: bool) -> RegisteredDocuments<PreparedProvider<u32, u32>> {
+            let mut documents = RegisteredDocuments::new(
+                SingleSource,
+                TrustedLoadedArtifact::default(),
+                vec![SemanticOperationDescription {
+                    id: "inspect".into(),
+                    description: "Attachment test".into(),
+                    arguments: vec![],
+                    effect: SemanticOperationEffect::Read,
+                    target: SemanticTargetRequirement::Document,
+                    constraints: None,
+                }],
+                serde_json::json!({"allow": true}),
+                Limits::default(),
+                3,
+            );
+            if populated {
+                documents
+                    .register(
+                        "main".into(),
+                        Document::new(DocumentId::new(7), "main.sprout", "original"),
+                    )
+                    .unwrap();
+            }
+            RegisteredDocuments::with_prepared_provider(
+                documents,
+                PreparedImplementationDescriptor {
+                    sha256: "ab".repeat(32),
+                    abi: "attachment-test".into(),
+                    execution_policy: serde_json::json!({}),
+                },
+                42,
+                |value, _| Ok(*value),
+            )
+            .unwrap()
+        }
+
+        struct Allow;
+        impl HostSemanticPolicy for Allow {
+            fn authorize(&mut self, _: HostAuthorizationRequest<'_>) -> bool {
+                true
+            }
+        }
+
+        #[test]
+        fn populated_attachment_preserves_preexisting_invocation_identity() {
+            let root = TempWorkspace::new("populated-attachment");
+            root.write_file("main.sprout", "original");
+            let mut documents = registry(true);
+            let identity = documents
+                .document("main")
+                .unwrap()
+                .evaluation_source_id()
+                .clone();
+            let previous = documents.capture("main", "inspect").unwrap();
+            assert_eq!(
+                documents.invoke(previous, &mut Allow).unwrap().output(),
+                &Ok(42)
+            );
+            let binding = documents.capture("main", "inspect").unwrap();
+            let app = App::new(root.workspace()).unwrap();
+            let files = app.files().to_vec();
+            let selected = app.selected_index();
+            let mut app = app
+                .try_with_registered_documents(documents)
+                .unwrap_or_else(|_| panic!("populated attachment failed"));
+            assert_eq!(app.files(), files);
+            assert_eq!(app.selected_index(), selected);
+            assert_eq!(app.workspace().root(), root.workspace().root());
+            assert!(app.open_document().is_none());
+            assert_eq!(app.selected_registered_module(), None);
+            assert_eq!(app.registered_documents().unwrap().dispatches(), 1);
+            let result = app
+                .invoke_registered_execution(binding, &mut Allow)
+                .unwrap()
+                .unwrap();
+            assert_eq!(result.output(), &Ok(42));
+            assert_eq!(app.registered_documents().unwrap().dispatches(), 2);
+            app.select_registered_document("main").unwrap();
+            assert_eq!(
+                app.open_document().unwrap().evaluation_source_id(),
+                &identity
+            );
+            assert!(app.disable_registered_session().is_err());
+        }
+
+        #[test]
+        fn empty_attachment_returns_both_owners() {
+            let root = TempWorkspace::new("empty-attachment");
+            let app = App::new(root.workspace()).unwrap();
+            let (error, app, documents) = *app
+                .try_with_registered_documents(registry(false))
+                .unwrap_err();
+            assert!(matches!(error, AppError::RegisteredSession(_)));
+            assert!(app.registered_documents().is_none());
+            assert!(documents.is_empty());
+            assert_eq!(app.workspace().root(), root.workspace().root());
+        }
+
+        #[test]
+        fn occupied_attachment_recovers_app_and_invocable_registry() {
+            let root = TempWorkspace::new("occupied-attachment");
+            root.write_file("main.sprout", "original");
+            for session in [false, true] {
+                let mut app = if session {
+                    session_app(&root)
+                } else {
+                    App::new(root.workspace()).unwrap()
+                };
+                app.open_path("main.sprout").unwrap();
+                let identity = app.open_document().unwrap().evaluation_source_id().clone();
+                if session {
+                    app.enroll_open_document("existing".into(), "sprout".into())
+                        .unwrap();
+                }
+                let documents = registry(true);
+                let binding = documents.capture("main", "inspect").unwrap();
+                let (_, app, mut documents) =
+                    *app.try_with_registered_documents(documents).unwrap_err();
+                assert_eq!(
+                    app.open_document().unwrap().evaluation_source_id(),
+                    &identity
+                );
+                assert_eq!(app.registered_documents().is_some(), session);
+                assert_eq!(
+                    documents.invoke(binding, &mut Allow).unwrap().output(),
+                    &Ok(42)
+                );
+            }
+            // Even an empty configured session must not be displaced.
+            let app = session_app(&root);
+            let (_, app, _) = *app
+                .try_with_registered_documents(registry(true))
+                .unwrap_err();
+            assert!(app.registered_documents().unwrap().is_empty());
+        }
+
+        #[test]
+        fn enabling_session_still_rejects_populated_registry() {
+            let root = TempWorkspace::new("enable-remains-empty-only");
+            // Exercise the existing empty-only API with the prepared App type.
+            let mut prepared = App::new(root.workspace())
+                .unwrap()
+                .try_with_registered_documents(registry(true))
+                .unwrap_or_else(|_| panic!("populated attachment failed"));
+            prepared.remove_registered_document("main").unwrap();
+            prepared.disable_registered_session().unwrap();
+            assert!(
+                !prepared
+                    .enable_registered_session(registry(true))
+                    .unwrap_err()
+                    .is_empty()
+            );
+            assert!(prepared.registered_documents().is_none());
+        }
+    }
 
     #[cfg(feature = "experimental-sprout-closure")]
     #[test]

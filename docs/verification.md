@@ -14,9 +14,12 @@ assurance remain non-negotiable.
   Open Home/End navigation tests).
 - **Adjacent verification** covers nearby behavior and invariants (for example,
   Quick Open filtering, selection, opening files and unsaved-document protection).
-- **System verification** covers broader integration, PTYs, reverse dependents,
-  cross-package contracts, feature matrices and the full workspace. Select it by
-  changed boundaries and risk, not automatically for every edit.
+- **Full verification** establishes explicit integration/release readiness with
+  the complete matrix below. Run it for the listed high-risk contract changes or
+  an integration milestone/explicit request, not automatically after a narrow edit.
+- **System checks** are selected broader integration, PTY, reverse-dependent and
+  feature checks. A real-launcher test can be Adjacent for a harness change; it
+  does not by itself require Full.
 
 A low-risk isolated change can finish with direct and adjacent checks. Shared
 contracts, authorization, terminal infrastructure, source lifecycle and public
@@ -45,7 +48,11 @@ steps for every change.
    run is unexpectedly expensive, stop and record completed targets. After a
    timeout, require a new diagnostic hypothesis before retrying or launching an
    overlapping broad run. Earlier targeted passes remain valid within their scope.
-6. Report exact commands, features, results, selected scope and omissions with
+6. Reuse passing evidence when relevant source, target, features and environment
+   are unchanged. Do not rerun a successful check merely to advance tiers; run
+   uncovered required coverage. Repeat only for a relevant modification, evidence
+   of flakiness/environment change, or a specific bounded diagnostic question.
+7. Report exact commands, features, results, selected scope and omissions with
    reasons. A known unrelated failure is a blocker, not a pass or an obligation
    to repair unrelated code.
 
@@ -60,7 +67,7 @@ These limits never excuse omitting tests necessary for the changed behavior.
 
 | Change | Smallest useful starting point | Completion / escalation |
 | --- | --- | --- |
-| Markdown prose or links | Python unit and link checks below | Same checks; code examples may require consumer/doctests |
+| Markdown prose or links | Python unit and explicit-source link checks below | Same checks; moves/deletions or changed link targets need the full link scan; code examples may require consumer/doctests |
 | Internal library logic | `cargo test --locked -p scope-script --lib` (example) | Direct + adjacent; affected integration/consumers if boundaries change; Full for public/security contracts |
 | Isolated UI navigation | Relevant navigation tests with package + target selected | Adjacent filtering/selection/opening/protection tests; no automatic downstream PTY closure |
 | One integration regression | `cargo test --locked -p scope-types --test manifest` (example) | Adjacent tests + affected consumers; type/serialization contracts require Full |
@@ -69,8 +76,7 @@ These limits never excuse omitting tests necessary for the changed behavior.
 | Feature wiring, dependency, profile, toolchain, public API, authorization | Affected regression first | Full matrix + relevant standalone/scaffold checks |
 
 The examples are selections, not a checklist to run in order. A small edit to a
-high-risk contract is still high-risk. See the [DX3 loop audit](development-loop.md)
-for measured scope-selection costs, artifact inventory and evidence limits.
+high-risk contract is still high-risk.
 
 ## Fast — ordinary iteration
 
@@ -90,21 +96,31 @@ cargo test --locked -p scope-script --lib
 cargo test --locked -p scope-execution --test execution --test policy
 # Markdown-only change: no Rust build needed.
 python3 -B -m unittest discover -s .github/scripts -p 'test_*.py' -v
+# Explicit sources for an ordinary prose/link edit (repository-relative paths):
+python3 -B .github/scripts/check_markdown_links.py docs/verification.md
+# Full scan for moves/deletions, changed link targets, or repository assurance:
 python3 -B .github/scripts/check_markdown_links.py
 ```
 
-For terminal synchronization-helper iteration, the smallest deterministic check is:
+Explicit-source link checks validate outgoing links only in the named files; they
+are not a repository-wide pass. Include every edited Markdown source. Use the
+no-argument full scan when moving/deleting files or changing link targets, since
+unchanged sources may link to them. Both modes omit remote URLs and heading anchors.
+
+Direct is the normal editing loop; the Fast examples above select its cheapest
+relevant target. For IDE Rust logic, start with a named regression under
+`cargo test --locked -p scope-ide --features tui --lib` rather than an unfiltered
+package. For terminal synchronization-helper iteration, Direct is:
 
 ```sh
 python3 -B crates/scope-ide/tests/test_pty_sync.py -v
-# Real ordinary launcher (not the complete integration closure):
+# Adjacent: select the affected real ordinary-launcher journey (not all consumers).
 cargo test --locked -p scope-ide --features tui --test downstream_launcher
 ```
 
-Confirm all nine Python tests ran. Transport-only checks do not establish real
-PTY, rendering, lifecycle or authorization correctness. See the
-[terminal performance audit](terminal-verification-performance.md) for measurements,
-reuse constraints and remaining bottlenecks.
+Confirm all fourteen Python tests ran (transport and real-PTY lifecycle regressions).
+Transport-only checks do not establish real
+PTY, rendering, lifecycle or authorization correctness.
 
 For Rust edits also run `cargo fmt --all -- --check`. Add `--offline` after caches
 are populated to prevent network access; missing cached dependencies are not test
@@ -165,8 +181,47 @@ cargo test --locked -p scope-ide --features agent
 cargo test --locked -p scope-ide --features tui --test downstream_launcher
 ```
 
-For shared IDE terminal harness changes, Integration means the affected packages
-and real consumers, not just socket-transport regressions:
+### Launcher budgets and entry points
+
+Use existing Cargo targets; no separate runner or blanket `--include-ignored` is
+needed. Ordinary iteration selects `--lib` or one `--test` target. Explicit real
+launcher acceptance is `--test downstream_launcher` (both downstream discovery
+and H4 keyboard journeys); these remain enabled in normal workspace tests.
+
+Budget a warm downstream target at 120 seconds initially. H4 retains deliberate
+negative-observation windows for non-dispatch, no-save and terminal-exit behavior;
+positive screen assertions wait for visible state plus a complete frame rather
+than terminal silence. On macOS H4 measured 93.99 seconds before six positive transitions were changed
+from silence-based reads to existing complete-frame predicates, then 69.75 seconds
+afterward (same fresh Cargo executable, one run each). All negative windows remain.
+These are scenario timings, not compilation or whole-target timings. A cold build
+can require additional budget.
+
+The agent-feature source-proposal journey has a 300-second internal scenario
+bound and measured 148 seconds warm: use a 330-second outer command budget for
+`cargo test --locked -p scope-ide --features tui,agent --test source_proposal_launcher`.
+It exercises separate real F4 commands and repeated full redraws for propose,
+list, diff, acceptance, duplicate acceptance and rejection. Do not shorten its
+negative assertions or mistake an external command cutoff for its internal timeout.
+For a complete workspace run, use an explicit 420-second initial outer budget
+rather than the ordinary 120-second iteration budget; compilation and host load
+can still exhaust it. A passing default workspace run is not the Full matrix.
+
+The PTY supervisor detects driver death and terminates/reaps its worker, including
+when an outer command cutoff prevents Python `finally` cleanup. Lifecycle tests
+cover normal/failing exits, assertion/timeout cleanup, TERM resistance and abrupt
+driver death. This does not promise cleanup after an OS kills the entire process
+group with SIGKILL or after host failure.
+
+Adjacent selects only affected contracts: `downstream_launcher` for ordinary
+launch/discovery/H4; `configured_proposal_launcher` for configured-agent editing;
+`source_proposal_launcher` for proposal lifecycle. The latter two require
+`--features tui,agent`. Do not run all three merely because they exist. A change
+confined to one Python scenario using unchanged transport needs that journey and
+relevant deterministic regressions, not every transport consumer.
+
+For shared IDE terminal transport/input changes, Integration means the affected
+packages and real consumers, not just socket-transport regressions:
 
 ```sh
 cargo test --locked -p scope-ide --features tui -p scope-workbench
@@ -279,14 +334,23 @@ still matters.
 
 ### Bounded performance investigations
 
-- Read the [DX3 index](development-loop.md) and existing DX reports first. Ordinary
-  changes do not require profiling or a timing report.
+- Ordinary changes do not require profiling or a timing report.
 - Before measuring, state one question, the command/features, cache state and a
   stopping rule. Default local budget: **10 minutes total, at most three comparable
   runs per variant**. Stop sooner once the engineering decision is clear. This is
   an investigation budget, not a timeout or waiver for required verification.
+- Before the first expensive run, map each required measurement to an observable
+  event/counter in the planned probe (or mark it unavailable). Inspect the probe
+  against that list before running it; for wait investigations, elapsed wait alone
+  does not establish when success became observable. Reuse one run for compatible
+  phase and total measurements rather than discovering missing fields after a
+  before/after pair. This is a short task-local check, not a new report or runner;
+  it never replaces required regression or acceptance verification.
 - Time useful checks with `/usr/bin/time -p`; distinguish Cargo preparation,
-  harness execution and total wall time. Label cold, partial-cache and warm runs.
+  harness/scenario time, actual application execution and total wall time; do not
+  attribute transport waits to application work. Label cold, partial-cache and warm
+  runs. For known 100–150-second launchers, use historical evidence plus at most
+  one instrumented baseline and one changed run; another needs a concrete anomaly.
   Do not clean caches or add profile permutations just to create a benchmark.
 - If the budget cannot answer the question, report it as inconclusive and propose
   a specific follow-up. Do not automatically expand into a Full benchmark campaign.
@@ -298,23 +362,7 @@ still matters.
   repeated measured need justifies maintained tooling. Never collect credentials
   or use live/paid model calls for deterministic verification.
 
-## Heavy-path follow-up and reclamation (DX2)
-
-See the [measured development-cost report](development-costs.md) for the historical
-storage inventory, owner-approved reclamation plan, warm PTY/execution timings,
-incremental probe and artifact-reuse limits. No artifacts were deleted. Historical
-example targets are potential recovery, not proven duplicate shared artifacts;
-preserve the h1 experiment's `target/results` when reclaiming its compiler output.
-
-The report retains same-package execution/policy batching measurements; use the
-[target batching guidance](#discover-targets-and-reuse-builds) for current checks.
-PTY runtime dominated the selected warm launcher workloads; ordinary PTY targets
-already launch existing binaries, not nested Cargo. Do not weaken their wait,
-lifecycle or authorization assertions based on startup-only benchmarks.
-
-The [DX3 terminal synchronization report](terminal-test-synchronization.md) records
-bounded REPL completion, repeated PTY timings, retained waits and validation gaps.
-
-Historical profile measurements and their validation limits are retained in the
-[development-loop audit](development-loop.md#audit-and-bounded-evaluation-2026-11-01),
-not additional verification requirements.
+Ordinary PTY targets launch existing binaries, not nested Cargo. Do not weaken
+wait, lifecycle or authorization assertions based on startup-only benchmarks.
+When reclaiming compiler output, distinguish it from experiment result data;
+preserve results unless their owner approves removal.

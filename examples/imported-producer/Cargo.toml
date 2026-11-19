@@ -1,0 +1,15 @@
+[package]
+name = "scope-imported-producer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+scope-ide = { path = "../../crates/scope-ide", default-features = false, features = ["experimental-sprout-closure"] }
+sprout = { path = "../../../sprout", features = ["bundle-call", "closure-discovery"] }
+scope-language = { path = "../../crates/scope-language" }
+serde_json = "1"
+sha2 = "0.10"
+anyhow = "1"

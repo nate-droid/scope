@@ -1,6 +1,10 @@
 //! Revision-bound, explicitly authorized semantic inspection for interactive hosts.
 //! Discovery is not authorization. Bindings/results are owned display state, not
 //! editable documents. Identity is local to one App/document owner (as in SourceId).
+//! Retained origins distinguish exact document bindings from authentic registered
+//! closure observations. Closure freshness requires the live registry's complete
+//! passive evidence validation, never a root-only check; no registry means unknown. Both origins share the same native JSON Explorer/Compare path;
+//! retaining evidence neither authorizes nor reruns an operation.
 #[cfg(not(feature = "experimental-sprout-closure"))]
 use crate::app::TrustedClosureProvider;
 #[cfg(feature = "experimental-sprout-closure")]
@@ -186,7 +190,7 @@ impl InspectionBinding {
                 .with_argument("arguments", ToolValue::Object(Default::default())),
         )?;
         Ok(InspectionResult {
-            binding: self.clone(),
+            origin: InspectionOrigin::Document(self.clone()),
             native_result: provider.native_result().cloned(),
             result,
         })
@@ -206,11 +210,27 @@ impl InspectionBinding {
     }
 }
 
+/// Historical provenance, not an executable selection or authorization grant.
+#[derive(Debug, Clone)]
+pub enum InspectionOrigin {
+    Document(InspectionBinding),
+    #[cfg(feature = "experimental-sprout-closure")]
+    Closure(crate::registered_document_closure::RegisteredClosureObservation),
+}
+
+/// Passive source/evidence freshness, independent of execution authorization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InspectionFreshness {
+    Current,
+    Stale,
+    Unknown,
+}
+
 /// Retain structured provider feedback (including denied/blocked/error statuses)
 /// alongside its binding. Displaying an old result never makes it fresh again.
 #[derive(Debug, Clone)]
 pub struct InspectionResult {
-    pub binding: InspectionBinding,
+    pub origin: InspectionOrigin,
     pub result: ToolResult,
     /// Lossless validated language observation, independent of ToolValue limits.
     /// The enum is not Serialize; read variants contain serializable JSON `value`
@@ -219,8 +239,95 @@ pub struct InspectionResult {
     pub native_result: Option<scope_language::SemanticOperationResult>,
 }
 impl InspectionResult {
+    pub fn document_binding(&self) -> Option<&InspectionBinding> {
+        match &self.origin {
+            InspectionOrigin::Document(binding) => Some(binding),
+            #[cfg(feature = "experimental-sprout-closure")]
+            InspectionOrigin::Closure(_) => None,
+        }
+    }
+
+    /// Project and retain from the same producer-owned completion. The adapter is
+    /// trusted language integration, not an authorization or authenticity token.
+    /// In particular, a publicly constructible provider payload alone is insufficient.
+    #[cfg(feature = "experimental-sprout-closure")]
+    pub fn from_registered_completion<T>(
+        completion: &crate::registered_document_closure::RegisteredClosureResult<T>,
+        project: impl FnOnce(
+            &crate::registered_document_closure::RegisteredClosureResult<T>,
+        ) -> Result<scope_language::SemanticOperationResult, String>,
+    ) -> Self {
+        use scope_language::SemanticOperationResult;
+        let projected = completion
+            .review()
+            .map_err(|error| format!("completion review: {error:?}"))
+            .and_then(|_| project(completion))
+            .and_then(|native| match native {
+                SemanticOperationResult::ReadOnly { .. }
+                | SemanticOperationResult::ReadOnlyEvaluation { .. }
+                | SemanticOperationResult::Evaluated { .. } => Ok(native),
+                _ => Err("registered feedback must be a read-only observation".into()),
+            });
+        let (result, native_result) = match projected {
+            Ok(native) => (
+                ToolResult::new(ToolValue::object([("status", "read_only".into())])),
+                Some(native),
+            ),
+            Err(error) => (
+                ToolResult::new(ToolValue::object([
+                    ("status", "internal_failure".into()),
+                    (
+                        "message",
+                        error.chars().take(4096).collect::<String>().into(),
+                    ),
+                ])),
+                None,
+            ),
+        };
+        Self::from_closure_observation(completion.observation(), result, native_result)
+    }
+
+    /// Retain an authentic historical closure observation without recapture or execution.
+    #[cfg(feature = "experimental-sprout-closure")]
+    pub fn from_closure_observation(
+        observation: crate::registered_document_closure::RegisteredClosureObservation,
+        result: ToolResult,
+        native_result: Option<scope_language::SemanticOperationResult>,
+    ) -> Self {
+        Self {
+            origin: InspectionOrigin::Closure(observation),
+            result,
+            native_result,
+        }
+    }
+
+    /// Compare retained evidence without discovery, authorization, or execution.
+    pub fn freshness_app<P: TrustedClosureProvider>(
+        &self,
+        app: &AppState<P>,
+    ) -> InspectionFreshness {
+        match &self.origin {
+            InspectionOrigin::Document(binding) => {
+                if binding.is_fresh_app(app) {
+                    InspectionFreshness::Current
+                } else {
+                    InspectionFreshness::Stale
+                }
+            }
+            #[cfg(feature = "experimental-sprout-closure")]
+            InspectionOrigin::Closure(observation) => match app.registered_documents() {
+                None => InspectionFreshness::Unknown,
+                Some(registry) if registry.validate_observation(observation).is_ok() => {
+                    InspectionFreshness::Current
+                }
+                Some(_) => InspectionFreshness::Stale,
+            },
+        }
+    }
+
+    /// Unknown is not a freshness proof.
     pub fn is_fresh_app<P: TrustedClosureProvider>(&self, app: &AppState<P>) -> bool {
-        self.binding.is_fresh_app(app)
+        self.freshness_app(app) == InspectionFreshness::Current
     }
 }
 

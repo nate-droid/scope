@@ -42,8 +42,11 @@ or the default Scope IDE by naming them in a script.
 
 ## Retained evaluation reports and generated artifacts
 
-These standalone Cargo workspaces are not members of Scope's root workspace.
-Run their manifest-specific tests; root `cargo test` does not validate them.
+These research workspaces are not members of Scope's root workspace and are not
+part of public setup. CE4 requires local Path and Scope-Forth checkouts; H1–H4
+requires local Path. Their dependencies are not established as public. For a
+self-contained integration example, use [`downstream/`](downstream/README.md).
+Root `cargo test` does not validate these research workspaces.
 The checked-in CE4 `deterministic.json` and H1–H4 `evidence/` files are retained
 **evaluation evidence**, not unused configuration or required build inputs. Keep
 them with their harnesses and reproduction instructions; wall times vary and local sibling dependencies

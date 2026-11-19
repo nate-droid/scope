@@ -37,8 +37,10 @@ class Workspace:
         self.raw = bytearray()
         self.pending = b''
         self.status = None
+        self.closed = False
         self.deadline = time.monotonic() + 90
         self.restore_read, restore_write = os.pipe()
+        driver_pid = os.getpid()
         self.pid = os.fork()
         if self.pid == 0:
             try:
@@ -46,12 +48,34 @@ class Workspace:
                 fcntl.ioctl(self.slave, termios.TIOCSCTTY, 0)
                 # Keep the session leader alive until attributes are sampled:
                 # macOS revokes the slave when the leader exits.
+                terminating = False
+
+                def terminate(signum, frame):
+                    nonlocal terminating
+                    terminating = True
+
+                # Group TERM must leave the supervisor alive to reap its worker.
+                signal.signal(signal.SIGTERM, terminate)
                 worker = os.fork()
                 if worker:
                     os.close(self.restore_read)
-                    _, status = os.waitpid(worker, 0)
+                    escalation = None
+                    while True:
+                        pid, status = os.waitpid(worker, os.WNOHANG)
+                        if pid:
+                            break
+                        if os.getppid() != driver_pid:
+                            terminating = True
+                        if terminating:
+                            if escalation is None:
+                                os.kill(worker, signal.SIGTERM)
+                                escalation = time.monotonic() + .5
+                            elif time.monotonic() >= escalation:
+                                os.kill(worker, signal.SIGKILL)
+                        time.sleep(.01)
                     os.write(restore_write, pickle.dumps(termios.tcgetattr(self.slave)))
                     os._exit(os.waitstatus_to_exitcode(status) if os.WIFEXITED(status) else 1)
+                signal.signal(signal.SIGTERM, signal.SIG_DFL)
                 os.close(restore_write)
                 os.close(self.restore_read)
                 for target in (0, 1, 2):
@@ -154,6 +178,8 @@ class Workspace:
         return output
 
     def wait_exit(self, timeout=5):
+        if self.status is not None:
+            return os.waitstatus_to_exitcode(self.status)
         end = min(time.monotonic() + timeout, self.deadline)
         while time.monotonic() < end:
             pid, status = os.waitpid(self.pid, os.WNOHANG)
@@ -164,9 +190,11 @@ class Workspace:
         raise AssertionError('workspace did not exit within bounded timeout')
 
     def close(self):
+        if self.closed:
+            return
         if self.status is None:
             try:
-                os.killpg(self.pid, signal.SIGKILL)
+                os.killpg(self.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
             end = time.monotonic() + 3
@@ -176,10 +204,18 @@ class Workspace:
                     self.status = status
                     break
                 time.sleep(.05)
+            if self.status is None:
+                # Emergency fallback if the supervisor itself cannot make progress.
+                try:
+                    os.killpg(self.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                _, self.status = os.waitpid(self.pid, 0)
         os.close(self.fd)
         os.close(self.slave)
         os.close(self.restore_read)
         self.temp.cleanup()
+        self.closed = True
 
 
 class EditableWorkspaceTests(unittest.TestCase):

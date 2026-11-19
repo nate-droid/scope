@@ -35,6 +35,8 @@ pub struct WorkspaceConfig<P: TrustedClosureProvider = DefaultProvider> {
     /// Inspector with focused read-only view input; source-edit and legacy mutable
     /// callbacks are not forwarded. Global shortcuts remain owned by Scope.
     pub inspector: Option<Box<dyn Pane<P>>>,
+    /// Authentic completed observations supplied by the host at startup.
+    pub observations: Vec<crate::semantic_inspection::InspectionResult>,
     /// Optional whole-closure operation for the existing Run and Check actions.
     #[cfg(feature = "experimental-sprout-closure")]
     pub registered_execution: Option<crate::tui::RegisteredExecution<P::Output>>,
@@ -51,6 +53,7 @@ impl<P: TrustedClosureProvider> Default for WorkspaceConfig<P> {
             focus: "editor".into(),
             layout: None,
             inspector: None,
+            observations: Vec::new(),
             #[cfg(feature = "experimental-sprout-closure")]
             registered_execution: None,
         }
@@ -76,31 +79,76 @@ impl<P: TrustedClosureProvider + 'static> WorkspaceConfig<P> {
         mut host: Option<&mut dyn ReadOnlyCommand>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let mut session = InteractiveSession::new();
-        let (mut ui, mut sources) = configured_app_workspace(app, self)?;
-        let actions = host
-            .as_deref()
-            .map(|host| host.downstream_actions())
-            .unwrap_or_default();
-        let check = host
-            .as_deref()
-            .and_then(|host| host.downstream_check_action());
-        ui.set_downstream_check_action(check);
-        ui.set_downstream_run_test_action(
-            host.as_deref().and_then(|h| h.downstream_run_test_action()),
-        );
-        for action in actions {
-            ui.register_downstream_action(action)?;
-        }
+        let (mut ui, mut sources) = configured_app_workspace(app, self, false)?;
+        configure_host_actions(&mut ui, host.as_deref())?;
         ui.run_with_sources(app, &mut session, host.take(), &mut sources)
     }
+
+    /// Present the same configured App and producer on a graphical transport.
+    /// Construct the App and config on the workspace worker, just as for the TUI.
+    #[cfg(feature = "desktop")]
+    pub fn run_desktop(
+        self,
+        app: &mut AppState<P>,
+        host: Option<&mut dyn ReadOnlyCommand>,
+        initial_path: Option<&str>,
+        input: std::sync::mpsc::Receiver<crate::tui::desktop::DesktopInput>,
+        publish: impl FnMut(crate::tui::desktop::DesktopUpdate) + 'static,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let (mut ui, mut sources) = configured_app_workspace(app, self, true)?;
+        configure_host_actions(&mut ui, host.as_deref())?;
+        crate::tui::desktop::run_workspace(
+            app,
+            ui,
+            &mut sources,
+            host,
+            initial_path,
+            input,
+            publish,
+        )
+    }
+}
+
+fn configure_host_actions<P: TrustedClosureProvider + 'static>(
+    ui: &mut WorkspaceTui<P>,
+    host: Option<&dyn ReadOnlyCommand>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let actions = host
+        .as_deref()
+        .map(|host| host.downstream_actions())
+        .unwrap_or_default();
+    let check = host
+        .as_deref()
+        .and_then(|host| host.downstream_check_action());
+    ui.set_downstream_check_action(check);
+    ui.set_downstream_run_test_action(host.as_deref().and_then(|h| h.downstream_run_test_action()));
+    for action in actions {
+        ui.register_downstream_action(action)?;
+    }
+    Ok(())
 }
 
 fn configured_app_workspace<P: TrustedClosureProvider + 'static>(
     app: &mut AppState<P>,
-    config: WorkspaceConfig<P>,
+    mut config: WorkspaceConfig<P>,
+    line_numbers: bool,
 ) -> Result<(WorkspaceTui<P>, ScratchBuffers), Box<dyn std::error::Error>> {
-    let mut sources = configured_sources(app, &config)?;
-    let mut ui = build_for_ui(config, WorkspaceTui::for_provider())?;
+    let observations = std::mem::take(&mut config.observations);
+    let mut sources = if line_numbers
+        && config.open_path.is_none()
+        && config.language == "text"
+        && config.content.is_empty()
+        && !config.bind_selected
+    {
+        // A graphical App workspace should not create an unsaved empty scratch.
+        ScratchBuffers::default()
+    } else {
+        configured_sources(app, &config)?
+    };
+    let mut ui = build_for_ui(config, WorkspaceTui::for_provider(), line_numbers)?;
+    for observation in observations {
+        ui.retain_completed_observation(observation);
+    }
     if app.open_document().is_some() {
         ui.invoke_action(
             crate::tui::WorkspaceAction::FocusAppDocument,
@@ -145,7 +193,9 @@ impl<P: TrustedClosureProvider> Pane<P> for SuppliedInspector<P> {
 }
 
 /// Presentation only: no input callback, editing capability or execution access.
-struct Inspector;
+struct Inspector {
+    desktop: bool,
+}
 impl<P: TrustedClosureProvider> Pane<P> for Inspector {
     fn id(&self) -> &'static str {
         "workspace-inspector"
@@ -162,11 +212,14 @@ impl<P: TrustedClosureProvider> Pane<P> for Inspector {
                 "Read-only App inspector — committed in-memory document.\n\n\
                  Ctrl-O opens/selects a document; Ctrl-T checks current editor changes.\n\
                  Ctrl-R runs current editor changes with host authorization.\n\
-                 Ctrl-S publishes drafts in memory, never to disk.\n\
-                 Save is explicit and requires writable workspace access.\n\
                  Output: d opens retained Details; Esc closes Details.\n\
                  Ctrl-G actions; F6 changes focus; Ctrl-Q quits.\n\n",
             );
+            text.push_str(if self.desktop && ctx.app().workspace().allows_saves() {
+                "Cmd/Ctrl-S publishes and saves the active App document.\n\n"
+            } else {
+                "Ctrl-S publishes in memory only here. Disk saves require a writable workspace.\n\n"
+            });
             if let Some(document) = ctx.app().open_document() {
                 text.push_str(&format!(
                     "Document: {}\nRevision: {}\n{}\n",
@@ -188,7 +241,7 @@ impl<P: TrustedClosureProvider> Pane<P> for Inspector {
             }
             #[cfg(feature = "experimental-sprout-closure")]
             if let Some(module) = ctx.app().selected_registered_module() {
-                text.push_str(&format!("\nRegistered module: {module}\nCheck discovers the closure without authorization or execution.\nRun requires Enter on the exact whole-closure review.\n\nEnrolled documents:\n"));
+                text.push_str(&format!("\nRegistered module: {module}\nCheck discovers the closure without authorization or execution.\nRun uses host policy for the captured closure; confirm only if prompted.\n\nEnrolled documents:\n"));
                 if let Some(documents) = ctx.app().registered_documents() {
                     for (module, document) in documents.documents() {
                         text.push_str(&format!(
@@ -275,13 +328,15 @@ pub(super) fn build() -> Result<WorkspaceTui, Box<dyn std::error::Error>> {
     build_configured(WorkspaceConfig::default())
 }
 
+#[cfg(test)]
 fn build_configured(config: WorkspaceConfig) -> Result<WorkspaceTui, Box<dyn std::error::Error>> {
-    build_for_ui(config, WorkspaceTui::new())
+    build_for_ui(config, WorkspaceTui::new(), false)
 }
 
 fn build_for_ui<P: TrustedClosureProvider + 'static>(
     mut config: WorkspaceConfig<P>,
     mut ui: WorkspaceTui<P>,
+    line_numbers: bool,
 ) -> Result<WorkspaceTui<P>, Box<dyn std::error::Error>> {
     #[cfg(feature = "experimental-sprout-closure")]
     ui.set_registered_execution(config.registered_execution.take())?;
@@ -289,15 +344,17 @@ fn build_for_ui<P: TrustedClosureProvider + 'static>(
         config.open_targets_label.clone(),
         std::mem::take(&mut config.open_targets),
     )?;
-    ui.register_editable("editor", EditableScratchPane::new())?;
+    ui.register_editable(
+        "editor",
+        EditableScratchPane::new().with_line_numbers(line_numbers),
+    )?;
     ui.register(
         "inspector",
-        SuppliedInspector(
-            config
-                .inspector
-                .take()
-                .unwrap_or_else(|| Box::new(Inspector)),
-        ),
+        SuppliedInspector(config.inspector.take().unwrap_or_else(|| {
+            Box::new(Inspector {
+                desktop: line_numbers,
+            })
+        })),
     )?;
     ui.layout(
         "workspace",
@@ -329,28 +386,29 @@ pub(super) fn run(
     #[cfg(feature = "agent")] editing: Option<super::InteractiveEditConfig>,
     #[cfg(feature = "agent")] agent_config: super::AgentConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let config = host
-        .as_deref()
-        .and_then(|host| host.workspace_config())
-        .unwrap_or_default();
+    let (mut ui, mut sources) = configured_launcher(app, host.as_deref(), false)?;
     let mut session = InteractiveSession::new();
-    let mut sources = configured_sources(app, &config)?;
-    let actions = host
-        .as_deref()
-        .map(|host| host.downstream_actions())
-        .unwrap_or_default();
-    let check_action = host
-        .as_deref()
-        .and_then(|host| host.downstream_check_action());
-    let mut ui = build_configured(config)?;
-    ui.set_downstream_check_action(check_action);
-    ui.set_downstream_run_test_action(host.as_deref().and_then(|h| h.downstream_run_test_action()));
-    for action in actions {
-        ui.register_downstream_action(action)?;
-    }
     #[cfg(feature = "agent")]
     ui.configure_commands(editing, agent_config)?;
     ui.run_with_sources(app, &mut session, host, &mut sources)
+}
+
+pub(crate) fn configured_launcher(
+    app: &App,
+    host: Option<&dyn ReadOnlyCommand>,
+    desktop: bool,
+) -> Result<(WorkspaceTui, ScratchBuffers), Box<dyn std::error::Error>> {
+    let supplied = host.and_then(|host| host.workspace_config());
+    let start_empty = desktop && supplied.is_none();
+    let config = supplied.unwrap_or_default();
+    let sources = if start_empty {
+        ScratchBuffers::default()
+    } else {
+        configured_sources(app, &config)?
+    };
+    let mut ui = build_for_ui(config, WorkspaceTui::new(), desktop)?;
+    configure_host_actions(&mut ui, host)?;
+    Ok((ui, sources))
 }
 
 #[cfg(test)]
@@ -710,7 +768,7 @@ mod tests {
         let mut app = typed_app(&root);
         let identity = app.open_document().unwrap().evaluation_source_id().clone();
         let (mut ui, mut sources) =
-            configured_app_workspace(&mut app, WorkspaceConfig::default()).unwrap();
+            configured_app_workspace(&mut app, WorkspaceConfig::default(), false).unwrap();
         let scratch = sources.selected().unwrap().evaluation_source_id().clone();
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 25)).unwrap();
@@ -767,7 +825,7 @@ mod tests {
             layout: Some(View::leaf("missing")),
             ..WorkspaceConfig::default()
         };
-        assert!(configured_app_workspace(&mut app, config).is_err());
+        assert!(configured_app_workspace(&mut app, config, false).is_err());
         assert_eq!(
             app.open_document().unwrap().evaluation_source_id(),
             &identity
@@ -791,7 +849,7 @@ mod tests {
             )),
             ..WorkspaceConfig::default()
         };
-        let (mut ui, sources) = configured_app_workspace(&mut app, config).unwrap();
+        let (mut ui, sources) = configured_app_workspace(&mut app, config, false).unwrap();
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 25)).unwrap();
         terminal
@@ -815,7 +873,7 @@ mod tests {
         root.write_file("main.sprout", "original");
         let mut app = typed_app(&root);
         let (mut ui, mut sources) =
-            configured_app_workspace(&mut app, WorkspaceConfig::default()).unwrap();
+            configured_app_workspace(&mut app, WorkspaceConfig::default(), false).unwrap();
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(200, 40)).unwrap();
         terminal

@@ -33,7 +33,7 @@ pub enum ScriptSnapshotAdmission {
 pub mod composition;
 pub mod workspace_command;
 #[cfg(feature = "tui")]
-mod workspace_ui;
+pub(crate) mod workspace_ui;
 pub use composition::{
     BindingTransition, Composition, CompositionReport, CompositionStep, SelectedMetadata,
 };

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check inline local Markdown links in non-ignored working-tree Markdown."""
 
+import argparse
 import re
 import subprocess
 import sys
@@ -54,19 +55,38 @@ def tracked_markdown(root):
                    if name and (root / name).is_file()})
 
 
-def check(root):
+def selected_markdown(root, names):
+    """Validate explicit repository-relative sources without a Git discovery process."""
+    sources = set()
+    for name in names:
+        source = Path(name)
+        if source.is_absolute() or not (root / source).resolve().is_relative_to(root.resolve()):
+            raise ValueError(f'expected a repository-relative Markdown file: {name}')
+        if source.suffix not in ('.md', '.markdown') or not (root / source).is_file():
+            raise ValueError(f'expected an existing Markdown file: {name}')
+        sources.add(source)
+    return sorted(sources)
+
+
+def check(root, sources=None):
     errors = []
-    for source in tracked_markdown(root):
+    for source in tracked_markdown(root) if sources is None else sources:
         for number, target in local_links((root / source).read_text(encoding='utf-8')):
             if not (root / source.parent / target).exists():
                 errors.append(f'{source.as_posix()}:{number}: missing target: {target}')
     return errors
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('files', nargs='*', help=(
+        'repository-relative Markdown sources; omit for the full working tree. '
+        'Use the full check for moves/deletions or changed link targets.'))
+    args = parser.parse_args(argv)
     root = Path(__file__).resolve().parents[2]
     try:
-        errors = check(root)
+        sources = selected_markdown(root, args.files) if args.files else None
+        errors = check(root, sources)
     except (OSError, subprocess.CalledProcessError, UnicodeError, ValueError) as error:
         print(f'Markdown link check failed: {error}', file=sys.stderr)
         return 2
@@ -74,7 +94,11 @@ def main():
         print(error, file=sys.stderr)
     if errors:
         return 1
-    print('All working-tree Markdown local link targets exist.')
+    if sources is None:
+        print('All working-tree Markdown local link targets exist.')
+    else:
+        print(f'Local link targets exist in {len(sources)} selected Markdown file(s); '
+              'other sources were not checked.')
     return 0
 
 

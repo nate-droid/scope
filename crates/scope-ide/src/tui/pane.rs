@@ -330,6 +330,14 @@ pub trait Pane<P: TrustedClosureProvider = DefaultProvider> {
         false
     }
 
+    #[cfg(feature = "desktop")]
+    fn has_dirty_source(&self, _source: &scope_language::SourceId) -> bool {
+        self.has_dirty_app_draft()
+    }
+
+    #[cfg(feature = "desktop")]
+    fn forget_closed_source(&mut self, _source: &scope_language::SourceId) {}
+
     /// Scratch IDs and source identity/revision descriptions for dirty drafts.
     /// Metadata may be unavailable for custom panes even when `has_dirty_draft`
     /// returns `true`; an empty list does not imply that execution is safe.

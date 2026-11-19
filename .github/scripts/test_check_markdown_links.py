@@ -45,6 +45,49 @@ class MarkdownLinksTests(unittest.TestCase):
                     'docs/readme.md:2: missing target: missing.md',
                 ])
 
+    def test_explicit_sources_skip_discovery_but_retain_missing_link_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'selected.md').write_text('[bad](missing.md)', encoding='utf-8')
+            (root / 'unrelated.md').write_text('[bad](other.md)', encoding='utf-8')
+            with patch.object(checker, 'tracked_markdown', side_effect=AssertionError('discovery')):
+                sources = checker.selected_markdown(root, ['selected.md', 'selected.md'])
+                self.assertEqual(sources, [Path('selected.md')])
+                self.assertEqual(checker.check(root, sources), [
+                    'selected.md:1: missing target: missing.md'])
+                (root / 'missing.md').touch()
+                self.assertEqual(checker.check(root, sources), [])
+
+    def test_explicit_sources_reject_invalid_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'present.txt').touch()
+            for name in ['missing.md', 'present.txt', '../outside.md', str(root / 'absolute.md')]:
+                with self.subTest(name=name), self.assertRaises(ValueError):
+                    checker.selected_markdown(root, [name])
+            (root / 'escape.md').symlink_to(root.parent / 'outside.md')
+            with self.assertRaises(ValueError):
+                checker.selected_markdown(root, ['escape.md'])
+
+    def test_cli_selection_and_exit_status(self):
+        with patch.object(checker, 'selected_markdown', return_value=[Path('README.md')]) as select, \
+                patch.object(checker, 'check', return_value=[]) as check, \
+                patch('builtins.print') as output:
+            self.assertEqual(checker.main(['README.md']), 0)
+            self.assertEqual(select.call_args.args[1], ['README.md'])
+            self.assertEqual(check.call_args.args[1], [Path('README.md')])
+            self.assertIn('other sources were not checked', output.call_args.args[0])
+        with patch.object(checker, 'check', return_value=['missing target']), patch('builtins.print'):
+            self.assertEqual(checker.main(['README.md']), 1)
+        with patch.object(checker, 'selected_markdown', side_effect=ValueError('invalid')), \
+                patch('builtins.print'):
+            self.assertEqual(checker.main(['missing.md']), 2)
+
+    def test_cli_default_keeps_full_check(self):
+        with patch.object(checker, 'check', return_value=[]) as check, patch('builtins.print'):
+            self.assertEqual(checker.main([]), 0)
+            self.assertIsNone(check.call_args.args[1])
+
     def test_git_uses_nul_delimiters_and_excludes_target_directories(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

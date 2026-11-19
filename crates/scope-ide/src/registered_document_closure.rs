@@ -1,4 +1,4 @@
-//! Opt-in registered Document discovery. No filesystem discovery or native execution.
+//! Opt-in registered Document discovery and workspace acquisition. No native execution.
 //!
 //! The artifact is a trusted host/test-owned *handle*, not a verified loaded binary.
 //! The default dispatch is an inert bounded counter. Typed trusted providers are opt-in. It
@@ -8,9 +8,11 @@ use crate::{
         ClosureCapture, ClosureInspectionBinding, ClosureInspectionError, ClosureInspectionHost,
         ClosureInspectionResult, ClosureOwner, ClosureRejection, ClosureSource,
     },
-    document::Document,
+    document::{Document, DocumentId},
+    path::ScopePath,
     source_edit::SourceId as EditSourceId,
     tool::semantic::{HostAuthorizationRequest, HostSemanticPolicy, authorize_host_request},
+    workspace::SourceReadGrant,
 };
 use scope_language::{
     RevisionId, SemanticOperationDescription, SourceId, SourceResolver, SourceSnapshot,
@@ -157,6 +159,7 @@ impl RegisteredCaptureRejection {
 /// Owned transfer from a trusted read-only language facade. `compiler_sources`
 /// maps compiler source index to registered identity, in exact compiler order.
 /// Portable identity may contain source text; never render it as review metadata.
+#[derive(Clone)]
 pub struct DiscoveryEvidence {
     pub root: String,
     pub sources: Vec<RegisteredSource>,
@@ -171,6 +174,7 @@ pub struct DiscoveryEvidence {
 
 /// Admitted immutable evidence; owned input allocation is the facade's
 /// responsibility. Scope bounds retention and validates against registered input.
+#[derive(Clone)]
 pub struct DiscoveredClosure(DiscoveryEvidence);
 impl DiscoveredClosure {
     pub const MAX_BYTES: usize = ClosureInspectionBinding::MAX_BYTES;
@@ -317,8 +321,8 @@ pub struct DiscoveryFailure {
     pub diagnostics: Vec<DiscoveryDiagnostic>,
 }
 /// Trusted host-owned language facade, NOT a policy provider. Must perform only
-/// bounded read-only discovery over supplied sources; no evaluator, filesystem
-/// fallback, approval, or externally mutable execution state. Production language
+/// bounded read-only discovery over supplied sources or the acquisition callback;
+/// no evaluator, filesystem fallback, approval, or externally mutable execution state. Production language
 /// crates implement this trait without Scope depending on the language crate.
 pub trait Discovery {
     /// One discovery pass, with optional compiler-derived presentation evidence.
@@ -335,6 +339,23 @@ pub trait Discovery {
                 diagnostics: Vec::new(),
             })
     }
+    /// Canonical discovery with host-supplied, revisioned source acquisition.
+    /// Adapters opt in; the callback is not an execution or write capability.
+    fn capture_acquiring(
+        &self,
+        _root: &str,
+        _limits: Limits,
+        _acquire: &mut dyn FnMut(&str, usize) -> Option<RegisteredSource>,
+    ) -> Result<DiscoveredClosure, DiscoveryFailure> {
+        Err(DiscoveryFailure {
+            error: DiscoveryError {
+                phase: DiscoveryPhase::Acquisition,
+                category: DiscoveryCategory::MissingSource,
+            },
+            diagnostics: Vec::new(),
+        })
+    }
+
     fn capture(
         &self,
         root: &str,
@@ -342,7 +363,7 @@ pub trait Discovery {
         limits: Limits,
     ) -> Result<DiscoveredClosure, DiscoveryError>;
 }
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, rc::Rc, sync::Arc};
 
 /// Opaque, non-forgeable process-local handle, assigned by a trusted host. No
 /// claim that the handle's label authenticates code or that code is executable.
@@ -396,12 +417,24 @@ impl Default for TrustedLoadedArtifact {
     }
 }
 
+fn module_path(directory: &ScopePath, module: &str) -> Option<ScopePath> {
+    if module.is_empty()
+        || !module
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.'))
+    {
+        return None;
+    }
+    directory.join(format!("{module}.sprout")).ok()
+}
+
 struct Entry {
     document: Document,
     language: String,
     evaluation_id: SourceId,
     binding_id: EditSourceId,
     registration: u64,
+    disk_only: bool,
 }
 
 /// Owns actual editable Documents and all mutable dispatch metadata. No shared
@@ -409,7 +442,8 @@ struct Entry {
 /// dispatch. DocumentId is never used as an evaluation or owner identity.
 pub struct RegisteredDocuments<P = InertProvider> {
     provider: P,
-    discovery: Box<dyn Discovery>,
+    discovery: Rc<dyn Discovery>,
+    workspace_sources: Option<(SourceReadGrant, ScopePath)>,
     owner: ClosureOwner,
     entries: BTreeMap<String, Entry>,
     next_registration: u64,
@@ -432,7 +466,8 @@ impl RegisteredDocuments<InertProvider> {
     ) -> Self {
         Self {
             provider: InertProvider,
-            discovery: Box::new(discovery),
+            discovery: Rc::new(discovery),
+            workspace_sources: None,
             owner: ClosureOwner::default(),
             entries: BTreeMap::new(),
             next_registration: 0,
@@ -503,6 +538,7 @@ impl<P: TrustedClosureProvider> RegisteredDocuments<P> {
             evaluation_id,
             binding_id: EditSourceId::Scratch(registration),
             registration,
+            disk_only: false,
         };
         Ok(self.entries.insert(module, entry).map(|e| e.document))
     }
@@ -553,7 +589,10 @@ impl<P: TrustedClosureProvider> RegisteredDocuments<P> {
         self.entries.get(module).map(|e| &e.document)
     }
     pub fn document_mut(&mut self, module: &str) -> Option<&mut Document> {
-        self.entries.get_mut(module).map(|e| &mut e.document)
+        self.entries.get_mut(module).map(|e| {
+            e.disk_only = false;
+            &mut e.document
+        })
     }
     pub fn remove(&mut self, module: &str) -> Option<Document> {
         self.entries.remove(module).map(|e| e.document)
@@ -629,14 +668,201 @@ impl<P: TrustedClosureProvider> RegisteredDocuments<P> {
         self.capture_call(root, operation, arguments, Some(contract))
     }
 
-    fn capture_call(
-        &self,
+    pub(crate) fn configure_workspace_sources(
+        &mut self,
+        grant: SourceReadGrant,
+        directory: ScopePath,
+    ) -> Result<(), ClosureInspectionError> {
+        if self.workspace_sources.is_some() {
+            return Err(ClosureInspectionError::InvalidCapture);
+        }
+        self.workspace_sources = Some((grant, directory));
+        Ok(())
+    }
+
+    pub(crate) fn workspace_module(&self, path: &ScopePath) -> Option<String> {
+        let (_, directory) = self.workspace_sources.as_ref()?;
+        let module = path.file_name()?.strip_suffix(".sprout")?;
+        (module_path(directory, module).as_ref() == Some(path)).then(|| module.to_owned())
+    }
+
+    pub(crate) fn pin_document(&mut self, module: &str) {
+        if let Some(entry) = self.entries.get_mut(module) {
+            entry.disk_only = false;
+        }
+    }
+
+    pub(crate) fn capture_workspace_call(
+        &mut self,
         root: &str,
         operation: &str,
         arguments: Value,
         contract: Option<InvocationContract>,
+        next_id: &mut u64,
     ) -> Result<RegisteredClosureBinding, RegisteredCaptureRejection> {
+        if let Some(contract) = &contract {
+            contract.validate()?;
+        }
+        let Some((grant, directory)) = self.workspace_sources.clone() else {
+            return self.capture_call(root, operation, arguments, contract);
+        };
         let mut arguments = crate::closure_inspection::IterativeJson(arguments);
+        let operation = self.capture_operation(operation, &arguments.0)?;
+        // Keep at most the previous disk-only closure between captures. Editor
+        // documents and their published revisions remain owned by the registry.
+        let mut sources = Vec::<RegisteredSource>::new();
+        let mut remaining_bytes = self
+            .limits
+            .source_bytes
+            .min(ClosureInspectionBinding::MAX_BYTES);
+        let mut rejection = None;
+        let discovery = self.discovery.clone();
+        let result = discovery.capture_acquiring(root, self.limits, &mut |module, remaining| {
+            if let Some(source) = sources.iter().find(|source| source.module == module) {
+                return Some(source.clone());
+            }
+            match self.acquire_workspace_source(
+                root,
+                module,
+                remaining.min(remaining_bytes),
+                next_id,
+                &grant,
+                &directory,
+            ) {
+                Ok(source) => {
+                    remaining_bytes -= source.text.len();
+                    sources.push(source.clone());
+                    Some(source)
+                }
+                Err(error) => {
+                    rejection = Some(error);
+                    None
+                }
+            }
+        });
+        self.entries.retain(|module, entry| {
+            !entry.disk_only || sources.iter().any(|source| &source.module == module)
+        });
+        if let Some(error) = rejection {
+            return Err(error);
+        }
+        let discovered = result.map_err(|error| self.discovery_rejection(root, error))?;
+        let sealed = self.seal_call(
+            root,
+            operation,
+            std::mem::take(&mut arguments.0),
+            contract,
+            discovered,
+            sources,
+        )?;
+        self.validate_sealed(&sealed)?;
+        Ok(sealed)
+    }
+
+    fn acquire_workspace_source(
+        &mut self,
+        root: &str,
+        module: &str,
+        remaining: usize,
+        next_id: &mut u64,
+        grant: &SourceReadGrant,
+        directory: &ScopePath,
+    ) -> Result<RegisteredSource, RegisteredCaptureRejection> {
+        if !self
+            .entries
+            .get(module)
+            .is_some_and(|entry| !entry.disk_only)
+        {
+            let unavailable = || {
+                self.discovery_rejection(
+                    root,
+                    DiscoveryFailure {
+                        error: DiscoveryError {
+                            phase: DiscoveryPhase::Acquisition,
+                            category: DiscoveryCategory::MissingSource,
+                        },
+                        diagnostics: Vec::new(),
+                    },
+                )
+            };
+            let path = module_path(directory, module).ok_or_else(unavailable)?;
+            let file = grant
+                .read_document_source_bounded(&path, remaining)
+                .map_err(|error| {
+                    if error.kind == cell_capability_fs::FsErrorKind::ContentTooLarge {
+                        ClosureInspectionError::LimitExceeded.into()
+                    } else {
+                        unavailable()
+                    }
+                })?;
+            if !self
+                .entries
+                .get(module)
+                .is_some_and(|entry| entry.document.disk_revision() == Some(file.revision.as_str()))
+            {
+                let id = DocumentId::new(*next_id);
+                *next_id = next_id
+                    .checked_add(1)
+                    .ok_or(ClosureInspectionError::LimitExceeded)?;
+                self.register(
+                    module.to_owned(),
+                    Document::from_revisioned_workspace_file(id, file),
+                )?;
+                self.entries.get_mut(module).unwrap().disk_only = true;
+            }
+        }
+        let entry = &self.entries[module];
+        if entry.document.text().len() > remaining {
+            return Err(ClosureInspectionError::LimitExceeded.into());
+        }
+        Ok(Self::registered_source(module, entry)?)
+    }
+
+    fn registered_source(
+        module: &str,
+        entry: &Entry,
+    ) -> Result<RegisteredSource, ClosureInspectionError> {
+        if entry.document.evaluation_source_id() != &entry.evaluation_id {
+            return Err(ClosureInspectionError::SnapshotMismatch);
+        }
+        Ok(RegisteredSource {
+            identity: format!("registered-{}", entry.registration),
+            module: module.to_owned(),
+            revision: entry.document.version().to_string(),
+            text: entry.document.text().into(),
+            language: entry.language.clone(),
+            display: Some(entry.document.path().display().to_string()),
+            origin: Some("registered-document".into()),
+        })
+    }
+
+    fn discovery_rejection(
+        &self,
+        root: &str,
+        failure: DiscoveryFailure,
+    ) -> RegisteredCaptureRejection {
+        let root = self
+            .entries
+            .get(root)
+            .map(|entry| entry.evaluation_id.clone());
+        if failure.diagnostics.is_empty() {
+            RegisteredCaptureRejection::Discovery {
+                error: failure.error,
+                root,
+            }
+        } else {
+            RegisteredCaptureRejection::Diagnostics {
+                error: failure.error,
+                root,
+                diagnostics: failure.diagnostics,
+            }
+        }
+    }
+
+    fn discover_enrolled(
+        &self,
+        root: &str,
+    ) -> Result<(DiscoveredClosure, Vec<RegisteredSource>), RegisteredCaptureRejection> {
         // Bound copying before constructing Sprout inputs. Registry Documents
         // remain host-owned; discovery admission does not bound their storage.
         let total = self
@@ -652,6 +878,43 @@ impl<P: TrustedClosureProvider> RegisteredDocuments<P> {
         if total > ClosureInspectionBinding::MAX_BYTES {
             return Err(ClosureInspectionError::LimitExceeded.into());
         }
+        let sources = self
+            .entries
+            .iter()
+            .map(|(module, entry)| Self::registered_source(module, entry))
+            .collect::<Result<Vec<_>, _>>()?;
+        let discovered = self
+            .discovery
+            .capture_with_diagnostics(root, sources.clone(), self.limits)
+            .map_err(|error| self.discovery_rejection(root, error))?;
+        Ok((discovered, sources))
+    }
+
+    fn capture_call(
+        &self,
+        root: &str,
+        operation: &str,
+        arguments: Value,
+        contract: Option<InvocationContract>,
+    ) -> Result<RegisteredClosureBinding, RegisteredCaptureRejection> {
+        let mut arguments = crate::closure_inspection::IterativeJson(arguments);
+        let operation = self.capture_operation(operation, &arguments.0)?;
+        let (discovered, sources) = self.discover_enrolled(root)?;
+        self.seal_call(
+            root,
+            operation,
+            std::mem::take(&mut arguments.0),
+            contract,
+            discovered,
+            sources,
+        )
+    }
+
+    fn capture_operation(
+        &self,
+        operation: &str,
+        arguments: &Value,
+    ) -> Result<SemanticOperationDescription, ClosureInspectionError> {
         let mut ids = std::collections::BTreeSet::new();
         if self
             .catalog
@@ -665,48 +928,20 @@ impl<P: TrustedClosureProvider> RegisteredDocuments<P> {
             .iter()
             .find(|o| o.id == operation)
             .ok_or(ClosureInspectionError::InvalidCapture)?;
-        ClosureInspectionBinding::validate_arguments(operation, &arguments.0)?;
-        let sources = self
-            .entries
-            .iter()
-            .map(|(module, entry)| {
-                // document_mut can replace a whole Document; reject the stale mapping
-                // rather than silently equating its numeric DocumentId.
-                if entry.document.evaluation_source_id() != &entry.evaluation_id {
-                    return Err(ClosureInspectionError::SnapshotMismatch);
-                }
-                Ok(RegisteredSource {
-                    identity: format!("registered-{}", entry.registration),
-                    module: module.clone(),
-                    revision: entry.document.version().to_string(),
-                    text: entry.document.text().into(),
-                    language: entry.language.clone(),
-                    display: Some(entry.document.path().display().to_string()),
-                    origin: Some("registered-document".into()),
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let discovered = self
-            .discovery
-            .capture_with_diagnostics(root, sources.clone(), self.limits)
-            .map_err(|failure| {
-                let root = self
-                    .entries
-                    .get(root)
-                    .map(|entry| entry.evaluation_id.clone());
-                if failure.diagnostics.is_empty() {
-                    RegisteredCaptureRejection::Discovery {
-                        error: failure.error,
-                        root,
-                    }
-                } else {
-                    RegisteredCaptureRejection::Diagnostics {
-                        error: failure.error,
-                        root,
-                        diagnostics: failure.diagnostics,
-                    }
-                }
-            })?;
+        ClosureInspectionBinding::validate_arguments(operation, arguments)?;
+        Ok(operation.clone())
+    }
+
+    fn seal_call(
+        &self,
+        root: &str,
+        operation: SemanticOperationDescription,
+        arguments: Value,
+        contract: Option<InvocationContract>,
+        discovered: DiscoveredClosure,
+        sources: Vec<RegisteredSource>,
+    ) -> Result<RegisteredClosureBinding, RegisteredCaptureRejection> {
+        let mut arguments = crate::closure_inspection::IterativeJson(arguments);
         if discovered.root() != root
             || !discovered.limits().no_greater_than(self.limits)
             || discovered
@@ -767,7 +1002,7 @@ impl<P: TrustedClosureProvider> RegisteredDocuments<P> {
                 "identity_version":discovered.identity_version(), "compiler_sources":discovered.compiler_sources(),
                 "requested_limits": self.limits.value(), "invocation_contract": contract.as_ref().map(|c| json!({"schema_version":c.schema_version,"entry":c.entry,"output":c.output,"effect":c.effect}))}),
                 compilation_limits: limits.value(),
-                operation: operation.clone(),
+                operation,
                 execution_policy: json!({"host":self.policy,"dispatch":self.provider.identity(), "maximum":self.max_dispatches,
                 "prepared": self.artifact.descriptor().map(|d| json!({"abi":d.abi,"policy":d.execution_policy}))}),
                 artifact_identity: match self.artifact.descriptor() {
@@ -914,6 +1149,7 @@ impl<P: TrustedClosureProvider> RegisteredDocuments<P> {
             discovered: binding.discovered,
             retained: binding.retained,
             _artifact: binding.artifact,
+            freshness: binding.freshness,
         })
     }
 }
@@ -1034,6 +1270,7 @@ impl<T: Send + Sync + 'static, O> RegisteredDocuments<PreparedProvider<T, O>> {
                 dispatch,
             },
             discovery: registry.discovery,
+            workspace_sources: registry.workspace_sources,
             owner: registry.owner,
             entries: registry.entries,
             next_registration: registry.next_registration,
@@ -1048,6 +1285,7 @@ impl<T: Send + Sync + 'static, O> RegisteredDocuments<PreparedProvider<T, O>> {
     }
 }
 
+#[derive(Clone)]
 struct Freshness {
     catalog: Vec<SemanticOperationDescription>,
     policy: Value,
@@ -1063,15 +1301,46 @@ impl<P: TrustedClosureProvider> RegisteredDocuments<P> {
         &self,
         sealed: &RegisteredClosureBinding,
     ) -> Result<(), ClosureInspectionError> {
-        let f = &sealed.freshness;
-        if self.owner != sealed.generic.snapshot().owner
+        self.validate_evidence(
+            &sealed.generic,
+            &sealed.discovered,
+            &sealed.retained,
+            &sealed.artifact,
+            &sealed.freshness,
+        )
+    }
+
+    /// Passively compare completed historical evidence with the live registry.
+    /// This does not discover, authorize, dispatch, or grant execution authority.
+    pub fn validate_observation(
+        &self,
+        observation: &RegisteredClosureObservation,
+    ) -> Result<(), ClosureInspectionError> {
+        self.validate_evidence(
+            &observation.binding,
+            &observation.discovered,
+            &observation.retained,
+            &observation.artifact,
+            &observation.freshness,
+        )
+    }
+
+    fn validate_evidence(
+        &self,
+        binding: &ClosureInspectionBinding,
+        discovered: &DiscoveredClosure,
+        retained: &[SourceSnapshot],
+        artifact: &TrustedLoadedArtifact,
+        f: &Freshness,
+    ) -> Result<(), ClosureInspectionError> {
+        if self.owner != binding.snapshot().owner
             || self.catalog != f.catalog
             || self.policy != f.policy
             || self.limits != f.limits
             || self.artifact_generation != f.generation
             || self.max_dispatches != f.maximum
             || self.provider.identity() != f.provider
-            || !Arc::ptr_eq(&self.artifact.0, &sealed.artifact.0)
+            || !Arc::ptr_eq(&self.artifact.0, &artifact.0)
         {
             return Err(ClosureInspectionError::SnapshotMismatch);
         }
@@ -1084,13 +1353,24 @@ impl<P: TrustedClosureProvider> RegisteredDocuments<P> {
         {
             return Err(ClosureInspectionError::SnapshotMismatch);
         }
-        for (source, retained) in sealed.discovered.sources().iter().zip(&sealed.retained) {
+        for (source, retained) in discovered.sources().iter().zip(retained) {
             let e = self
                 .entries
                 .get(&source.module)
                 .ok_or(ClosureInspectionError::SnapshotMismatch)?;
-            let generic = sealed
-                .generic
+            if e.disk_only {
+                let (grant, _) = self
+                    .workspace_sources
+                    .as_ref()
+                    .ok_or(ClosureInspectionError::SnapshotMismatch)?;
+                let live = grant
+                    .read_document_source_bounded(e.document.path(), source.text.len())
+                    .map_err(|_| ClosureInspectionError::SnapshotMismatch)?;
+                if e.document.disk_revision() != Some(live.revision.as_str()) {
+                    return Err(ClosureInspectionError::SnapshotMismatch);
+                }
+            }
+            let generic = binding
                 .snapshot()
                 .sources
                 .iter()
@@ -1217,6 +1497,73 @@ impl RegisteredClosureBinding {
         &self.discovered
     }
 }
+/// Immutable evidence of a completed invocation, not an invocation or a grant.
+/// Clones retain historical source text and the original artifact pin. Freshness
+/// is a separate live-registry comparison, never inferred from the root alone.
+#[derive(Clone)]
+pub struct RegisteredClosureObservation {
+    binding: ClosureInspectionBinding,
+    discovered: DiscoveredClosure,
+    retained: Vec<SourceSnapshot>,
+    artifact: TrustedLoadedArtifact,
+    service: Option<ServiceInvocationEvidence>,
+    freshness: Freshness,
+}
+impl std::fmt::Debug for RegisteredClosureObservation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RegisteredClosureObservation")
+            .field("binding", &self.binding)
+            .field("service", &self.service)
+            .field("artifact_descriptor", &self.artifact.descriptor())
+            .finish_non_exhaustive()
+    }
+}
+impl RegisteredClosureObservation {
+    pub fn binding(&self) -> &ClosureInspectionBinding {
+        &self.binding
+    }
+    pub fn discovered(&self) -> &DiscoveredClosure {
+        &self.discovered
+    }
+    pub fn service(&self) -> Option<&ServiceInvocationEvidence> {
+        self.service.as_ref()
+    }
+    pub fn sources(&self) -> &[SourceSnapshot] {
+        &self.retained
+    }
+    /// Trusted host descriptor, not proof of authenticity or execution authority.
+    pub fn artifact_descriptor(&self) -> Option<&PreparedImplementationDescriptor> {
+        self.artifact.descriptor()
+    }
+    /// Whether both observations pin the exact same process-local artifact.
+    pub fn same_artifact(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.artifact.0, &other.artifact.0)
+    }
+    /// Resolve original compiler order rather than generic source ordering.
+    pub fn compiler_source(&self, index: usize) -> Option<&SourceSnapshot> {
+        let identity = self.discovered.compiler_sources().get(index)?;
+        let source_index = self
+            .discovered
+            .sources()
+            .iter()
+            .position(|source| &source.identity == identity)?;
+        self.retained.get(source_index)
+    }
+}
+impl SourceResolver for RegisteredClosureObservation {
+    fn resolve(
+        &self,
+        source: &SourceId,
+        revision: RevisionId,
+    ) -> Result<SourceSnapshot, SourceUnavailable> {
+        self.retained
+            .iter()
+            .find(|s| &s.source_id == source && s.revision_id == revision)
+            .cloned()
+            .ok_or(SourceUnavailable::UnknownOrExpired)
+    }
+}
+
 /// Passive exact historical sources and discovery results. Reading/projecting
 /// this value never recaptures, asks policy, or increments the dispatch counter.
 /// The binding/output cannot be replaced independently of discovery and sources.
@@ -1238,8 +1585,21 @@ pub struct RegisteredClosureResult<T = u64> {
     discovered: DiscoveredClosure,
     retained: Vec<SourceSnapshot>,
     _artifact: TrustedLoadedArtifact,
+    freshness: Freshness,
 }
 impl<T> RegisteredClosureResult<T> {
+    /// Retain passive completion evidence independently of the typed output.
+    pub fn observation(&self) -> RegisteredClosureObservation {
+        RegisteredClosureObservation {
+            binding: self.binding().clone(),
+            discovered: self.discovered.clone(),
+            retained: self.retained.clone(),
+            artifact: self._artifact.clone(),
+            service: self.service.clone(),
+            freshness: self.freshness.clone(),
+        }
+    }
+
     pub fn service(&self) -> Option<&ServiceInvocationEvidence> {
         self.service.as_ref()
     }
@@ -1884,6 +2244,123 @@ mod tests {
             })
         }
     }
+    #[cfg(unix)]
+    #[test]
+    fn registered_workspace_acquisition_rejects_missing_confined_and_changing_sources() {
+        use crate::test_support::TempWorkspace;
+        struct AcquireFixture(Option<std::path::PathBuf>);
+        impl Discovery for AcquireFixture {
+            fn capture(
+                &self,
+                root: &str,
+                sources: Vec<RegisteredSource>,
+                limits: Limits,
+            ) -> Result<DiscoveredClosure, DiscoveryError> {
+                StaticDiscovery.capture(root, sources, limits)
+            }
+            fn capture_acquiring(
+                &self,
+                root: &str,
+                limits: Limits,
+                acquire: &mut dyn FnMut(&str, usize) -> Option<RegisteredSource>,
+            ) -> Result<DiscoveredClosure, DiscoveryFailure> {
+                let sources = [
+                    acquire(root, limits.source_bytes),
+                    acquire("dep", limits.source_bytes),
+                ];
+                if let Some(path) = &self.0 {
+                    // Model a writer changing a dependency after its first read.
+                    std::fs::write(path, "changed after read").unwrap();
+                }
+                StaticDiscovery
+                    .capture(root, sources.into_iter().flatten().collect(), limits)
+                    .map_err(|error| DiscoveryFailure {
+                        error,
+                        diagnostics: vec![],
+                    })
+            }
+        }
+        struct ChangeDuringAuthorization(std::path::PathBuf);
+        impl HostSemanticPolicy for ChangeDuringAuthorization {
+            fn authorize(&mut self, _: HostAuthorizationRequest<'_>) -> bool {
+                std::fs::write(&self.0, "changed during authorization").unwrap();
+                true
+            }
+        }
+        let workspace = TempWorkspace::new("registered-acquisition");
+        let outside = TempWorkspace::new("outside-registered-acquisition");
+        workspace.write_file("root.sprout", "root");
+        outside.write_file("outside.sprout", "not authorized");
+        for case in 0..4 {
+            let mut app = crate::app::App::new(workspace.workspace()).unwrap();
+            assert!(
+                app.enable_registered_session(RegisteredDocuments::new(
+                    AcquireFixture((case == 2).then(|| workspace.root().join("dep.sprout"))),
+                    TrustedLoadedArtifact::default(),
+                    vec![operation()],
+                    json!({}),
+                    Limits::default(),
+                    1,
+                ))
+                .is_ok()
+            );
+            app.enable_workspace_module_acquisition(".").unwrap();
+            app.open_path("root.sprout").unwrap();
+            let dep = workspace.root().join("dep.sprout");
+            if case == 1 {
+                workspace.symlink(outside.root().join("outside.sprout"), "dep.sprout");
+            } else if case >= 2 {
+                std::fs::remove_file(&dep).unwrap();
+                workspace.write_file("dep.sprout", "initial");
+            }
+            let result = app
+                .prepare_registered_call("root", "inspect", json!({}), None)
+                .unwrap();
+            if case == 3 {
+                let result = app
+                    .invoke_registered_execution(
+                        result.unwrap(),
+                        &mut ChangeDuringAuthorization(dep),
+                    )
+                    .unwrap();
+                let Err(error) = result else {
+                    panic!("changed dependency reached dispatch")
+                };
+                assert_eq!(
+                    error.category(),
+                    crate::closure_inspection::RejectionCategory::SnapshotMismatch
+                );
+                assert!(error.authorization_requested());
+                assert_eq!(error.executed(), Some(false));
+            } else if case == 2 {
+                assert!(matches!(
+                    result,
+                    Err(RegisteredCaptureRejection::Inspection(
+                        ClosureInspectionError::SnapshotMismatch
+                    ))
+                ));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(RegisteredCaptureRejection::Discovery {
+                        error: DiscoveryError {
+                            phase: DiscoveryPhase::Acquisition,
+                            category: DiscoveryCategory::MissingSource
+                        },
+                        ..
+                    })
+                ));
+                assert!(
+                    app.registered_documents()
+                        .unwrap()
+                        .document("dep")
+                        .is_none()
+                );
+            }
+            assert_eq!(app.registered_documents().unwrap().dispatches(), 0);
+        }
+    }
+
     fn evidence() -> DiscoveryEvidence {
         let sources = ["dep", "root"]
             .into_iter()
@@ -1949,7 +2426,7 @@ mod tests {
         for mutation in 1..8 {
             let mut registry = fixture();
             let state = std::rc::Rc::new(std::cell::Cell::new(0));
-            registry.discovery = Box::new(ChangedDiscovery(state.clone()));
+            registry.discovery = Rc::new(ChangedDiscovery(state.clone()));
             let selected = registry.capture("root", "inspect").unwrap();
             let identity = selected.discovered.portable_identity().to_vec();
             state.set(mutation);
@@ -2007,7 +2484,7 @@ mod tests {
                 })
             }
         }
-        registry.discovery = Box::new(CompileFailure);
+        registry.discovery = Rc::new(CompileFailure);
         assert_eq!(
             registry
                 .capture_with_rejection("root", "inspect")
@@ -2086,7 +2563,7 @@ mod tests {
                 StaticDiscovery.capture(root, sources, limits)
             }
         }
-        registry.discovery = Box::new(RelabelDiscovery);
+        registry.discovery = Rc::new(RelabelDiscovery);
         assert_eq!(
             registry
                 .capture_with_rejection("root", "inspect")
@@ -2098,7 +2575,7 @@ mod tests {
         // The compatibility shorthand explicitly restores the caller's Sprout assertion.
         let dep = registry.remove("dep").unwrap();
         registry.register("dep".into(), dep).unwrap();
-        registry.discovery = Box::new(StaticDiscovery);
+        registry.discovery = Rc::new(StaticDiscovery);
         let fresh = registry.capture_with_rejection("root", "inspect").unwrap();
         assert!(
             fresh
@@ -2294,6 +2771,68 @@ mod tests {
         }
     }
     #[test]
+    fn completed_observation_is_passive_historical_and_checks_full_freshness() {
+        for mutation in 0..3 {
+            let mut registry = fixture();
+            let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            registry.discovery = Rc::new(PreparedCountDiscovery(calls.clone()));
+            let mut policy = Policy {
+                calls: 0,
+                allow: true,
+            };
+            let selection = registry.capture("root", "inspect").unwrap();
+            let result = registry.invoke(selection, &mut policy).unwrap();
+            let observation = result.observation();
+            let historical = observation.clone();
+            assert_eq!(observation.binding(), result.binding());
+            assert_eq!(observation.service(), result.service());
+            assert!(observation.same_artifact(&historical));
+            assert!(registry.validate_observation(&observation).is_ok());
+            let dep = observation.compiler_source(1).unwrap().clone();
+            let review = observation.binding().review().unwrap();
+            drop(result);
+            match mutation {
+                0 => registry
+                    .document_mut("dep")
+                    .unwrap()
+                    .apply_edit(TextEdit::insert(Position::new(0, 0), " "))
+                    .unwrap(),
+                1 => registry
+                    .set_artifact(TrustedLoadedArtifact::default())
+                    .unwrap(),
+                _ => {
+                    registry.remove("dep");
+                }
+            }
+            for _ in 0..3 {
+                assert!(matches!(
+                    registry.validate_observation(&observation),
+                    Err(ClosureInspectionError::SnapshotMismatch)
+                ));
+                assert_eq!(
+                    observation.binding().review().unwrap().as_str(),
+                    review.as_str()
+                );
+                assert_eq!(
+                    observation
+                        .resolve(&dep.source_id, dep.revision_id)
+                        .unwrap()
+                        .text,
+                    dep.text
+                );
+                assert_eq!(observation.sources().len(), 2);
+                assert!(observation.compiler_source(2).is_none());
+                assert!(!format!("{observation:?}").is_empty());
+            }
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert_eq!(policy.calls, 1);
+            assert_eq!(registry.dispatches(), 1);
+            drop(registry);
+            assert_eq!(historical.compiler_source(1).unwrap().text, dep.text);
+        }
+    }
+
+    #[test]
     fn real_documents_explicit_mapping_passive_history_denial_recovery_and_no_rerun() {
         struct CountDiscovery(std::rc::Rc<std::cell::Cell<usize>>);
         impl Discovery for CountDiscovery {
@@ -2309,7 +2848,7 @@ mod tests {
         }
         let mut registry = fixture();
         let discovery_calls = std::rc::Rc::new(std::cell::Cell::new(0));
-        registry.discovery = Box::new(CountDiscovery(discovery_calls.clone()));
+        registry.discovery = Rc::new(CountDiscovery(discovery_calls.clone()));
         let root = registry
             .document("root")
             .unwrap()
@@ -2704,7 +3243,7 @@ mod tests {
             let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let discovery_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let mut registry = prepared_fixture(calls.clone(), Err(failure));
-            registry.discovery = Box::new(PreparedCountDiscovery(discovery_calls.clone()));
+            registry.discovery = Rc::new(PreparedCountDiscovery(discovery_calls.clone()));
             let root = registry
                 .document("root")
                 .unwrap()
@@ -2779,7 +3318,7 @@ mod tests {
                 Document::new(DocumentId::new(8), "unrelated.sprout", "fn unused() {}"),
             )
             .unwrap();
-        registry.discovery = Box::new(PreparedCountDiscovery(discovery_calls.clone()));
+        registry.discovery = Rc::new(PreparedCountDiscovery(discovery_calls.clone()));
         let selection = registry.capture("root", "inspect").unwrap();
         assert_eq!(selection.discovered().sources().len(), 2);
         registry

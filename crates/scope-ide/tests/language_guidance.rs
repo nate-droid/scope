@@ -363,7 +363,7 @@ fn human_inspection_discovers_captures_and_invokes_the_same_guidance() {
             true
         })
         .unwrap();
-    assert_eq!(result.binding, binding);
+    assert_eq!(result.document_binding(), Some(&binding));
     assert_eq!(
         field(&result.result.value, "status").as_str(),
         Some("read_only")

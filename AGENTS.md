@@ -2,6 +2,9 @@
 
 Read [the verification contract](docs/verification.md) before choosing checks.
 
+- Choose the cheapest meaningful Direct check before editing; use Adjacent at
+  completion and Full only for the boundaries/milestones in the linked contract.
+  Reuse unchanged passing evidence under its no-repeat rule.
 - Start Fast: select `-p <affected-package>` and `--lib` or `--test <target>` before
   filtering test names. A filter alone does not avoid compiling unrelated targets.
   Verify a named test actually ran (zero matches is not success).

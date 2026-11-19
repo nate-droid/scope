@@ -6,6 +6,9 @@ use crate::{cli::ScriptPresentation, scratch::ScratchBuffers};
 pub enum WorkspaceAction {
     RunScript,
     NavigateResult,
+    InspectResult,
+    CompareResults,
+    ViewDetails,
     /// Publish the current App editor draft in memory, then review candidate evaluation.
     RunCurrentDocument,
     /// Publish the current App editor draft in memory, then check diagnostics.
@@ -54,6 +57,76 @@ pub struct ActionInfo {
     pub label: String,
     pub shortcut: Option<&'static str>,
     pub disabled_reason: Option<String>,
+}
+
+impl ActionInfo {
+    /// Intent text belongs to the existing action, not a second command registry.
+    pub fn description(&self) -> &str {
+        match &self.action {
+            WorkspaceAction::RunCurrentDocument => {
+                "Publish the current draft and use the existing candidate execution pathway."
+            }
+            WorkspaceAction::CheckCurrentDocument => {
+                "Publish and check the current source without running a candidate evaluation."
+            }
+            WorkspaceAction::FormatCurrentDocument => {
+                "Preview canonical formatting; review and explicitly accept edits."
+            }
+            WorkspaceAction::InspectDocument => {
+                "Review available document operations; evaluation requires confirmation."
+            }
+            WorkspaceAction::InspectResult => {
+                "Explore retained evidence without running again; opaque results offer Details."
+            }
+            WorkspaceAction::CompareResults => {
+                "Compare diff results: structural native JSON differences between baseline and latest; never executes."
+            }
+            WorkspaceAction::ViewDetails => {
+                "Read the full retained execution evidence, including its historical source identity."
+            }
+            WorkspaceAction::NavigateResult => {
+                "Jump to the current structured diagnostic or test location."
+            }
+            WorkspaceAction::RunScript => {
+                "Execute the selected committed Script using the existing Script runner."
+            }
+            WorkspaceAction::CheckDocumentDiagnostics => {
+                "Check the committed App document, not an unpublished editor draft."
+            }
+            WorkspaceAction::OpenAppDocument => {
+                "Enter a workspace-relative path to open an App document."
+            }
+            WorkspaceAction::OpenSuppliedDocuments => {
+                "Choose from the documents supplied by this workspace."
+            }
+            WorkspaceAction::SaveAppDocument => {
+                "Save the published App document to disk using workspace write access."
+            }
+            WorkspaceAction::FocusAppDocument => "Return to the App document editor.",
+            WorkspaceAction::NewScript => "Create and edit a new Script scratch buffer.",
+            WorkspaceAction::CommandPrompt(_) => {
+                "Prepare this existing command in the command bar; review before submitting."
+            }
+            WorkspaceAction::SelectDocument(_) => "Select this open scratch document.",
+            WorkspaceAction::Focus(_) | WorkspaceAction::PreviousPane => {
+                "Move keyboard focus without changing source text."
+            }
+            WorkspaceAction::CommitDraft => {
+                "Publish the editor draft in memory; do not save to disk."
+            }
+            WorkspaceAction::FocusDraft { .. } => "Return to a retained unpublished draft.",
+            WorkspaceAction::PreviousResult | WorkspaceAction::NextResult => {
+                "Select an earlier or later retained Script result without executing."
+            }
+            WorkspaceAction::ShowResult => "Show the selected retained direct Script output.",
+            WorkspaceAction::ShowTranscript => "Show the existing command transcript.",
+            WorkspaceAction::Help => "Show workspace controls and help.",
+            WorkspaceAction::MoreActions => {
+                "Browse the full action catalog; typing also searches all actions."
+            }
+            WorkspaceAction::Downstream { .. } => &self.label,
+        }
+    }
 }
 
 /// A bounded command shortcut. Registration grants no semantic authority.
@@ -307,11 +380,64 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
         Ok(evidence)
     }
 
+    fn has_registered_diagnostic(&self) -> bool {
+        #[cfg(feature = "experimental-sprout-closure")]
+        return self
+            .registered_execution
+            .as_ref()
+            .is_some_and(|r| r.has_diagnostic());
+        #[cfg(not(feature = "experimental-sprout-closure"))]
+        false
+    }
+
+    fn app_diagnostic_location(&self) -> Option<(&super::super::EditorDraftSnapshot, usize)> {
+        let diagnostics = self.app_diagnostics.as_ref()?;
+        if !self.app_editor || diagnostics.text != self.output_errors {
+            return None;
+        }
+        Some((diagnostics.pinned.as_ref()?, diagnostics.first_offset?))
+    }
+
     fn navigate_result(
         &mut self,
-        app: &AppState<P>,
+        app: &mut AppState<P>,
         sources: &ScratchBuffers,
     ) -> Result<(), String> {
+        #[cfg(feature = "experimental-sprout-closure")]
+        if let Some(registered) = self
+            .registered_execution
+            .as_ref()
+            .filter(|r| r.has_diagnostic())
+        {
+            let (path, cursor) = registered.diagnostic_target(app)?;
+            self.open_app_document(app, &path)?;
+            let pinned = self
+                .current_editor_draft(app, Some(sources))
+                .ok_or("no matching editor")?;
+            self.instances
+                .get_mut(&pinned.editor)
+                .ok_or("editor closed")?
+                .pane
+                .place_editor_cursor(&pinned, cursor)?;
+            return Ok(());
+        }
+        if let Some((pinned, cursor)) = self.app_diagnostic_location() {
+            let mut pinned = pinned.clone();
+            self.validate_editor_draft(app, Some(sources), &pinned)?;
+            self.instances
+                .get_mut(&pinned.editor)
+                .ok_or("editor closed")?
+                .pane
+                .place_editor_cursor(&pinned, cursor)?;
+            pinned.cursor = cursor;
+            pinned.anchor = None;
+            self.validate_editor_draft(app, Some(sources), &pinned)?;
+            if self.focused.as_ref() != Some(&pinned.editor) {
+                self.last_focused = self.focused.replace(pinned.editor.clone());
+            }
+            self.app_diagnostics.as_mut().unwrap().pinned = Some(pinned);
+            return Ok(());
+        }
         let evidence = if self.navigation_is_test {
             let (evidence, accepted, _) = self.latest_run_test.as_ref().ok_or("no test result")?;
             if !accepted {
@@ -592,25 +718,70 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
             "result.navigate".into(),
             "Navigate result (if current)".into(),
             None,
-            if (if self.navigation_is_test {
-                self.run_test_evidence()
-            } else {
-                self.check_evidence()
-            })
-            .and_then(|e| e.navigation())
-            .is_some()
+            if self.has_registered_diagnostic()
+                || self.app_diagnostic_location().is_some()
+                || (if self.navigation_is_test {
+                    self.run_test_evidence()
+                } else {
+                    self.check_evidence()
+                })
+                .and_then(|e| e.navigation())
+                .is_some()
             {
                 None
             } else {
                 Some("no structured result location".into())
             },
         );
+        add(
+            WorkspaceAction::CompareResults,
+            "result.compare".into(),
+            "Compare Results".into(),
+            None,
+            self.semantic_inspection
+                .as_ref()
+                .or(self.retained_inspection.as_ref())
+                .map_or(
+                    Some("Compare requires two completed inspection results"),
+                    |inspection| inspection.comparison_disabled(),
+                )
+                .map(str::to_owned),
+        );
+        for (action, id, label) in [
+            (
+                WorkspaceAction::InspectResult,
+                "result.inspect",
+                "Inspect Result",
+            ),
+            (
+                WorkspaceAction::ViewDetails,
+                "result.details",
+                "View Details",
+            ),
+        ] {
+            add(
+                action.clone(),
+                id.into(),
+                label.into(),
+                Some(if action == WorkspaceAction::InspectResult {
+                    "x (result modal)"
+                } else {
+                    "d (result modal)"
+                }),
+                self.semantic_inspection
+                    .as_ref()
+                    .or(self.retained_inspection.as_ref())
+                    .and_then(|inspection| inspection.result())
+                    .is_none()
+                    .then(|| "no retained inspection result".into()),
+            );
+        }
         for (action, id, label, shortcut) in [
             (
                 WorkspaceAction::RunCurrentDocument,
                 "document.run-current",
                 "Run",
-                Some("F5"),
+                Some("Ctrl-R / F5"),
             ),
             (
                 WorkspaceAction::CheckCurrentDocument,
@@ -681,7 +852,7 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
         add(
             WorkspaceAction::InspectDocument,
             "document.evaluate".into(),
-            "Inspect".into(),
+            "Evaluate / inspect document".into(),
             None,
             if self.action_registered_available {
                 None
@@ -709,7 +880,7 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
             WorkspaceAction::OpenAppDocument,
             "document.open-app".into(),
             "Open".into(),
-            None,
+            Some("Ctrl-O"),
             self.draft_blocker(),
         );
         add(
@@ -888,7 +1059,7 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
             WorkspaceAction::CommitDraft,
             "editor.commit".into(),
             "Publish editor draft to document (in memory; not Save)".into(),
-            Some("Ctrl-S"),
+            None,
             (!editable).then(|| "focus an editable pane first".into()),
         );
         for (pane, instance) in &self.instances {
@@ -993,6 +1164,46 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
         items
     }
 
+    pub(super) fn publish_focused_app_document(
+        &mut self,
+        app: &mut AppState<P>,
+    ) -> Result<(), String> {
+        let document = app.open_document().ok_or("no App document is open")?;
+        let identity = document.id();
+        let focused = self
+            .focused
+            .as_ref()
+            .ok_or("focus the App document editor first")?;
+        let instance = self
+            .instances
+            .get_mut(focused)
+            .ok_or("focused editor is unavailable")?;
+        if !self.app_editor || !instance.editable {
+            return Err("focus the App document editor first; no scratch fallback".into());
+        }
+        // Reuse the editor's exact-baseline publication path, not a text copy.
+        let handled = instance.pane.handle_source_event(
+            Event::Key(KeyEvent::new(
+                KeyCode::Char('s'),
+                event::KeyModifiers::CONTROL,
+            )),
+            &mut super::super::ScratchEditAccess::app(app.open_document_mut().unwrap()),
+        );
+        if !handled {
+            return Err("editor did not handle draft publication".into());
+        }
+        if app
+            .open_document()
+            .is_none_or(|document| document.id() != identity)
+        {
+            return Err("App document changed during publication".into());
+        }
+        if let Some(reason) = self.draft_blocker() {
+            return Err(reason);
+        }
+        Ok(())
+    }
+
     /// Rechecks availability at invocation. No shell parser, target or session is involved.
     pub fn invoke_action(
         &mut self,
@@ -1064,6 +1275,24 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
         }
         match action {
             WorkspaceAction::NavigateResult => self.navigate_result(app, sources)?,
+            WorkspaceAction::InspectResult
+            | WorkspaceAction::ViewDetails
+            | WorkspaceAction::CompareResults => {
+                let mut inspection = self
+                    .semantic_inspection
+                    .take()
+                    .or_else(|| self.retained_inspection.take())
+                    .ok_or("no retained inspection result")?
+                    .unrestricted();
+                if action == WorkspaceAction::CompareResults {
+                    inspection.open_comparison();
+                } else if action == WorkspaceAction::ViewDetails {
+                    inspection.open_details();
+                } else {
+                    inspection.open_explorer();
+                }
+                self.semantic_inspection = Some(inspection);
+            }
             WorkspaceAction::FormatCurrentDocument => {
                 let pinned = match self.editor_draft_outcome(app, Some(sources)) {
                     super::super::EditorDraftOutcome::Available(draft) => draft,
@@ -1088,52 +1317,31 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
                 });
             }
             WorkspaceAction::RunCurrentDocument | WorkspaceAction::CheckCurrentDocument => {
-                let document = app.open_document().ok_or("no App document is open")?;
-                let identity = document.id();
-                let focused = self
-                    .focused
-                    .as_ref()
-                    .ok_or("focus the App document editor first")?;
-                let instance = self
-                    .instances
-                    .get_mut(focused)
-                    .ok_or("focused editor is unavailable")?;
-                if !self.app_editor || !instance.editable {
-                    return Err("focus the App document editor first; no scratch fallback".into());
-                }
-                // Reuse the editor's exact-baseline publication path, not a text copy.
-                let handled = instance.pane.handle_source_event(
-                    Event::Key(KeyEvent::new(
-                        KeyCode::Char('s'),
-                        event::KeyModifiers::CONTROL,
-                    )),
-                    &mut super::super::ScratchEditAccess::app(app.open_document_mut().unwrap()),
-                );
-                if !handled {
-                    return Err("editor did not handle draft publication".into());
-                }
-                if app
-                    .open_document()
-                    .is_none_or(|document| document.id() != identity)
-                {
-                    return Err("App document changed during publication".into());
-                }
-                if let Some(reason) = self.draft_blocker() {
-                    return Err(reason);
-                }
+                self.publish_focused_app_document(app)?;
                 #[cfg(feature = "experimental-sprout-closure")]
                 if self.registered_execution_available(app) {
                     self.output_errors.clear();
                     self.output_scroll = 0;
-                    self.registered_execution
+                    let completed = self
+                        .registered_execution
                         .as_mut()
                         .unwrap()
                         .start(app, action == WorkspaceAction::RunCurrentDocument);
+                    if completed {
+                        self.finish_registered_run();
+                    }
                     return Ok(());
                 }
                 if action == WorkspaceAction::RunCurrentDocument {
                     let mut inspection =
                         super::super::semantic::SemanticInspection::candidate(app)?;
+                    if let Some(previous) = self
+                        .semantic_inspection
+                        .take()
+                        .or_else(|| self.retained_inspection.take())
+                    {
+                        inspection.inherit_completed(previous);
+                    }
                     inspection.run(app);
                     self.retained_inspection = Some(inspection);
                 } else {
@@ -1155,7 +1363,8 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
             WorkspaceAction::CheckDocumentDiagnostics => {
                 let document = app.open_document().ok_or("no App document is open")?;
                 let mut diagnostics = Vec::new();
-                print_diagnostics(app, &mut diagnostics).map_err(|e| e.to_string())?;
+                let first_offset =
+                    print_diagnostics(app, &mut diagnostics).map_err(|e| e.to_string())?;
                 self.show_result = false;
                 self.output_scroll = 0;
                 let diagnostics = String::from_utf8_lossy(&diagnostics);
@@ -1169,7 +1378,11 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
                     let pinned = self
                         .current_editor_draft(app, Some(sources))
                         .filter(|draft| draft.text == draft.baseline.source.text.as_ref());
-                    self.app_diagnostics = Some((self.output_errors.clone(), pinned));
+                    self.app_diagnostics = Some(super::AppDiagnostics {
+                        text: self.output_errors.clone(),
+                        pinned,
+                        first_offset,
+                    });
                 } else {
                     self.output_errors.push_str(&format!(
                         "Check document diagnostics — App {} — revision {}\n{}",
@@ -1364,7 +1577,7 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
             }
             WorkspaceAction::Help => {
                 self.show_result = false;
-                self.output_errors.push_str("Actions: F1 search, Up/Down select, Enter invoke, Esc cancel.\nNew Script scratch explicitly changes selection. Ctrl-S publishes in memory only; use the explicit Save action to write to disk. Ctrl-R/F5 publishes the current App editor draft and authorizes one exact candidate evaluation into output. Evaluate / inspect retains explicit review and confirmation. Ctrl-T (Alt-Enter / Shift-F5 aliases) publishes and checks diagnostics without moving editor focus. Neither App Run nor App Check saves to disk or falls back to scratch. In a configured scratch workbench, Check invokes the read-only language checker on the current editor draft; it never publishes drafts. Ctrl-S explicitly publishes scratch drafts. Run selected Script remains an explicit separate action.\nOutput: F6 focus, Up/Down or PageUp/PageDown scroll, Alt-Left/Right history; F3 returns to previous pane.\nF4 commands and F2 shell remain available. Results indicate interpreter completion only, not semantic approval.\nDirty drafts (including parked/unrelated drafts) conservatively block runs. F1 lists blockers. Run/Check explicitly publish the focused App draft; unrelated drafts still block. No implicit save or native authority.\n");
+                self.output_errors.push_str("Actions: F1 search, Up/Down select, Enter invoke, Esc cancel.\nNew Script scratch explicitly changes selection. In the TUI, Ctrl-S publishes in memory only; use the explicit Save action to write to disk. Cmd/Ctrl-S saves in writable Desktop App editors; in read-only and scratch editors it only publishes. Ctrl-R/F5 publishes the current App editor draft and authorizes one exact candidate evaluation into output. Evaluate / inspect retains explicit review and confirmation. Ctrl-T (Alt-Enter / Shift-F5 aliases) publishes and checks diagnostics without moving editor focus. Neither App Run nor App Check saves to disk or falls back to scratch. In a configured scratch workbench, Check invokes the read-only language checker on the current editor draft; it never publishes drafts. Ctrl-S explicitly publishes scratch drafts. Run selected Script remains an explicit separate action.\nOutput: F6 focus, Up/Down or PageUp/PageDown scroll, Alt-Left/Right history; F3 returns to previous pane.\nF4 commands and F2 shell remain available. Results indicate interpreter completion only, not semantic approval.\nDirty drafts (including parked/unrelated drafts) conservatively block runs. F1 lists blockers. Run/Check explicitly publish the focused App draft; unrelated drafts still block. No implicit save or native authority.\n");
             }
         }
         Ok(())
@@ -1530,7 +1743,7 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
             .into_iter()
             .filter(|item| {
                 if !query.is_empty() {
-                    return format!("{} {}", item.id, item.label)
+                    return format!("{} {} {}", item.id, item.label, item.description())
                         .to_lowercase()
                         .contains(&query);
                 }
@@ -1538,6 +1751,9 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
                     return item.action != WorkspaceAction::MoreActions;
                 }
                 match item.action {
+                    WorkspaceAction::InspectResult
+                    | WorkspaceAction::ViewDetails
+                    | WorkspaceAction::CompareResults => item.disabled_reason.is_none(),
                     WorkspaceAction::FormatCurrentDocument => item.disabled_reason.is_none(),
                     WorkspaceAction::RunCurrentDocument => {
                         self.app_editor && self.action_candidate_available
@@ -1563,6 +1779,18 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
                 }
             })
             .collect();
+        if !query.is_empty() {
+            // Stable sorting keeps catalog order for equally relevant matches.
+            items.sort_by_key(|item| {
+                if item.label.to_lowercase().contains(&query) {
+                    0
+                } else if item.id.to_lowercase().contains(&query) {
+                    1
+                } else {
+                    2
+                }
+            });
+        }
         if query.is_empty() && !advanced {
             for item in &mut items {
                 if item.action == WorkspaceAction::RunScript {
@@ -1571,12 +1799,19 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
                 }
             }
             items.sort_by_key(|item| match item.action {
-                WorkspaceAction::RunCurrentDocument | WorkspaceAction::RunScript => 0,
-                WorkspaceAction::CheckCurrentDocument => 1,
-                WorkspaceAction::OpenAppDocument => 2,
-                WorkspaceAction::SaveAppDocument => 3,
-                WorkspaceAction::InspectDocument => 4,
-                _ => 5,
+                WorkspaceAction::InspectResult | WorkspaceAction::ViewDetails
+                    if self.focused.as_deref() == Some("output") =>
+                {
+                    0
+                }
+                WorkspaceAction::RunCurrentDocument | WorkspaceAction::RunScript => 1,
+                WorkspaceAction::CheckCurrentDocument => 2,
+                WorkspaceAction::FormatCurrentDocument => 3,
+                WorkspaceAction::OpenAppDocument => 4,
+                WorkspaceAction::SaveAppDocument => 5,
+                WorkspaceAction::InspectResult | WorkspaceAction::ViewDetails => 6,
+                WorkspaceAction::InspectDocument => 7,
+                _ => 8,
             });
         }
         items
@@ -1599,6 +1834,12 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
                 KeyCode::Down => {
                     picker.selected = (picker.selected + 1).min(items.len().saturating_sub(1))
                 }
+                KeyCode::Char('u') if key.modifiers == event::KeyModifiers::CONTROL => {
+                    picker.query.clear();
+                    picker.selected = 0;
+                }
+                KeyCode::Home => picker.selected = 0,
+                KeyCode::End => picker.selected = items.len().saturating_sub(1),
                 KeyCode::Backspace => {
                     picker.query.pop();
                     picker.selected = 0;
@@ -1638,14 +1879,15 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
         let items = self.picker_items(sources, supported);
         let area = frame.area();
         frame.render_widget(ratatui::widgets::Clear, area);
-        let height = area.height.saturating_sub(2).max(1) as usize;
+        let height = (area.height.saturating_sub(2) / 3).max(1) as usize;
         let start = picker.selected.saturating_sub(height - 1);
-        let text = items
+        let mut text = items
             .iter()
             .enumerate()
             .skip(start)
-            .map(|(n, i)| {
-                format!(
+            .take(height)
+            .flat_map(|(n, i)| {
+                let heading = format!(
                     "{} {} {}{}",
                     if n == picker.selected { ">" } else { " " },
                     i.label,
@@ -1654,13 +1896,34 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
                         .as_ref()
                         .map(|r| format!(" — disabled: {r}"))
                         .unwrap_or_default()
-                )
+                );
+                let style = if n == picker.selected {
+                    ratatui::style::Style::default().add_modifier(
+                        ratatui::style::Modifier::REVERSED | ratatui::style::Modifier::BOLD,
+                    )
+                } else {
+                    ratatui::style::Style::default()
+                };
+                [
+                    ratatui::text::Line::styled(heading, style),
+                    ratatui::text::Line::raw(format!("  {}", i.description())),
+                    ratatui::text::Line::raw(""),
+                ]
             })
-            .collect::<Vec<_>>()
-            .join("\n");
+            .collect::<Vec<_>>();
+        if items.is_empty() {
+            text = vec![
+                ratatui::text::Line::raw(
+                    "No matching actions. Try Check, Format, Run, Inspect or Details.",
+                ),
+                ratatui::text::Line::raw(
+                    "Backspace edits · Ctrl-U clears · Esc returns to your pane.",
+                ),
+            ];
+        }
         frame.render_widget(
             Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(format!(
-                "{}: {} • type to search all • Esc cancel",
+                "{}: {} • type to search all • ↑/↓ select • Enter invoke • Ctrl-U clear • Esc cancel",
                 if picker.advanced {
                     "More actions"
                 } else {
@@ -1678,10 +1941,17 @@ impl<P: TrustedClosureProvider> WorkspaceTui<P> {
 fn print_diagnostics<P: TrustedClosureProvider>(
     app: &AppState<P>,
     output: &mut impl std::io::Write,
-) -> std::io::Result<()> {
+) -> std::io::Result<Option<usize>> {
     match app.open_diagnostics() {
-        Ok(diagnostics) if diagnostics.is_empty() => writeln!(output, "diagnostics: clean"),
+        Ok(diagnostics) if diagnostics.is_empty() => {
+            writeln!(output, "diagnostics: clean")?;
+            Ok(None)
+        }
         Ok(diagnostics) => {
+            let first_offset = app.open_document().and_then(|document| {
+                scope_language::LineIndex::new(document.text())
+                    .byte_offset(diagnostics.first()?.range.start)
+            });
             for diagnostic in diagnostics {
                 let label = match (&diagnostic.source, &diagnostic.code) {
                     (Some(source), Some(code)) => {
@@ -1701,8 +1971,11 @@ fn print_diagnostics<P: TrustedClosureProvider>(
                     diagnostic.message
                 )?;
             }
-            Ok(())
+            Ok(first_offset)
         }
-        Err(error) => writeln!(output, "error: {error}"),
+        Err(error) => {
+            writeln!(output, "error: {error}")?;
+            Ok(None)
+        }
     }
 }

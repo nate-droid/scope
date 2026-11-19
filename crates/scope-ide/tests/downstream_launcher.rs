@@ -180,7 +180,11 @@ impl LanguageService for H4Language {
         self.executions
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(scope_language::SemanticOperationResult::Evaluated {
-            value: serde_json::json!({"value": 16, "evidence": "H4_EXACT_SOURCE_OK"}),
+            value: serde_json::json!({
+                "value": 16,
+                "evidence": "H4_EXACT_SOURCE_OK",
+                "nested": {"items": [16, "leaf"]},
+            }),
             rationale: "Captured source only; no disk write".into(),
             evaluation: scope_language::SemanticEvaluation {
                 outcome: scope_language::SemanticOutcome::Satisfied,

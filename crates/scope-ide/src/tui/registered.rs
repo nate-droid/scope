@@ -21,15 +21,22 @@ pub struct RegisteredOutput {
     pub details: String,
 }
 
+type ReviewRequirement = Box<dyn Fn(&ClosureInspectionBinding) -> Option<String>>;
 type Formatter<O> = Box<dyn Fn(&RegisteredClosureResult<O>) -> RegisteredOutput>;
+type NativeFeedback<O> = Box<
+    dyn Fn(&RegisteredClosureResult<O>) -> Result<scope_language::SemanticOperationResult, String>,
+>;
 
 /// Install one registered operation behind the ordinary Run and Check actions.
-/// Installation grants no authority. Run requires a fresh whole-closure review;
+/// Installation grants no authority. Run requires explicit review by default;
 /// Check only discovers/captures the closure and never consults the policy.
 pub struct RegisteredExecution<O> {
     operation: String,
     format: Formatter<O>,
+    native_feedback: Option<NativeFeedback<O>>,
+    invocation_contract: Option<crate::registered_document_closure::InvocationContract>,
     policy: Option<Box<dyn HostSemanticPolicy>>,
+    review_requirement: Option<ReviewRequirement>,
 }
 impl<O> RegisteredExecution<O> {
     /// The formatter runs once after invocation returns a typed result, never on render.
@@ -42,13 +49,55 @@ impl<O> RegisteredExecution<O> {
         Self {
             operation: operation.into(),
             format: Box::new(format),
+            native_feedback: None,
+            invocation_contract: None,
             policy: None,
+            review_requirement: None,
         }
+    }
+
+    /// Project native feedback once from the authentic completion, never from
+    /// separately supplied values/evidence or during passive navigation.
+    pub fn with_native_feedback(
+        mut self,
+        project: impl Fn(
+            &RegisteredClosureResult<O>,
+        ) -> Result<scope_language::SemanticOperationResult, String>
+        + 'static,
+    ) -> Self {
+        self.native_feedback = Some(Box::new(project));
+        self
+    }
+
+    /// Bind the producer's explicit zero-argument invocation contract to Run/Check.
+    /// The complete contract is reviewed and authorized with the captured sources.
+    pub fn with_invocation_contract(
+        mut self,
+        contract: crate::registered_document_closure::InvocationContract,
+    ) -> Self {
+        self.invocation_contract = Some(contract);
+        self
     }
 
     /// Additional host restrictions, conjunctive with exact single-use UI confirmation.
     pub fn with_policy(mut self, policy: impl HostSemanticPolicy + 'static) -> Self {
         self.policy = Some(Box::new(policy));
+        self.review_requirement = None;
+        self
+    }
+
+    /// Opt in to running within existing authority without confirmation.
+    /// `review_requirement` returns a human-readable reason when the sealed call
+    /// needs human review, or `None` when policy alone may decide. It grants no
+    /// authority: the supplied policy must authorize the exact call in either
+    /// case. A policy denial never falls back to confirmation.
+    pub fn with_policy_authorized_run(
+        mut self,
+        policy: impl HostSemanticPolicy + 'static,
+        review_requirement: impl Fn(&ClosureInspectionBinding) -> Option<String> + 'static,
+    ) -> Self {
+        self.policy = Some(Box::new(policy));
+        self.review_requirement = Some(Box::new(review_requirement));
         self
     }
 
@@ -83,10 +132,17 @@ struct Retained<O> {
 enum Latest {
     #[default]
     Empty,
-    Review,
+    Review(String),
     Check,
     Result,
     Message(String),
+}
+
+struct DiagnosticLocation {
+    module: String,
+    source: scope_language::SourceId,
+    version: u64,
+    cursor: usize,
 }
 
 pub(super) struct RegisteredInspection<O> {
@@ -97,6 +153,9 @@ pub(super) struct RegisteredInspection<O> {
     latest: Latest,
     open: bool,
     scroll: u16,
+    review_details: bool,
+    completed_observation: Option<crate::semantic_inspection::InspectionResult>,
+    diagnostic: Option<DiagnosticLocation>,
 }
 impl<O> RegisteredInspection<O> {
     pub(super) fn new(config: RegisteredExecution<O>) -> Self {
@@ -108,7 +167,16 @@ impl<O> RegisteredInspection<O> {
             latest: Latest::Empty,
             open: false,
             scroll: 0,
+            review_details: false,
+            completed_observation: None,
+            diagnostic: None,
         }
+    }
+
+    pub(super) fn take_completed_observation(
+        &mut self,
+    ) -> Option<crate::semantic_inspection::InspectionResult> {
+        self.completed_observation.take()
     }
 
     pub(super) fn is_open(&self) -> bool {
@@ -118,19 +186,63 @@ impl<O> RegisteredInspection<O> {
         self.retained.as_ref().map(|retained| &retained.result)
     }
 
-    fn capture<P: TrustedClosureProvider<Output = O>>(
+    pub(super) fn has_diagnostic(&self) -> bool {
+        self.diagnostic.is_some()
+    }
+
+    pub(super) fn diagnostic_target<P: TrustedClosureProvider<Output = O>>(
         &self,
         app: &AppState<P>,
+    ) -> Result<(String, usize), String> {
+        let target = self
+            .diagnostic
+            .as_ref()
+            .ok_or("no registered result location")?;
+        let document = app
+            .registered_documents()
+            .and_then(|documents| documents.document(&target.module))
+            .filter(|document| {
+                document.evaluation_source_id() == &target.source
+                    && document.version() == target.version
+            })
+            .ok_or("registered diagnostic is historical; Check again")?;
+        Ok((document.path().display().to_string(), target.cursor))
+    }
+
+    fn capture<P: TrustedClosureProvider<Output = O>>(
+        &mut self,
+        app: &mut AppState<P>,
     ) -> Result<Captured, String> {
         let root = app
             .selected_registered_module()
-            .ok_or("select an enrolled App document")?;
+            .ok_or("select a registered App document")?
+            .to_owned();
+        let selection = app
+            .prepare_registered_call(
+                &root,
+                &self.config.operation,
+                serde_json::json!({}),
+                self.config.invocation_contract.clone(),
+            )
+            .ok_or("registered session is disabled")?;
         let documents = app
             .registered_documents()
             .ok_or("registered session is disabled")?;
-        let selection = documents
-            .capture_with_rejection(root, &self.config.operation)
-            .map_err(|error| capture_error(app, error))?;
+        let selection = selection.map_err(|error| {
+            if let RegisteredCaptureRejection::Diagnostics { diagnostics, .. } = &error {
+                self.diagnostic = diagnostics.iter().take(8).find_map(|diagnostic| {
+                    let document = documents.document(&diagnostic.module)?;
+                    document.text().get(diagnostic.start..diagnostic.end)?;
+                    Some(DiagnosticLocation {
+                        module: diagnostic.module.clone(),
+                        source: document.evaluation_source_id().clone(),
+                        version: document.version(),
+                        cursor: diagnostic.start,
+                    })
+                });
+            }
+            capture_error(app, error)
+        })?;
         let identities = selection
             .discovered()
             .sources()
@@ -154,19 +266,28 @@ impl<O> RegisteredInspection<O> {
     /// Called only after the existing App editor publication and global draft checks.
     pub(super) fn start<P: TrustedClosureProvider<Output = O>>(
         &mut self,
-        app: &AppState<P>,
+        app: &mut AppState<P>,
         run: bool,
-    ) {
+    ) -> bool {
         self.pending = None;
+        self.diagnostic = None;
         self.scroll = 0;
+        self.review_details = false;
         self.open = false;
         match self.capture(app) {
             Ok(captured) if run => {
                 // Review construction is bounded and validated before opening confirmation.
                 match captured.selection.binding().review() {
                     Ok(_) => {
+                        let reason = match &self.config.review_requirement {
+                            Some(requirement) => requirement(captured.selection.binding()),
+                            None => Some("This launcher requires approval for every Run.".into()),
+                        };
+                        let Some(reason) = reason else {
+                            return self.dispatch(app, captured, None);
+                        };
                         self.pending = Some(captured);
-                        self.latest = Latest::Review;
+                        self.latest = Latest::Review(diagnostic_line(&reason, 1024));
                         self.open = true;
                     }
                     Err(error) => {
@@ -180,6 +301,7 @@ impl<O> RegisteredInspection<O> {
             }
             Err(error) => self.latest = Latest::Message(error),
         }
+        false
     }
 
     pub(super) fn inspect(&mut self) {
@@ -213,70 +335,85 @@ impl<O> RegisteredInspection<O> {
             KeyCode::PageUp => self.scroll = self.scroll.saturating_sub(10),
             KeyCode::PageDown => self.scroll = self.scroll.saturating_add(10),
             KeyCode::Home => self.scroll = 0,
+            KeyCode::Char('d') if self.pending.is_some() => {
+                self.review_details = !self.review_details;
+                self.scroll = 0;
+            }
             KeyCode::Enter if self.pending.is_some() => {
                 let captured = self.pending.take().expect("pending selection");
-                if let Some(reason) = draft_blocker {
-                    self.latest = Latest::Message(format!("Run rejected: {reason}; review again"));
-                    return false;
-                }
-                // Selection changes must never authorize the formerly selected root.
-                if sources_changed(app, captured.selection.binding(), &captured.identities) {
-                    self.latest = Latest::Message(
-                        "Run rejected: STALE closure sources; Run again to review".into(),
-                    );
-                    return false;
-                }
-                let expected = captured.selection.binding().clone();
-                let review = match expected.review() {
-                    Ok(review) => review,
-                    Err(error) => {
-                        self.latest = Latest::Message(format!("Run rejected: {error:?}"));
-                        return false;
-                    }
-                };
-                let mut policy = ConfirmedReview {
-                    expected: &expected,
-                    review: review.as_str(),
-                    used: false,
-                    host: self.config.policy.as_deref_mut(),
-                };
-                // Consume exactly the displayed selection. No recapture or automatic retry.
-                let completed = match app
-                    .invoke_registered_execution(captured.selection, &mut policy)
-                {
-                    Some(Ok(result)) => {
-                        let output = (self.config.format)(&result);
-                        self.retained = Some(Retained {
-                            result,
-                            identities: captured.identities,
-                            output: RegisteredOutput {
-                                summary: bounded(&output.summary, 4096),
-                                details: bounded(&output.details, 65536),
-                            },
-                        });
-                        self.latest = Latest::Result;
-                        true
-                    }
-                    Some(Err(error)) => {
-                        self.latest = Latest::Message(format!("Run rejected: {error:?}"));
-                        false
-                    }
-                    None => {
-                        self.latest =
-                            Latest::Message("Run rejected: registered session is disabled".into());
-                        false
-                    }
-                };
-                self.scroll = 0;
-                if completed {
-                    self.open = false;
-                }
-                return completed;
+                return self.dispatch(app, captured, draft_blocker);
             }
             // Enter after consumption is deliberately passive: no recapture, approval or replay.
             _ => {}
         }
         false
+    }
+
+    fn dispatch<P: TrustedClosureProvider<Output = O>>(
+        &mut self,
+        app: &mut AppState<P>,
+        captured: Captured,
+        draft_blocker: Option<String>,
+    ) -> bool {
+        if let Some(reason) = draft_blocker {
+            self.latest = Latest::Message(format!("Run rejected: {reason}; review again"));
+            return false;
+        }
+        // Selection changes must never authorize the formerly selected root.
+        if sources_changed(app, captured.selection.binding(), &captured.identities) {
+            self.latest =
+                Latest::Message("Run rejected: STALE closure sources; Run again to review".into());
+            return false;
+        }
+        let expected = captured.selection.binding().clone();
+        let review = match expected.review() {
+            Ok(review) => review,
+            Err(error) => {
+                self.latest = Latest::Message(format!("Run rejected: {error:?}"));
+                return false;
+            }
+        };
+        let mut policy = ConfirmedReview {
+            expected: &expected,
+            review: review.as_str(),
+            used: false,
+            host: self.config.policy.as_deref_mut(),
+        };
+        // Consume exactly the displayed selection. No recapture or automatic retry.
+        let completed = match app.invoke_registered_execution(captured.selection, &mut policy) {
+            Some(Ok(result)) => {
+                let output = (self.config.format)(&result);
+                self.completed_observation = self.config.native_feedback.as_ref().map(|project| {
+                    crate::semantic_inspection::InspectionResult::from_registered_completion(
+                        &result, project,
+                    )
+                });
+                self.retained = Some(Retained {
+                    result,
+                    identities: captured.identities,
+                    output: RegisteredOutput {
+                        summary: bounded(&output.summary, 4096),
+                        details: bounded(&output.details, 65536),
+                    },
+                });
+                self.latest = Latest::Result;
+                true
+            }
+            Some(Err(error)) => {
+                self.latest = Latest::Message(format!("Run rejected: {error:?}"));
+                false
+            }
+            None => {
+                self.latest =
+                    Latest::Message("Run rejected: registered session is disabled".into());
+                false
+            }
+        };
+        self.scroll = 0;
+        if completed {
+            self.open = false;
+        }
+        completed
     }
 
     pub(super) fn concise<P: TrustedClosureProvider<Output = O>>(
@@ -286,8 +423,8 @@ impl<O> RegisteredInspection<O> {
     ) -> Option<String> {
         let (text, binding) = match &self.latest {
             Latest::Empty => return None,
-            Latest::Review => (
-                "Review registered closure; Enter authorizes this exact invocation".into(),
+            Latest::Review(reason) => (
+                format!("Approval required: {reason}"),
                 self.pending
                     .as_ref()
                     .map(|p| (p.selection.binding(), p.identities.as_slice())),
@@ -343,8 +480,17 @@ impl<O> RegisteredInspection<O> {
             .concise(app, drafts)
             .unwrap_or_else(|| "No registered evidence. Use Check or Run.".into());
         if let Some(pending) = &self.pending {
-            text.push_str("\n\nEnter: authorize and invoke once · Esc: deny/cancel\nComplete closure review:\n");
-            append_review(&mut text, pending.selection.binding());
+            let snapshot = pending.selection.binding().snapshot();
+            text.push_str(&format!("\n\nOperation: {}", snapshot.operation.id));
+            if let Some(entry) =
+                snapshot.compilation_options["invocation_contract"]["entry"].as_str()
+            {
+                text.push_str(&format!(" · Entry: {}", diagnostic_line(entry, 256)));
+            }
+            text.push_str("\n\nEnter: approve once · Esc: cancel · d: toggle invocation details\n");
+            if self.review_details {
+                append_review(&mut text, pending.selection.binding());
+            }
         } else {
             text.push_str("\n\nHistorical evidence only. Source currentness is not authorization; policy/artifact freshness is rechecked on Run.\nEsc: close · Up/Down/PageUp/PageDown: scroll\n");
             if matches!(self.latest, Latest::Check) {
@@ -395,7 +541,7 @@ fn capture_error<P: TrustedClosureProvider>(
             "check duplicate module names and registration capacity"
         }
         DiscoveryCategory::MissingSource => {
-            "required module unavailable; enroll dependencies and Check again"
+            "required module unavailable; check the module root and workspace access"
         }
         DiscoveryCategory::Language => "register dependencies with the same supported language",
         DiscoveryCategory::SourceAdmission => {

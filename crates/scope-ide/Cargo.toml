@@ -13,6 +13,7 @@ logging = ["dep:cell-capability-log"]
 agent = ["tools", "dep:cell-capability-openai", "dep:serde"]
 agent-lmstudio = ["agent", "dep:cell-capability-lmstudio"]
 tui = ["dep:ratatui", "tools"]
+desktop = ["tui"]
 
 [[example]]
 name = "native_logging"

@@ -40,18 +40,18 @@ impl Discovery for GraphDiscovery {
         sources: Vec<RegisteredSource>,
         limits: Limits,
     ) -> Result<DiscoveredClosure, DiscoveryFailure> {
-        let diagnostic = sources
-            .iter()
-            .find(|source| source.text.contains("invalid"))
-            .map(|source| DiscoveryDiagnostic {
+        let diagnostic = sources.iter().find_map(|source| {
+            let start = source.text.find("invalid")?;
+            Some(DiscoveryDiagnostic {
                 module: source.module.clone(),
                 path: None,
-                start: 0,
-                end: 7,
+                start,
+                end: start + "invalid".len(),
                 line: 1,
-                column: 1,
+                column: source.text[..start].chars().count() + 1,
                 message: "unknown declaration invalid".into(),
-            });
+            })
+        });
         self.capture(root, sources, limits)
             .map_err(|error| DiscoveryFailure {
                 error,
@@ -159,6 +159,15 @@ struct Harness {
 }
 impl Harness {
     fn new(allow: bool) -> Self {
+        Self::with_review_requirement(allow, None)
+    }
+
+    fn with_review_requirement(
+        allow: bool,
+        requirement: Option<
+            fn(&crate::closure_inspection::ClosureInspectionBinding) -> Option<String>,
+        >,
+    ) -> Self {
         let root = TempWorkspace::new("registered-ui");
         root.write_file("main.sprout", "root body");
         root.write_file("dep.sprout", "dep body");
@@ -211,26 +220,28 @@ impl Harness {
             .unwrap();
         ui.layout("main", View::leaf("editor")).unwrap();
         ui.geometry(Rect::new(0, 0, 120, 32));
-        ui.set_registered_execution(Some(
-            RegisteredExecution::new(
-                "evaluate-bundle-v1",
-                move |result: &RegisteredClosureResult<Result<String, ProviderFailure>>| {
-                    format_counts.format.set(format_counts.format.get() + 1);
-                    RegisteredOutput {
-                        summary: format!("Value: {}", result.output().as_ref().unwrap()),
-                        details: format!(
-                            "Retained output: {}; original dep body",
-                            result.output().as_ref().unwrap()
-                        ),
-                    }
-                },
-            )
-            .with_policy(Policy {
-                counts: counts.clone(),
-                allow,
-            }),
-        ))
-        .unwrap();
+        let execution = RegisteredExecution::new(
+            "evaluate-bundle-v1",
+            move |result: &RegisteredClosureResult<Result<String, ProviderFailure>>| {
+                format_counts.format.set(format_counts.format.get() + 1);
+                RegisteredOutput {
+                    summary: format!("Value: {}", result.output().as_ref().unwrap()),
+                    details: format!(
+                        "Retained output: {}; original dep body",
+                        result.output().as_ref().unwrap()
+                    ),
+                }
+            },
+        );
+        let policy = Policy {
+            counts: counts.clone(),
+            allow,
+        };
+        let execution = match requirement {
+            Some(requirement) => execution.with_policy_authorized_run(policy, requirement),
+            None => execution.with_policy(policy),
+        };
+        ui.set_registered_execution(Some(execution)).unwrap();
         let mut h = Self {
             root,
             app,
@@ -285,6 +296,151 @@ impl Harness {
             .apply_edit(TextEdit::insert(Position::new(0, 0), prefix))
             .unwrap();
     }
+}
+
+fn native_feedback(h: &mut Harness, fail: bool) {
+    h.ui.set_registered_execution(Some(
+        RegisteredExecution::<Result<String, ProviderFailure>>::new("evaluate-bundle-v1", |_| {
+            RegisteredOutput {
+                summary: "Checked fixture".into(),
+                details: "Original typed completion".into(),
+            }
+        })
+        .with_invocation_contract(InvocationContract {
+            schema_version: "fixture-v1".into(),
+            entry: "fixture_entry".into(),
+            output: "fixture-output".into(),
+            effect: "read-v1".into(),
+        })
+        .with_native_feedback(move |completion| {
+            assert_eq!(
+                completion.binding().snapshot().compilation_options["invocation_contract"]["entry"],
+                "fixture_entry"
+            );
+            if fail {
+                return Err("unsupported checked return".into());
+            }
+            let value = completion.output().as_ref().map_err(|e| format!("{e:?}"))?;
+            Ok(scope_language::SemanticOperationResult::ReadOnly {
+                value: serde_json::json!({"computed": value.parse::<i32>().unwrap(), "flag": true}),
+                rationale: "typed fixture output".into(),
+            })
+        }),
+    ))
+    .unwrap();
+}
+
+#[test]
+fn registered_native_completion_enters_shared_slots_and_navigation_is_passive() {
+    use crate::semantic_inspection::{InspectionFreshness, InspectionOrigin};
+    let mut h = Harness::new(true);
+    native_feedback(&mut h, false);
+    h.action(WorkspaceAction::RunCurrentDocument);
+    h.key(KeyCode::Enter);
+    let first = h.ui.inspection_result().unwrap().clone();
+    assert_eq!(first.freshness_app(&h.app), InspectionFreshness::Current);
+    let InspectionOrigin::Closure(origin) = &first.origin else {
+        panic!("closure origin")
+    };
+    assert!(format!("{origin:?}").contains(&"ab".repeat(32)));
+    h.edit_dep("changed ");
+    assert_eq!(first.freshness_app(&h.app), InspectionFreshness::Stale);
+    h.action(WorkspaceAction::RunCurrentDocument);
+    h.key(KeyCode::Enter);
+    assert_eq!(
+        h.ui.inspection_result().unwrap().freshness_app(&h.app),
+        InspectionFreshness::Current
+    );
+    let retained = h.ui.retained_inspection.as_ref().unwrap();
+    assert!(retained.comparison_disabled().is_none());
+    let before = (
+        h.counts.discovery.get(),
+        h.counts.policy.get(),
+        h.counts.dispatch.get(),
+    );
+    for action in [
+        WorkspaceAction::InspectResult,
+        WorkspaceAction::CompareResults,
+        WorkspaceAction::ViewDetails,
+    ] {
+        h.action(action);
+        let _ = h.screen();
+        h.key(KeyCode::Down);
+        h.key(KeyCode::Enter);
+        h.key(KeyCode::Esc);
+    }
+    assert_eq!(
+        before,
+        (
+            h.counts.discovery.get(),
+            h.counts.policy.get(),
+            h.counts.dispatch.get()
+        )
+    );
+    assert_eq!(h.counts.dispatch.get(), 2);
+    assert_eq!(first.freshness_app(&h.app), InspectionFreshness::Stale);
+    let unknown_app = App::new(h.root.workspace()).unwrap();
+    assert_eq!(
+        first.freshness_app(&unknown_app),
+        InspectionFreshness::Unknown
+    );
+}
+
+#[cfg(feature = "desktop")]
+#[test]
+fn desktop_tabs_preserve_registered_observation_and_dependency_ownership() {
+    use crate::semantic_inspection::InspectionFreshness;
+    let mut h = Harness::new(true);
+    native_feedback(&mut h, false);
+    h.ui.enable_desktop_tabs(&h.app);
+    h.action(WorkspaceAction::RunCurrentDocument);
+    h.key(KeyCode::Enter);
+    h.key(KeyCode::Esc);
+    h.ui.open_app_document(&mut h.app, "dep.sprout").unwrap();
+    assert_eq!(h.app.selected_registered_module(), Some("dep"));
+    // run_optional_sources records newly shown documents when it draws a frame.
+    h.ui.desktop_tabs
+        .as_mut()
+        .unwrap()
+        .push("dep.sprout".into());
+    assert_eq!(
+        h.ui.inspection_result().unwrap().freshness_app(&h.app),
+        InspectionFreshness::Current
+    );
+    assert_eq!(
+        h.ui.registered_result().unwrap().discovered().root(),
+        "root"
+    );
+    h.ui.close_desktop_tab(&mut h.app, "dep.sprout").unwrap();
+    assert_eq!(h.app.selected_registered_module(), Some("root"));
+    assert!(
+        h.app
+            .registered_documents()
+            .unwrap()
+            .document("dep")
+            .is_some()
+    );
+    assert_eq!(
+        h.ui.inspection_result().unwrap().freshness_app(&h.app),
+        InspectionFreshness::Current
+    );
+    assert_eq!(h.counts.dispatch.get(), 1);
+}
+
+#[test]
+fn registered_projection_failure_retains_evidence_without_native_data() {
+    let mut h = Harness::new(true);
+    native_feedback(&mut h, true);
+    h.action(WorkspaceAction::RunCurrentDocument);
+    h.key(KeyCode::Enter);
+    let result = h.ui.inspection_result().unwrap();
+    assert!(result.native_result.is_none());
+    assert!(format!("{:?}", result.result).contains("unsupported checked return"));
+    assert!(matches!(
+        result.origin,
+        crate::semantic_inspection::InspectionOrigin::Closure(_)
+    ));
+    assert_eq!(h.counts.dispatch.get(), 1);
 }
 
 #[test]
@@ -343,6 +499,10 @@ fn registered_same_run_action_publishes_reviews_and_consumes_exact_selection_onc
     assert!(h.ui.registered_modal_open());
     let screen = h.screen();
     assert!(screen.contains("Run registered closure?"));
+    assert!(screen.contains("Approval required"));
+    assert!(!screen.contains("\"module\":\"dep\""));
+    h.key(KeyCode::Char('d'));
+    let screen = h.screen();
     assert!(screen.contains("unsaved root body"));
     assert!(screen.contains("\"module\":\"dep\""));
     assert_eq!(
@@ -395,6 +555,39 @@ fn registered_same_run_action_publishes_reviews_and_consumes_exact_selection_onc
     assert_eq!(h.counts.format.get(), 1);
     assert_eq!(h.counts.discovery.get(), 1);
     assert_eq!(h.root.read_file("main.sprout"), "root body");
+}
+
+#[test]
+fn registered_policy_authorized_run_dispatches_only_when_policy_allows() {
+    for allow in [true, false] {
+        let mut h = Harness::with_review_requirement(allow, Some(|_| None));
+        h.action(WorkspaceAction::CheckCurrentDocument);
+        assert_eq!(h.counts.policy.get(), 0);
+        h.action(WorkspaceAction::RunCurrentDocument);
+        assert!(!h.ui.registered_modal_open());
+        assert_eq!(h.counts.policy.get(), 1);
+        assert_eq!(h.counts.dispatch.get(), u32::from(allow));
+        assert_eq!(h.ui.registered_result().is_some(), allow);
+        let screen = h.screen();
+        assert!(screen.contains(if allow { "Value: 42" } else { "Run rejected" }));
+        assert!(!screen.contains("prepared-sha256"));
+    }
+}
+
+#[test]
+fn registered_policy_authorized_run_can_require_explicit_review() {
+    let mut h = Harness::with_review_requirement(
+        true,
+        Some(|_| Some("Network access is not covered by routine Run approval.".into())),
+    );
+    h.action(WorkspaceAction::RunCurrentDocument);
+    assert!(h.ui.registered_modal_open());
+    assert!(h.screen().contains("Network access is not covered"));
+    assert_eq!(h.counts.policy.get(), 0);
+    assert_eq!(h.counts.dispatch.get(), 0);
+    h.key(KeyCode::Enter);
+    assert_eq!(h.counts.policy.get(), 1);
+    assert_eq!(h.counts.dispatch.get(), 1);
 }
 
 #[test]
@@ -547,4 +740,33 @@ fn registered_quick_open_selects_owned_unsaved_documents_even_after_disk_removal
         ),
         (0, 0, 0)
     );
+}
+
+#[test]
+fn registered_check_navigates_to_current_import_and_rejects_changed_revision() {
+    let mut h = Harness::new(true);
+    h.edit_dep("é invalid ");
+    h.action(WorkspaceAction::CheckCurrentDocument);
+    h.action(WorkspaceAction::NavigateResult);
+    assert_eq!(h.app.selected_registered_module(), Some("dep"));
+    assert_eq!(
+        h.ui.current_editor_draft(&h.app, Some(&h.sources))
+            .unwrap()
+            .cursor,
+        3
+    );
+    h.edit_dep("changed ");
+    h.ui.select_registered_app_document(&mut h.app, "root")
+        .unwrap();
+    let stale =
+        h.ui.invoke_action(
+            WorkspaceAction::NavigateResult,
+            &mut h.app,
+            &mut h.sources,
+            None,
+        )
+        .unwrap_err();
+    assert!(stale.contains("historical"), "{stale}");
+    assert_eq!(h.app.selected_registered_module(), Some("root"));
+    assert_eq!(h.counts.dispatch.get(), 0);
 }
